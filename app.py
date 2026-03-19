@@ -469,7 +469,6 @@ if "result" in st.session_state:
 
         # Calculate payback and net depending on financing
         if loan_rate > 0 and loan_years > 0:
-            # With loan: payback = when cumulative (earnings - payments) > 0
             mr = loan_rate / 100 / 12
             n_p = loan_years * 12
             mp = total_investment * mr / (1 - (1 + mr) ** -n_p) if mr > 0 else total_investment / n_p
@@ -477,22 +476,9 @@ if "result" in st.session_state:
             total_loan_cost = yp * loan_years
             total_interest = total_loan_cost - total_investment
 
-            # Find payback year
-            cumulative = 0
-            payback = None
-            for y in range(1, int(bat_lifetime) + 1):
-                cumulative += per_year - (yp if y <= loan_years else 0)
-                if cumulative >= 0 and payback is None:
-                    # Interpolate
-                    prev = cumulative - (per_year - (yp if y <= loan_years else 0))
-                    yearly_net = per_year - (yp if y <= loan_years else 0)
-                    if yearly_net > 0:
-                        payback = y - 1 + (-prev / yearly_net)
-                    else:
-                        payback = y
-
-            if payback is None:
-                payback = 999
+            # Payback = total loan cost / yearly earnings
+            # This is when you've earned enough to cover the full loan including interest
+            payback = total_loan_cost / per_year if per_year > 0 else 999
 
             net_over_lifetime = per_year * bat_lifetime - total_loan_cost
             finance_label = f"Lån {loan_rate}%, {loan_years} år"
