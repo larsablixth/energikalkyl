@@ -1,0 +1,18 @@
+# API keys
+.entsoe_key
+.tibber_token
+
+# Cache
+.price_cache/
+.fx_cache.json
+
+# Python
+__pycache__/
+*.pyc
+venv/
+
+# Data files (generated/downloaded)
+*.csv
+tibber_*.csv
+historik_*.csv
+priser.csv
