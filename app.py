@@ -439,7 +439,7 @@ if "result" in st.session_state:
         st.error("Simuleringen visar ingen vinst med dessa inställningar.")
 
     # === MONTHLY CASHFLOW BREAKDOWN ===
-    st.subheader("Månadsvis kassaflöde — vad pengarna kommer ifrån")
+    st.subheader("Typiskt år — vad pengarna kommer ifrån")
 
     df_slots = pd.DataFrame([{
         "date": s.date, "month": s.date[:7], "action": s.action,
@@ -457,56 +457,50 @@ if "result" in st.session_state:
     slots_per_day = df_slots.groupby("date").size().median()
     slot_h = 24 / slots_per_day if slots_per_day > 0 else 1
 
-    # Build detailed monthly breakdown
+    # Build detailed breakdown by calendar month (Jan-Dec), averaged across years
+    months_sv = ["", "Jan", "Feb", "Mar", "Apr", "Maj", "Jun",
+                 "Jul", "Aug", "Sep", "Okt", "Nov", "Dec"]
+    df_slots["cal_month"] = pd.to_datetime(df_slots["date"]).dt.month
+    years_in_data = num_days / 365.25
+
     monthly_detail = []
-    for month, grp in df_slots.groupby("month"):
+    for m_num, grp in df_slots.groupby("cal_month"):
         n_d = grp["date"].nunique()
 
-        # Household consumption this month
+        # Household consumption — average per year for this calendar month
         if config.seasonal_load_profile:
-            m_num = int(month.split("-")[1])
             daily_kwh = sum(config.seasonal_load_profile.get(m_num, {}).values())
         elif config.hourly_load_profile:
             daily_kwh = sum(config.hourly_load_profile.values())
         else:
             daily_kwh = sum(config.total_load_kw(h) for h in range(24))
-        consumption_kwh = daily_kwh * n_d
+        avg_days_in_month = n_d / years_in_data
+        consumption_kwh = daily_kwh * avg_days_in_month
 
-        # Average total price (spot + grid + tax)
         avg_total_ore = grp["total_cost_ore"].mean()
-
-        # What you'd pay without anything
         cost_no_solar_no_bat = consumption_kwh * avg_total_ore / 100
 
-        # Solar self-consumption (directly offsets grid purchase)
-        solar_produced = grp["solar_kw"].sum() * slot_h
-        solar_to_battery = grp["solar_charge_kwh"].sum()
-        solar_to_flex = grp["flex_consumed_kwh"].sum()
-        solar_exported = grp["grid_export_kwh"].sum()
+        # All values averaged per year
+        solar_produced = grp["solar_kw"].sum() * slot_h / years_in_data
+        solar_to_battery = grp["solar_charge_kwh"].sum() / years_in_data
+        solar_to_flex = grp["flex_consumed_kwh"].sum() / years_in_data
+        solar_exported = grp["grid_export_kwh"].sum() / years_in_data
         solar_self_use = max(0, solar_produced - solar_to_battery - solar_to_flex - solar_exported)
-        solar_self_use = min(solar_self_use, consumption_kwh)  # can't self-consume more than you use
+        solar_self_use = min(solar_self_use, consumption_kwh)
         solar_self_saving = solar_self_use * avg_total_ore / 100
 
-        # Battery arbitrage (buy cheap, offset expensive)
-        bat_charge_cost = grp[grp["action"] == "charge"]["cost_sek"].sum()
-        bat_discharge_value = grp[grp["action"] == "discharge"]["saving_sek"].sum()
+        bat_charge_cost = grp[grp["action"] == "charge"]["cost_sek"].sum() / years_in_data
+        bat_discharge_value = grp[grp["action"] == "discharge"]["saving_sek"].sum() / years_in_data
         bat_arbitrage = bat_discharge_value - bat_charge_cost
 
-        # Solar → battery → discharge (free charge, valuable discharge)
-        solar_bat_value = solar_to_battery * avg_total_ore / 100 * config.efficiency
-
-        # Export revenue
-        export_rev = grp["export_revenue_sek"].sum()
-
-        # Flex load savings (solar → pool instead of grid → pool)
+        export_rev = grp["export_revenue_sek"].sum() / years_in_data
         flex_saving = solar_to_flex * avg_total_ore / 100
 
-        # Total monthly saving
         total_saving = solar_self_saving + bat_arbitrage + export_rev + flex_saving
 
         monthly_detail.append({
-            "month": month,
-            "days": n_d,
+            "month": months_sv[m_num],
+            "month_num": m_num,
             "consumption": consumption_kwh,
             "cost_without": cost_no_solar_no_bat,
             "solar_self_saving": solar_self_saving,
@@ -517,47 +511,47 @@ if "result" in st.session_state:
             "cost_with": cost_no_solar_no_bat - total_saving,
         })
 
-    df_md = pd.DataFrame(monthly_detail)
+    df_md = pd.DataFrame(monthly_detail).sort_values("month_num")
 
-    # Stacked bar: what each source contributes per month
+    # Stacked bar: what each source contributes in a typical year
     fig_stack = go.Figure()
     if solar_cfg:
         fig_stack.add_trace(go.Bar(
             x=df_md["month"], y=df_md["solar_self_saving"],
-            name="Sol → hushåll (undviken elkostnad)",
+            name="Sol → hushåll",
             marker_color="#f1c40f",
-            hovertemplate="%{x}<br>%{y:,.0f} kr<extra>Sol egenanvändning</extra>",
+            hovertemplate="%{x}<br>%{y:,.0f} kr/mån<extra>Undviken elkostnad</extra>",
         ))
     fig_stack.add_trace(go.Bar(
         x=df_md["month"], y=df_md["bat_arbitrage"],
-        name="Batteri arbitrage (köp billigt → sälj dyrt)",
+        name="Batteri arbitrage",
         marker_color="#2ecc71",
-        hovertemplate="%{x}<br>%{y:,.0f} kr<extra>Batteri arbitrage</extra>",
+        hovertemplate="%{x}<br>%{y:,.0f} kr/mån<extra>Köp billigt → urladda dyrt</extra>",
     ))
     if solar_cfg and df_md["export_rev"].sum() > 0:
         fig_stack.add_trace(go.Bar(
             x=df_md["month"], y=df_md["export_rev"],
-            name="Sålt överskott till nät",
+            name="Sålt till nät",
             marker_color="#3498db",
-            hovertemplate="%{x}<br>%{y:,.0f} kr<extra>Nätexport</extra>",
+            hovertemplate="%{x}<br>%{y:,.0f} kr/mån<extra>Överskott sålt</extra>",
         ))
     if df_md["flex_saving"].sum() > 0:
         fig_stack.add_trace(go.Bar(
             x=df_md["month"], y=df_md["flex_saving"],
-            name="Sol → pool/flex (undviken elkostnad)",
+            name="Sol → pool/flex",
             marker_color="#e67e22",
-            hovertemplate="%{x}<br>%{y:,.0f} kr<extra>Flex-besparing</extra>",
+            hovertemplate="%{x}<br>%{y:,.0f} kr/mån<extra>Undviken elkostnad</extra>",
         ))
 
     fig_stack.add_hline(y=per_year/12, line_dash="dash", line_color="gray",
                          annotation_text=f"Snitt {per_year/12:,.0f} kr/mån")
     fig_stack.update_layout(
-        barmode="stack", yaxis_title="Besparing (SEK/månad)", height=400,
+        barmode="stack", yaxis_title="Besparing (kr/månad, typiskt år)", height=400,
         margin=dict(l=0, r=0, t=30, b=0), legend=dict(orientation="h", y=1.02),
     )
     st.plotly_chart(fig_stack, use_container_width=True)
 
-    # Summary metrics
+    # Summary
     avg_saving = df_md["total_saving"].mean()
     avg_without = df_md["cost_without"].mean()
     avg_with = df_md["cost_with"].mean()
@@ -567,39 +561,38 @@ if "result" in st.session_state:
     col2.metric("Elkostnad med sol/batteri", f"{max(0, avg_with):,.0f} kr/mån")
     col3.metric("Total besparing", f"{avg_saving:,.0f} kr/mån", delta=f"{avg_saving*12:,.0f} kr/år")
 
-    # Yearly averages per source
-    years_data = num_days / 365.25
-    st.markdown("**Var kommer besparingen ifrån? (genomsnitt per år)**")
+    # Itemized yearly breakdown
+    st.markdown("**Var kommer pengarna ifrån?**")
     breakdown_items = []
     if solar_cfg:
-        sol_self_yr = df_md["solar_self_saving"].sum() / years_data
-        breakdown_items.append(("Sol → eget hushåll", sol_self_yr, "Solel som du använder direkt istället för att köpa från nätet"))
-    bat_arb_yr = df_md["bat_arbitrage"].sum() / years_data
-    breakdown_items.append(("Batteri arbitrage", bat_arb_yr, "Ladda billigt (natt/mitt på dagen) → urladda dyrt (morgon/kväll)"))
+        breakdown_items.append(("Sol → eget hushåll", df_md["solar_self_saving"].sum(),
+                                "Solel du använder direkt istället för att köpa från nätet"))
+    breakdown_items.append(("Batteri arbitrage", df_md["bat_arbitrage"].sum(),
+                            "Ladda billigt (natt/middag) → urladda dyrt (morgon/kväll)"))
     if solar_cfg and df_md["export_rev"].sum() > 0:
-        exp_yr = df_md["export_rev"].sum() / years_data
-        breakdown_items.append(("Sålt överskott", exp_yr, "Solel som varken hushåll, batteri eller pool behöver → säljs till nätet"))
+        breakdown_items.append(("Sålt överskott", df_md["export_rev"].sum(),
+                                "Solöverskott som säljs till nätet"))
     if df_md["flex_saving"].sum() > 0:
-        flex_yr = df_md["flex_saving"].sum() / years_data
-        breakdown_items.append(("Sol → pool/flex", flex_yr, "Solel som driver poolpump etc. istället för att köpa från nätet"))
+        breakdown_items.append(("Sol → pool/flex", df_md["flex_saving"].sum(),
+                                "Solel driver poolpump etc. gratis"))
 
     for label, amount, desc in breakdown_items:
         st.text(f"  {label:.<40} {amount:>8,.0f} kr/år  ({desc})")
     total_yr = sum(a for _, a, _ in breakdown_items)
     st.text(f"  {'TOTALT':.<40} {total_yr:>8,.0f} kr/år")
 
-    # Detailed monthly table
-    with st.expander("Månadsdetaljer"):
+    # Monthly table
+    with st.expander("Detaljer per månad"):
         st.dataframe(pd.DataFrame([{
             "Månad": r["month"],
-            "Förbrukning (kWh)": f"{r['consumption']:,.0f}",
-            "Utan sol/bat (kr)": f"{r['cost_without']:,.0f}",
-            "Sol→hushåll (kr)": f"{r['solar_self_saving']:,.0f}",
-            "Bat arbitrage (kr)": f"{r['bat_arbitrage']:,.0f}",
-            "Export (kr)": f"{r['export_rev']:,.0f}",
-            "Flex (kr)": f"{r['flex_saving']:,.0f}",
-            "Total besparing (kr)": f"{r['total_saving']:,.0f}",
-            "Med sol/bat (kr)": f"{max(0, r['cost_with']):,.0f}",
+            "Förbrukning": f"{r['consumption']:,.0f} kWh",
+            "Utan (kr)": f"{r['cost_without']:,.0f}",
+            "Sol→hushåll": f"{r['solar_self_saving']:,.0f}",
+            "Arbitrage": f"{r['bat_arbitrage']:,.0f}",
+            "Export": f"{r['export_rev']:,.0f}",
+            "Pool/flex": f"{r['flex_saving']:,.0f}",
+            "Besparing": f"{r['total_saving']:,.0f}",
+            "Med sol/bat": f"{max(0, r['cost_with']):,.0f}",
         } for r in monthly_detail]), use_container_width=True, hide_index=True)
 
     # === CASHFLOW ===
