@@ -233,13 +233,13 @@ with col_sys3:
     fuse_options = sorted(FUSE_YEARLY_FEE.keys())
     fuse_amps = st.selectbox("Säkring (A)", fuse_options, index=fuse_options.index(25))
     phases = st.selectbox("Faser", [3, 1], index=0)
-    tariff_type = st.selectbox("Nätavgift", ["Tidstariff", "Enkeltariff"])
-    if tariff_type == "Tidstariff":
-        peak_rate = st.number_input("Höglast (öre/kWh)", value=76.50, step=0.5)
-        offpeak_rate = st.number_input("Övrig (öre/kWh)", value=30.50, step=0.5)
-    else:
-        flat_rate = st.number_input("Avgift (öre/kWh)", value=44.50, step=0.5)
-    energy_tax = st.number_input("Energiskatt (öre/kWh)", value=54.88, step=0.1)
+    st.caption("Nätavgift (Vattenfall 2026)")
+    with st.expander("Tariffpriser", expanded=False):
+        peak_rate = st.number_input("Tidstariff höglast (öre/kWh)", value=76.50, step=0.5)
+        offpeak_rate = st.number_input("Tidstariff övrig (öre/kWh)", value=30.50, step=0.5)
+        flat_rate = st.number_input("Enkeltariff (öre/kWh)", value=44.50, step=0.5)
+        energy_tax = st.number_input("Energiskatt (öre/kWh)", value=54.88, step=0.1)
+    st.info(f"Båda tarifferna simuleras — bästa väljs automatiskt")
 
 # Loads
 st.subheader("Laster")
@@ -340,11 +340,8 @@ if st.button("KÖR SIMULERING", type="primary", use_container_width=True):
         export_price_factor=export_factor, export_fee_ore=export_fee,
     )
 
-    tariff = None
-    if tariff_type == "Tidstariff":
-        tariff = Tidstariff(peak=peak_rate, offpeak=offpeak_rate, energy_tax=energy_tax, fuse_amps=fuse_amps)
-    else:
-        tariff = FastTariff(flat_rate=flat_rate, energy_tax=energy_tax, fuse_amps=fuse_amps)
+    tariff_tid = Tidstariff(peak=peak_rate, offpeak=offpeak_rate, energy_tax=energy_tax, fuse_amps=fuse_amps)
+    tariff_enkel = FastTariff(flat_rate=flat_rate, energy_tax=energy_tax, fuse_amps=fuse_amps)
 
     price_rows = df_prices.to_dict("records")
 
@@ -360,14 +357,32 @@ if st.button("KÖR SIMULERING", type="primary", use_container_width=True):
         st.warning(f"Ingen batteriladdning möjlig kl {', '.join(f'{h:02d}' for h in hrs)} — "
                    f"hushållslasten tar all kapacitet.")
 
-    with st.spinner("Simulerar..."):
-        result = simulate(price_rows, config, tariff=tariff, solar=solar_config)
+    with st.spinner("Simulerar båda tarifferna..."):
+        result_tid = simulate(price_rows, config, tariff=tariff_tid, solar=solar_config)
+        result_enkel = simulate(price_rows, config, tariff=tariff_enkel, solar=solar_config)
+
+    days_tid = len(set(s.date for s in result_tid.slots))
+    days_enkel = len(set(s.date for s in result_enkel.slots))
+    profit_tid = result_tid.net_profit_sek / days_tid * 365.25 if days_tid > 0 else 0
+    profit_enkel = result_enkel.net_profit_sek / days_enkel * 365.25 if days_enkel > 0 else 0
+
+    if profit_tid >= profit_enkel:
+        result, tariff, best_tariff = result_tid, tariff_tid, "Tidstariff"
+    else:
+        result, tariff, best_tariff = result_enkel, tariff_enkel, "Enkeltariff"
 
     st.session_state["result"] = result
     st.session_state["config"] = config
     st.session_state["tariff"] = tariff
     st.session_state["solar_cfg"] = solar_config
     st.session_state["price_rows"] = price_rows
+    st.session_state["tariff_comparison"] = {
+        "best": best_tariff,
+        "tid_profit": profit_tid,
+        "tid_fee": get_fuse_fee_yearly(fuse_amps),
+        "enkel_profit": profit_enkel,
+        "enkel_fee": get_fuse_fee_yearly(fuse_amps),
+    }
 
 # ================================================================
 # RESULTS
@@ -381,6 +396,18 @@ if "result" in st.session_state:
 
     num_days = len(set(s.date for s in result.slots))
     per_year = result.net_profit_sek / num_days * 365.25 if num_days > 0 else 0
+
+    # === TARIFF RECOMMENDATION ===
+    if "tariff_comparison" in st.session_state:
+        tc = st.session_state["tariff_comparison"]
+        diff = abs(tc["tid_profit"] - tc["enkel_profit"])
+        col_t1, col_t2, col_t3 = st.columns(3)
+        col_t1.metric("Tidstariff", f"{tc['tid_profit']:,.0f} kr/år",
+                       delta="Rekommenderas" if tc["best"] == "Tidstariff" else None)
+        col_t2.metric("Enkeltariff", f"{tc['enkel_profit']:,.0f} kr/år",
+                       delta="Rekommenderas" if tc["best"] == "Enkeltariff" else None)
+        col_t3.metric("Skillnad", f"{diff:,.0f} kr/år")
+        st.success(f"**{tc['best']}** ger bäst resultat — **{diff:,.0f} kr/år** mer än alternativet")
 
     # === THE ANSWER ===
     st.subheader("Lönar det sig?")
