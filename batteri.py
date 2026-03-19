@@ -331,11 +331,20 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
         total_discharge_possible = 0.0
         max_cycles = 3  # limit to avoid unrealistic cycling
 
+        # Estimate how much solar surplus will charge the battery today
+        # so we don't fill up with grid power and waste free solar
+        expected_solar_charge = sum(
+            min(surplus, config.max_charge_kw) * slot_duration_h
+            for _, _, _, _, surplus in slot_costs if surplus > 0.01
+        )
+        expected_solar_charge = min(expected_solar_charge, config.usable_kwh)
+
         for cycle in range(max_cycles):
             # Find next batch of cheap slots to fill battery
             cycle_charge = set()
             cycle_charge_energy = 0.0
-            energy_needed = config.usable_kwh / config.efficiency
+            # Leave room for expected free solar charging
+            energy_needed = max(0, config.usable_kwh - expected_solar_charge) / config.efficiency
 
             for idx, total_ore, spot_ore, grid_ore, solar_surplus in cheap_slots:
                 if idx in charge_indices or idx in discharge_indices:
