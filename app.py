@@ -581,31 +581,49 @@ if "result" in st.session_state:
     # Recalculate with current widget values (loan rate may have changed)
     current_total_invest = bat_price + bat_install + sol_price + sol_install
     if current_total_invest > 0:
-        st.subheader("Kassaflöde")
+        st.subheader("Kassaflöde — pengar in och ut ur din ficka")
         years = list(range(0, 16))
-        cf = [-current_total_invest]
+
+        # Eget kapital: you pay everything upfront, then earn back
+        cf_ek = [-current_total_invest]
         for y in range(1, 16):
-            cf.append(cf[-1] + per_year)
+            cf_ek.append(cf_ek[-1] + per_year)
 
         fig_cf = go.Figure()
-        fig_cf.add_trace(go.Scatter(x=years, y=cf, mode="lines+markers", name="Eget kapital",
-                                     line=dict(width=2, color="#2ecc71"), fill="tozeroy"))
+        fig_cf.add_trace(go.Scatter(
+            x=years, y=cf_ek, mode="lines+markers",
+            name="Kontant (betala allt dag 1)",
+            line=dict(width=2, color="#2ecc71"), fill="tozeroy",
+            hovertemplate="År %{x}<br>%{y:,.0f} kr i fickan<extra></extra>",
+        ))
 
         if loan_rate > 0 and loan_years > 0:
             mr = loan_rate / 100 / 12
             n_p = loan_years * 12
             mp = current_total_invest * mr / (1 - (1 + mr) ** -n_p) if mr > 0 else current_total_invest / n_p
             yp = mp * 12
-            cf_loan = [0]
+
+            # With loan: no money out day 1, but pay loan + earn from battery each year
+            cf_loan = [0]  # day 1: 0 kr out of pocket
             for y in range(1, 16):
-                prev = cf_loan[-1] + per_year - (yp if y <= loan_years else 0)
-                cf_loan.append(prev)
-            fig_cf.add_trace(go.Scatter(x=years, y=cf_loan, mode="lines+markers",
-                                         name=f"Lån {loan_rate}%/{loan_years}år",
-                                         line=dict(width=2, color="#e74c3c", dash="dash")))
+                yearly_net = per_year - (yp if y <= loan_years else 0)
+                cf_loan.append(cf_loan[-1] + yearly_net)
+
+            fig_cf.add_trace(go.Scatter(
+                x=years, y=cf_loan, mode="lines+markers",
+                name=f"Lån ({loan_rate}%, {loan_years} år)",
+                line=dict(width=2, color="#e74c3c", dash="dash"),
+                hovertemplate="År %{x}<br>%{y:,.0f} kr i fickan<extra></extra>",
+            ))
+
+            # Show when loan is paid off
+            st.caption(f"Lån: {mp:,.0f} kr/mån i {loan_years} år "
+                       f"(totalt {yp * loan_years:,.0f} kr, varav {yp * loan_years - current_total_invest:,.0f} kr ränta). "
+                       f"Lägre elkostnad: {per_year:,.0f} kr/år. "
+                       f"{'Positivt kassaflöde från dag 1.' if per_year > yp else f'Negativt kassaflöde under lånetiden ({per_year - yp:,.0f} kr/år).'}")
 
         fig_cf.add_hline(y=0, line_color="gray", line_width=1)
-        fig_cf.update_layout(xaxis_title="År", yaxis_title="SEK", height=400,
+        fig_cf.update_layout(xaxis_title="År", yaxis_title="Ackumulerat i din ficka (SEK)", height=400,
                               margin=dict(l=0, r=0, t=30, b=0), legend=dict(orientation="h", y=1.02))
         st.plotly_chart(fig_cf, use_container_width=True)
 
