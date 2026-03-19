@@ -456,59 +456,95 @@ if "result" in st.session_state:
         col_t3.metric("Skillnad", f"{diff:,.0f} kr/år")
         st.success(f"**{tc['best']}** ger bäst resultat — **{diff:,.0f} kr/år** mer än alternativet")
 
-    # === THE ANSWER ===
-    st.subheader("Resultat — din elkostnad")
+    # === THE ANSWER: What leaves your bank account each month ===
+    st.subheader("Vad lämnar ditt bankkonto varje månad?")
 
     bat_inv = config.purchase_price + config.installation_cost
     sol_inv = (solar_cfg.purchase_price + solar_cfg.installation_cost) if solar_cfg else 0
     total_investment = bat_inv + sol_inv
 
-    if total_investment > 0 and per_year > 0:
-        cycles_yr = result.num_cycles / (num_days / 365.25) if num_days > 0 else 0
-        bat_lifetime = min(config.cycle_life / cycles_yr if cycles_yr > 0 else 15, 15)
-
-        # Calculate payback and net depending on financing
-        if loan_rate > 0 and loan_years > 0:
-            mr = loan_rate / 100 / 12
-            n_p = loan_years * 12
-            mp = total_investment * mr / (1 - (1 + mr) ** -n_p) if mr > 0 else total_investment / n_p
-            yp = mp * 12
-            total_loan_cost = yp * loan_years
-            total_interest = total_loan_cost - total_investment
-
-            # Payback = total loan cost / yearly earnings
-            # This is when you've earned enough to cover the full loan including interest
-            payback = total_loan_cost / per_year if per_year > 0 else 999
-
-            net_over_lifetime = per_year * bat_lifetime - total_loan_cost
-            finance_label = f"Lån {loan_rate}%, {loan_years} år"
-        else:
-            # Cash: simple payback
-            payback = total_investment / per_year
-            net_over_lifetime = per_year * bat_lifetime - total_investment
-            total_interest = 0
-            finance_label = "Kontant"
-
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Lägre elkostnad", f"{per_year:,.0f} kr/år",
-                     help=f"Batteri: {battery_benefit_yr:,.0f} kr/år" +
-                          (f" + Sol egenanvändning: {solar_self_benefit_yr:,.0f} kr/år" if sol_inv_total > 0 and solar_self_benefit_yr > 0 else ""))
-        col2.metric("Återbetalningstid", f"{payback:.1f} år" if payback < 100 else "Aldrig",
-                     help=f"Finansiering: {finance_label}")
-        col3.metric("Netto under livslängd", f"{net_over_lifetime:,.0f} kr",
-                     help=f"Lägre elkostnad minus total kostnad ({finance_label}) över {bat_lifetime:.0f} år")
-        col4.metric("Investering", f"{total_investment:,.0f} kr",
-                     delta=f"+ {total_interest:,.0f} kr ränta" if total_interest > 0 else None)
-
-        if payback < bat_lifetime:
-            st.success(f"**Investeringen betalar sig.** {finance_label}: återbetald på {payback:.1f} år "
-                       f"(livslängd {bat_lifetime:.0f} år). Netto: +{net_over_lifetime:,.0f} kr.")
-        else:
-            st.warning(f"**Osäkert.** Återbetalningstid {payback:.1f} år överstiger livslängden {bat_lifetime:.0f} år.")
-    elif per_year > 0:
-        st.success(f"**Lägre elkostnad: {per_year:,.0f} kr/år** (ingen investering angiven)")
+    # Monthly electricity cost WITHOUT system
+    # Use average consumption and price from simulation
+    avg_total_ore = sum(s.total_cost_ore for s in result.slots) / len(result.slots) if result.slots else 0
+    if config.seasonal_load_profile:
+        avg_daily_kwh = sum(sum(h.values()) for h in config.seasonal_load_profile.values()) / 12
+    elif config.hourly_load_profile:
+        avg_daily_kwh = sum(config.hourly_load_profile.values())
     else:
-        st.error("Simuleringen visar ingen skillnad med dessa inställningar.")
+        avg_daily_kwh = sum(config.total_load_kw(h) for h in range(24))
+    monthly_el_without = avg_daily_kwh * 30.44 * avg_total_ore / 100
+
+    # Monthly electricity saving WITH system
+    monthly_saving = per_year / 12
+
+    # Monthly loan cost
+    monthly_loan = 0
+    total_interest = 0
+    if loan_rate > 0 and loan_years > 0:
+        mr = loan_rate / 100 / 12
+        n_p = loan_years * 12
+        monthly_loan = total_investment * mr / (1 - (1 + mr) ** -n_p) if mr > 0 else total_investment / n_p
+        total_interest = monthly_loan * n_p - total_investment
+
+    # What actually leaves your account each month
+    monthly_el_with = monthly_el_without - monthly_saving
+    monthly_total_with = max(0, monthly_el_with) + monthly_loan
+    monthly_total_without = monthly_el_without
+
+    net_monthly_change = monthly_total_without - monthly_total_with
+
+    # Display
+    st.markdown("---")
+    col1, col2, col3 = st.columns(3)
+
+    col1.markdown("**UTAN sol & batteri**")
+    col1.metric("Elräkning", f"{monthly_el_without:,.0f} kr/mån")
+
+    col2.markdown("**MED sol & batteri**")
+    col2.text(f"Elräkning:   {max(0, monthly_el_with):>8,.0f} kr")
+    if monthly_loan > 0:
+        col2.text(f"Lån ({loan_rate}%):  {monthly_loan:>8,.0f} kr")
+    col2.markdown(f"**Totalt:     {monthly_total_with:,.0f} kr/mån**")
+
+    col3.markdown("**SKILLNAD**")
+    if net_monthly_change > 0:
+        col3.metric("Du sparar", f"{net_monthly_change:,.0f} kr/mån",
+                     delta=f"{net_monthly_change * 12:,.0f} kr/år")
+    else:
+        col3.metric("Extra kostnad", f"{-net_monthly_change:,.0f} kr/mån",
+                     delta=f"{net_monthly_change * 12:,.0f} kr/år", delta_color="inverse")
+
+    if net_monthly_change > 0:
+        st.success(f"**Mindre pengar ut varje månad.** Du betalar {monthly_total_with:,.0f} kr/mån "
+                   f"istället för {monthly_total_without:,.0f} kr/mån. "
+                   f"Det är {net_monthly_change:,.0f} kr/mån mindre ut ur kontot.")
+    elif monthly_loan > 0 and monthly_saving > monthly_loan:
+        st.success(f"**Positvt kassaflöde.** Elsparandet ({monthly_saving:,.0f} kr/mån) "
+                   f"överstiger lånet ({monthly_loan:,.0f} kr/mån).")
+    elif monthly_loan > 0:
+        st.warning(f"Under lånetiden kostar det {-net_monthly_change:,.0f} kr/mån extra. "
+                   f"Efter {loan_years} år (lånet betalt) sparar du {monthly_saving:,.0f} kr/mån.")
+    st.markdown("---")
+
+    # Additional details
+    cycles_yr = result.num_cycles / (num_days / 365.25) if num_days > 0 else 0
+    bat_lifetime = min(config.cycle_life / cycles_yr if cycles_yr > 0 else 15, 15)
+
+    with st.expander("Detaljer"):
+        st.text(f"Lägre elkostnad:         {per_year:>10,.0f} kr/år ({per_year/12:,.0f} kr/mån)")
+        if battery_benefit_yr > 0:
+            st.text(f"  varav batteri:         {battery_benefit_yr:>10,.0f} kr/år")
+        if solar_self_benefit_yr > 0:
+            st.text(f"  varav sol egenanvänd:  {solar_self_benefit_yr:>10,.0f} kr/år")
+        st.text(f"Investering:             {total_investment:>10,.0f} kr")
+        if total_interest > 0:
+            st.text(f"Räntekostnad:            {total_interest:>10,.0f} kr")
+            st.text(f"Total kostnad (lån):     {total_investment + total_interest:>10,.0f} kr")
+        payback = (total_investment + total_interest) / per_year if per_year > 0 else 999
+        st.text(f"Återbetalningstid:       {payback:>10.1f} år")
+        net_lifetime = per_year * bat_lifetime - total_investment - total_interest
+        st.text(f"Netto under {bat_lifetime:.0f} år:       {net_lifetime:>10,.0f} kr")
+        st.text(f"Batterilivslängd:        {bat_lifetime:>10.1f} år ({cycles_yr:.0f} cykler/år)")
 
     # === MONTHLY CASHFLOW BREAKDOWN ===
     st.subheader("Typiskt år — skillnad i elkostnad per månad")
