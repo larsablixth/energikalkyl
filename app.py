@@ -310,9 +310,11 @@ with col_i1:
     bat_install = st.number_input("Installation (SEK)", value=10000, min_value=0, step=1000)
 with col_i2:
     if use_solar:
-        sol_price = st.number_input("Solcellspris (SEK)", value=0, min_value=0, step=5000,
-                                    help="0 om redan installerat")
-        sol_install = st.number_input("Sol-installation (SEK)", value=0, min_value=0, step=5000)
+        # Default: 35 panels × 800 kr + inverter ~12,000 + mounting ~8,000 ≈ 48,000
+        sol_price = st.number_input("Solceller material (SEK)", value=48000, min_value=0, step=5000,
+                                    help="Paneler (~28,000 för 35st à 800kr) + inverter (~12,000) + montage/kabel (~8,000). Sätt 0 om redan installerat.")
+        sol_install = st.number_input("Sol-installation arbete (SEK)", value=0, min_value=0, step=5000,
+                                      help="0 om du installerar själv")
     else:
         sol_price = 0
         sol_install = 0
