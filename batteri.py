@@ -377,10 +377,14 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
                 break
 
             # Check if this cycle is profitable
+            # Need both: efficiency margin AND minimum absolute spread
             avg_charge_price = sum(slot_cost_map[i][0] for i in cycle_charge) / len(cycle_charge)
             avg_discharge_price = sum(slot_cost_map[i][0] for i in cycle_discharge) / len(cycle_discharge)
+            absolute_spread = avg_discharge_price - avg_charge_price
+            min_absolute_spread = 20  # öre/kWh — don't cycle for tiny spreads
 
-            if avg_discharge_price > avg_charge_price * min_spread_factor:
+            if (avg_discharge_price > avg_charge_price * min_spread_factor
+                    and absolute_spread > min_absolute_spread):
                 charge_indices.update(cycle_charge)
                 discharge_indices.update(cycle_discharge)
             else:
