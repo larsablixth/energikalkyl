@@ -320,6 +320,7 @@ with col_i3:
     if finance == "Lån":
         loan_rate = st.number_input("Ränta (%)", value=5.0, min_value=0.0, step=0.5)
         loan_years = st.number_input("Lånetid (år)", value=10, min_value=1, step=1)
+        st.caption("Lånekostnaden visas i kassaflödesdiagrammet — påverkar inte simuleringen")
     else:
         loan_rate = 0
         loan_years = 0
@@ -334,6 +335,10 @@ st.divider()
 st.header("4. Resultat")
 
 if st.button("KÖR SIMULERING", type="primary", use_container_width=True):
+    # Clear old results
+    for key in ["result", "config", "tariff", "solar_cfg", "price_rows", "tariff_comparison"]:
+        st.session_state.pop(key, None)
+
     config = BatteryConfig(
         capacity_kwh=capacity, max_charge_kw=charge_kw, max_discharge_kw=discharge_kw,
         efficiency=efficiency, fuse_amps=fuse_amps, phases=phases,
@@ -609,10 +614,12 @@ if "result" in st.session_state:
         } for r in monthly_detail]), use_container_width=True, hide_index=True)
 
     # === CASHFLOW ===
-    if total_investment > 0:
+    # Recalculate with current widget values (loan rate may have changed)
+    current_total_invest = bat_price + bat_install + sol_price + sol_install
+    if current_total_invest > 0:
         st.subheader("Kassaflöde")
         years = list(range(0, 16))
-        cf = [-total_investment]
+        cf = [-current_total_invest]
         for y in range(1, 16):
             cf.append(cf[-1] + per_year)
 
@@ -623,7 +630,7 @@ if "result" in st.session_state:
         if loan_rate > 0 and loan_years > 0:
             mr = loan_rate / 100 / 12
             n_p = loan_years * 12
-            mp = total_investment * mr / (1 - (1 + mr) ** -n_p) if mr > 0 else total_investment / n_p
+            mp = current_total_invest * mr / (1 - (1 + mr) ** -n_p) if mr > 0 else current_total_invest / n_p
             yp = mp * 12
             cf_loan = [0]
             for y in range(1, 16):
