@@ -521,8 +521,8 @@ if "result" in st.session_state:
     # === BATTERY SIZE OPTIMIZER ===
     st.divider()
     st.header("5. Optimal batteristorlek")
-    st.caption("Baserat på NKON ESS Pro prislista. Visar vilken storlek och kombination "
-               "som ger bäst avkastning per investerad krona.")
+    st.caption("Baserat på NKON ESS Pro prislista. Visar vilken storlek som ger "
+               "mest pengar tillbaka under livslängden.")
 
     # NKON ESS Pro price list (EUR excl. VAT, approx Q1 2025)
     EUR_SEK = 11.5  # approximate
@@ -575,63 +575,93 @@ if "result" in st.session_state:
 
     df_opt = pd.DataFrame(opt_results)
 
-    # Find best ROI
-    best = df_opt.loc[df_opt["roi"].idxmax()]
-    st.success(f"**Bästa ROI: {best['label']}** — {best['roi']:.0f}% avkastning, "
-               f"{best['arb_yr']:,.0f} kr/år, {best['payback']:.1f} års återbetalningstid")
+    # Find best by total profit (what matters is money in your pocket)
+    best = df_opt.loc[df_opt["profit_life"].idxmax()]
+    st.success(f"**Mest lönsam: {best['label']}** — **{best['arb_yr']:,.0f} kr/år**, "
+               f"**{best['profit_life']:,.0f} kr total vinst** under livslängden, "
+               f"{best['payback']:.1f} års återbetalningstid")
 
-    # Comparison chart
+    # Main chart: yearly income + total lifetime profit
     fig_opt = go.Figure()
     fig_opt.add_trace(go.Bar(
         x=df_opt["label"], y=df_opt["arb_yr"],
-        name="Arbitrage/år", marker_color="#2ecc71",
-        hovertemplate="%{x}<br>%{y:,.0f} SEK/år<extra></extra>",
+        name="Vinst per år (kr)", marker_color="#2ecc71",
+        hovertemplate="%{x}<br><b>%{y:,.0f} kr/år</b><extra></extra>",
     ))
-    fig_opt.add_trace(go.Bar(
-        x=df_opt["label"], y=df_opt["invest"],
-        name="Investering", marker_color="#e74c3c", opacity=0.5,
-        hovertemplate="%{x}<br>%{y:,.0f} SEK<extra></extra>",
-    ))
-    fig_opt.update_layout(barmode="group", yaxis_title="SEK", height=350,
-                           margin=dict(l=0, r=0, t=30, b=0), legend=dict(orientation="h", y=1.02))
+    fig_opt.update_layout(yaxis_title="SEK per år", height=350,
+                           margin=dict(l=0, r=0, t=30, b=0))
     st.plotly_chart(fig_opt, use_container_width=True)
 
-    # Detailed table
+    # Lifetime profit chart
+    fig_life = go.Figure()
+    fig_life.add_trace(go.Bar(
+        x=df_opt["label"], y=df_opt["profit_life"],
+        name="Total vinst under livslängd",
+        marker_color=["#2ecc71" if p > 0 else "#e74c3c" for p in df_opt["profit_life"]],
+        hovertemplate="%{x}<br><b>%{y:,.0f} kr</b> total vinst<extra></extra>",
+    ))
+    fig_life.add_trace(go.Scatter(
+        x=df_opt["label"], y=-df_opt["invest"],
+        mode="markers", name="Investering (negativt)",
+        marker=dict(size=12, color="#e74c3c", symbol="diamond"),
+        hovertemplate="%{x}<br>Investering: %{y:,.0f} kr<extra></extra>",
+    ))
+    fig_life.update_layout(yaxis_title="SEK", height=350,
+                           margin=dict(l=0, r=0, t=30, b=0), legend=dict(orientation="h", y=1.02))
+    st.plotly_chart(fig_life, use_container_width=True)
+
+    # Detailed table — money first
     st.dataframe(pd.DataFrame([{
         "Batteri": r["label"],
-        "Kapacitet": f"{r['capacity']:.1f} kWh",
-        "Batteripris": f"{r['bat_cost']:,.0f} kr",
-        "Pris/kWh": f"{r['cost_per_kwh_bat']:,.0f} kr",
-        "Total invest": f"{r['invest']:,.0f} kr",
         "Vinst/år": f"{r['arb_yr']:,.0f} kr",
+        "Vinst/mån": f"{r['arb_yr']/12:,.0f} kr",
+        "Total vinst (livslängd)": f"{r['profit_life']:,.0f} kr",
+        "Investering": f"{r['invest']:,.0f} kr",
         "Payback": f"{r['payback']:.1f} år",
-        "Vinst 15 år": f"{r['profit_life']:,.0f} kr",
-        "ROI": f"{r['roi']:.0f}%",
+        "Kapacitet": f"{r['capacity']:.0f} kWh",
+        "Batteripris": f"{r['bat_cost']:,.0f} kr",
     } for r in opt_results]), use_container_width=True, hide_index=True)
 
-    # Marginal value chart
-    st.caption("Marginalvärde: vad varje extra kWh batterikapacitet ger")
-    fig_marginal = go.Figure()
+    # Marginal value: what does each step UP give you in extra kr/year?
+    st.subheader("Vad ger varje uppgradering?")
+    st.caption("Extra kronor per år om du väljer nästa storlek")
+
+    marginal_data = []
     for i in range(1, len(opt_results)):
         prev = opt_results[i-1]
         curr = opt_results[i]
-        extra_cap = curr["capacity"] - prev["capacity"]
         extra_cost = curr["bat_cost"] - prev["bat_cost"]
         extra_arb = curr["arb_yr"] - prev["arb_yr"]
+        extra_life = curr["profit_life"] - prev["profit_life"]
         marginal_payback = extra_cost / extra_arb if extra_arb > 0 else 999
-        fig_marginal.add_trace(go.Bar(
-            x=[f"{prev['label']} → {curr['label']}"],
-            y=[marginal_payback],
-            name=f"+{extra_cap:.0f} kWh",
-            marker_color="#3498db" if marginal_payback < 6 else "#e74c3c",
-            hovertemplate=f"+{extra_cap:.0f} kWh, +{extra_cost:,.0f} kr<br>"
-                          f"+{extra_arb:,.0f} kr/år<br>"
-                          f"Marginal payback: %{{y:.1f}} år<extra></extra>",
-        ))
-    fig_marginal.add_hline(y=5, line_dash="dash", line_color="gray", annotation_text="5 år")
-    fig_marginal.update_layout(yaxis_title="Marginal payback (år)", height=300,
-                                margin=dict(l=0, r=0, t=30, b=0), showlegend=False)
+        marginal_data.append({
+            "step": f"{prev['label']} → {curr['label']}",
+            "extra_cost": extra_cost,
+            "extra_arb": extra_arb,
+            "extra_life": extra_life,
+            "payback": marginal_payback,
+        })
+
+    fig_marginal = go.Figure()
+    fig_marginal.add_trace(go.Bar(
+        x=[m["step"] for m in marginal_data],
+        y=[m["extra_arb"] for m in marginal_data],
+        name="Extra kr/år",
+        marker_color=["#2ecc71" if m["extra_arb"] > 0 else "#e74c3c" for m in marginal_data],
+        hovertemplate="%{x}<br>+%{y:,.0f} kr/år<extra></extra>",
+    ))
+    fig_marginal.update_layout(yaxis_title="Extra SEK/år", height=300,
+                                margin=dict(l=0, r=0, t=30, b=0))
     st.plotly_chart(fig_marginal, use_container_width=True)
+
+    st.dataframe(pd.DataFrame([{
+        "Uppgradering": m["step"],
+        "Extra kostnad": f"{m['extra_cost']:,.0f} kr",
+        "Extra vinst/år": f"{m['extra_arb']:,.0f} kr",
+        "Extra vinst (livslängd)": f"{m['extra_life']:,.0f} kr",
+        "Marginal payback": f"{m['payback']:.1f} år",
+        "Värt det?": "Ja" if m["payback"] < 6 else "Tveksamt",
+    } for m in marginal_data]), use_container_width=True, hide_index=True)
 
     # === FUTURE VOLATILITY ===
     st.divider()
