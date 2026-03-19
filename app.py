@@ -412,7 +412,34 @@ if "result" in st.session_state:
     price_rows = st.session_state.get("price_rows", [])
 
     num_days = len(set(s.date for s in result.slots))
-    per_year = result.net_profit_sek / num_days * 365.25 if num_days > 0 else 0
+    years_in_data = num_days / 365.25
+
+    # Battery benefit: discharge value - charge cost + export
+    battery_benefit_yr = result.net_profit_sek / years_in_data if years_in_data > 0 else 0
+
+    # Solar self-consumption benefit: solar energy used directly by household
+    # (not via battery, not exported, not to flex) — this avoids grid purchase
+    solar_self_benefit_yr = 0
+    if solar_cfg:
+        slots_per_day = len(result.slots) / num_days if num_days > 0 else 24
+        slot_h = 24 / slots_per_day
+        total_solar_produced = sum(s.solar_kw for s in result.slots) * slot_h
+        total_solar_to_battery = result.total_solar_charge_kwh
+        total_solar_to_flex = result.total_flex_consumed_kwh
+        total_solar_exported = result.total_grid_export_kwh
+        solar_self_consumed = max(0, total_solar_produced - total_solar_to_battery - total_solar_to_flex - total_solar_exported)
+        # Value: avoided grid purchase at average total price
+        avg_total_ore = sum(s.total_cost_ore for s in result.slots) / len(result.slots) if result.slots else 0
+        solar_self_benefit_yr = (solar_self_consumed * avg_total_ore / 100) / years_in_data
+
+    # Total benefit depends on what's included in the investment
+    sol_inv_total = (solar_cfg.purchase_price + solar_cfg.installation_cost) if solar_cfg else 0
+    if sol_inv_total > 0:
+        # Solar investment included — count solar self-consumption benefit too
+        per_year = battery_benefit_yr + solar_self_benefit_yr
+    else:
+        # Solar already paid for — only battery benefit matters
+        per_year = battery_benefit_yr
 
     # === TARIFF RECOMMENDATION ===
     if "tariff_comparison" in st.session_state:
@@ -474,8 +501,10 @@ if "result" in st.session_state:
             finance_label = "Kontant"
 
         col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Lägre elkostnad", f"{per_year:,.0f} kr/år")
-        col2.metric("Återbetalningstid", f"{payback:.1f} år",
+        col1.metric("Lägre elkostnad", f"{per_year:,.0f} kr/år",
+                     help=f"Batteri: {battery_benefit_yr:,.0f} kr/år" +
+                          (f" + Sol egenanvändning: {solar_self_benefit_yr:,.0f} kr/år" if sol_inv_total > 0 and solar_self_benefit_yr > 0 else ""))
+        col2.metric("Återbetalningstid", f"{payback:.1f} år" if payback < 100 else "Aldrig",
                      help=f"Finansiering: {finance_label}")
         col3.metric("Netto under livslängd", f"{net_over_lifetime:,.0f} kr",
                      help=f"Lägre elkostnad minus total kostnad ({finance_label}) över {bat_lifetime:.0f} år")
