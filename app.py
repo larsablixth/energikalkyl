@@ -518,9 +518,124 @@ if "result" in st.session_state:
                               margin=dict(l=0, r=0, t=30, b=0), legend=dict(orientation="h", y=1.02))
         st.plotly_chart(fig_cf, use_container_width=True)
 
+    # === BATTERY SIZE OPTIMIZER ===
+    st.divider()
+    st.header("5. Optimal batteristorlek")
+    st.caption("Baserat på NKON ESS Pro prislista. Visar vilken storlek och kombination "
+               "som ger bäst avkastning per investerad krona.")
+
+    # NKON ESS Pro price list (EUR excl. VAT, approx Q1 2025)
+    EUR_SEK = 11.5  # approximate
+    nkon_options = [
+        ("5 kWh",      5.12,   3.8,    600 * EUR_SEK),
+        ("10 kWh",    10.24,   7.5,   1177 * EUR_SEK),
+        ("16 kWh",    16.10,  11.0,   1512 * EUR_SEK),
+        ("32 kWh",    32.15,  15.0,   2857 * EUR_SEK),
+        ("32+16 kWh", 48.25,  15.0,  (2857+1512) * EUR_SEK),
+        ("2×32 kWh",  64.30,  15.0,  (2857*2) * EUR_SEK),
+    ]
+
+    with st.spinner("Optimerar batteristorlek..."):
+        opt_results = []
+        for label, cap, max_chg, bat_cost in nkon_options:
+            # Limit charge to fuse headroom
+            opt_cfg = BatteryConfig(
+                capacity_kwh=cap, max_charge_kw=max_chg, max_discharge_kw=max_chg,
+                efficiency=config.efficiency, fuse_amps=config.fuse_amps, phases=config.phases,
+                base_load_kw=config.base_load_kw, scheduled_loads=config.scheduled_loads,
+                hourly_load_profile=config.hourly_load_profile,
+                seasonal_load_profile=config.seasonal_load_profile,
+                flexible_loads=config.flexible_loads,
+                export_price_factor=config.export_price_factor, export_fee_ore=config.export_fee_ore,
+                purchase_price=bat_cost, installation_cost=config.installation_cost,
+                cycle_life=config.cycle_life, calendar_life_years=15,
+            )
+            opt_r = simulate(price_rows, opt_cfg, tariff=tariff, solar=solar_cfg)
+            opt_days = len(set(s.date for s in opt_r.slots))
+            opt_arb_yr = opt_r.net_profit_sek / opt_days * 365.25 if opt_days > 0 else 0
+            opt_invest = bat_cost + config.installation_cost
+            opt_payback = opt_invest / opt_arb_yr if opt_arb_yr > 0 else 999
+            opt_cycles_yr = opt_r.num_cycles / (opt_days / 365.25) if opt_days > 0 else 0
+            opt_lifetime = min(config.cycle_life / opt_cycles_yr if opt_cycles_yr > 0 else 15, 15)
+            opt_profit_life = opt_arb_yr * opt_lifetime - opt_invest
+            opt_roi = opt_profit_life / opt_invest * 100 if opt_invest > 0 else 0
+
+            opt_results.append({
+                "label": label,
+                "capacity": cap,
+                "bat_cost": bat_cost,
+                "invest": opt_invest,
+                "arb_yr": opt_arb_yr,
+                "payback": opt_payback,
+                "profit_life": opt_profit_life,
+                "roi": opt_roi,
+                "cost_per_kwh_bat": bat_cost / cap,
+                "cycles_yr": opt_cycles_yr,
+            })
+
+    df_opt = pd.DataFrame(opt_results)
+
+    # Find best ROI
+    best = df_opt.loc[df_opt["roi"].idxmax()]
+    st.success(f"**Bästa ROI: {best['label']}** — {best['roi']:.0f}% avkastning, "
+               f"{best['arb_yr']:,.0f} kr/år, {best['payback']:.1f} års återbetalningstid")
+
+    # Comparison chart
+    fig_opt = go.Figure()
+    fig_opt.add_trace(go.Bar(
+        x=df_opt["label"], y=df_opt["arb_yr"],
+        name="Arbitrage/år", marker_color="#2ecc71",
+        hovertemplate="%{x}<br>%{y:,.0f} SEK/år<extra></extra>",
+    ))
+    fig_opt.add_trace(go.Bar(
+        x=df_opt["label"], y=df_opt["invest"],
+        name="Investering", marker_color="#e74c3c", opacity=0.5,
+        hovertemplate="%{x}<br>%{y:,.0f} SEK<extra></extra>",
+    ))
+    fig_opt.update_layout(barmode="group", yaxis_title="SEK", height=350,
+                           margin=dict(l=0, r=0, t=30, b=0), legend=dict(orientation="h", y=1.02))
+    st.plotly_chart(fig_opt, use_container_width=True)
+
+    # Detailed table
+    st.dataframe(pd.DataFrame([{
+        "Batteri": r["label"],
+        "Kapacitet": f"{r['capacity']:.1f} kWh",
+        "Batteripris": f"{r['bat_cost']:,.0f} kr",
+        "Pris/kWh": f"{r['cost_per_kwh_bat']:,.0f} kr",
+        "Total invest": f"{r['invest']:,.0f} kr",
+        "Vinst/år": f"{r['arb_yr']:,.0f} kr",
+        "Payback": f"{r['payback']:.1f} år",
+        "Vinst 15 år": f"{r['profit_life']:,.0f} kr",
+        "ROI": f"{r['roi']:.0f}%",
+    } for r in opt_results]), use_container_width=True, hide_index=True)
+
+    # Marginal value chart
+    st.caption("Marginalvärde: vad varje extra kWh batterikapacitet ger")
+    fig_marginal = go.Figure()
+    for i in range(1, len(opt_results)):
+        prev = opt_results[i-1]
+        curr = opt_results[i]
+        extra_cap = curr["capacity"] - prev["capacity"]
+        extra_cost = curr["bat_cost"] - prev["bat_cost"]
+        extra_arb = curr["arb_yr"] - prev["arb_yr"]
+        marginal_payback = extra_cost / extra_arb if extra_arb > 0 else 999
+        fig_marginal.add_trace(go.Bar(
+            x=[f"{prev['label']} → {curr['label']}"],
+            y=[marginal_payback],
+            name=f"+{extra_cap:.0f} kWh",
+            marker_color="#3498db" if marginal_payback < 6 else "#e74c3c",
+            hovertemplate=f"+{extra_cap:.0f} kWh, +{extra_cost:,.0f} kr<br>"
+                          f"+{extra_arb:,.0f} kr/år<br>"
+                          f"Marginal payback: %{{y:.1f}} år<extra></extra>",
+        ))
+    fig_marginal.add_hline(y=5, line_dash="dash", line_color="gray", annotation_text="5 år")
+    fig_marginal.update_layout(yaxis_title="Marginal payback (år)", height=300,
+                                margin=dict(l=0, r=0, t=30, b=0), showlegend=False)
+    st.plotly_chart(fig_marginal, use_container_width=True)
+
     # === FUTURE VOLATILITY ===
     st.divider()
-    st.header("5. Framtidsprognos")
+    st.header("6. Framtidsprognos")
     st.caption("Hur påverkas lönsamheten om prisvolatiliteten ökar? "
                "Mer sol/vind i elnätet → större prisskillnader → mer att tjäna.")
 
@@ -541,9 +656,9 @@ if "result" in st.session_state:
         return out
 
     bat_configs = [
-        ("32 kWh", 32.15, 15, 25000),
-        ("32 + 16 kWh", 48.15, 22.5, 37500),
-        ("2 × 32 kWh", 64.3, 30, 50000),
+        ("32 kWh", 32.15, 15, round(2857 * EUR_SEK)),
+        ("32 + 16 kWh", 48.25, 15, round((2857+1512) * EUR_SEK)),
+        ("2 × 32 kWh", 64.3, 15, round(2857 * 2 * EUR_SEK)),
     ]
     vol_levels = [1.0, 1.2, 1.5, 2.0, 2.5]
     colors_bat = {"32 kWh": "#3498db", "32 + 16 kWh": "#2ecc71", "2 × 32 kWh": "#e74c3c"}
