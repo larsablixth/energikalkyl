@@ -612,11 +612,13 @@ if "result" in st.session_state:
     # === BATTERY SIZE OPTIMIZER ===
     st.divider()
     st.header("5. Optimal batteristorlek")
-    st.caption("Baserat på NKON ESS Pro prislista. Visar vilken storlek som ger "
-               "mest pengar tillbaka under livslängden.")
+    st.caption("Jämför olika batteristorlekar med NKON ESS Pro priser. "
+               "OBS: Dessa siffror kan skilja sig från resultatet ovan eftersom "
+               "de använder NKON:s listpriser, inte det du angav i steg 3.")
 
     # NKON ESS Pro price list (EUR excl. VAT, approx Q1 2025)
     EUR_SEK = 11.5  # approximate
+    install_cost = bat_install  # same installation cost for all sizes
     nkon_options = [
         ("5 kWh",      5.12,   3.8,    600 * EUR_SEK),
         ("10 kWh",    10.24,   7.5,   1177 * EUR_SEK),
@@ -625,6 +627,8 @@ if "result" in st.session_state:
         ("32+16 kWh", 48.25,  15.0,  (2857+1512) * EUR_SEK),
         ("2×32 kWh",  64.30,  15.0,  (2857*2) * EUR_SEK),
     ]
+    st.caption(f"Batteripriser: NKON ESS Pro (€1 = {EUR_SEK} kr) | Installation: {install_cost:,.0f} kr | "
+               f"Solceller: {sol_price + sol_install:,.0f} kr")
 
     with st.spinner("Optimerar batteristorlek..."):
         opt_results = []
@@ -668,8 +672,9 @@ if "result" in st.session_state:
 
     # Find best by total profit (what matters is money in your pocket)
     best = df_opt.loc[df_opt["profit_life"].idxmax()]
-    st.success(f"**Bästa val: {best['label']}** — **{best['arb_yr']:,.0f} kr/år lägre elkostnad**, "
-               f"netto **{best['profit_life']:,.0f} kr** efter {best['payback']:.1f} års återbetalningstid")
+    st.success(f"**Bästa val: {best['label']}** — {best['arb_yr']:,.0f} kr/år lägre elkostnad, "
+               f"batteri-investering {best['invest']:,.0f} kr, "
+               f"återbetald på {best['payback']:.1f} år")
 
     # Main chart: yearly income + total lifetime profit
     fig_opt = go.Figure()
@@ -705,11 +710,10 @@ if "result" in st.session_state:
         "Batteri": r["label"],
         "Lägre elkostnad/år": f"{r['arb_yr']:,.0f} kr",
         "Lägre elkostnad/mån": f"{r['arb_yr']/12:,.0f} kr",
+        "Batteripris (NKON)": f"{r['bat_cost']:,.0f} kr",
+        "Batteri + installation": f"{r['invest']:,.0f} kr",
+        "Payback (batteri)": f"{r['payback']:.1f} år",
         "Netto under livslängd": f"{r['profit_life']:,.0f} kr",
-        "Investering": f"{r['invest']:,.0f} kr",
-        "Payback": f"{r['payback']:.1f} år",
-        "Kapacitet": f"{r['capacity']:.0f} kWh",
-        "Batteripris": f"{r['bat_cost']:,.0f} kr",
     } for r in opt_results]), use_container_width=True, hide_index=True)
 
     # Marginal value: what does each step UP give you in extra kr/year?
