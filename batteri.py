@@ -89,6 +89,9 @@ class BatteryConfig:
     installation_cost: float = 0.0    # installation cost (SEK)
     cycle_life: int = 8000            # rated cycles at ~70% SoH
     calendar_life_years: int = 15     # max calendar lifetime
+    # Grid export
+    export_price_factor: float = 1.0  # fraction of spot price received for export (1.0 = full spot)
+    export_fee_ore: float = 5.0       # provider fee per exported kWh (öre)
 
     @property
     def grid_max_kw(self) -> float:
@@ -192,6 +195,8 @@ class SlotResult:
     solar_kw: float = 0.0    # solar production this slot
     solar_charge_kwh: float = 0.0  # energy charged from solar (free)
     flex_consumed_kwh: float = 0.0  # energy consumed by flexible loads from solar
+    grid_export_kwh: float = 0.0   # surplus solar exported to grid
+    export_revenue_sek: float = 0.0  # revenue from grid export
 
 
 @dataclass
@@ -229,8 +234,16 @@ class SimResult:
         return sum(s.flex_consumed_kwh for s in self.slots)
 
     @property
+    def total_grid_export_kwh(self) -> float:
+        return sum(s.grid_export_kwh for s in self.slots)
+
+    @property
+    def total_export_revenue(self) -> float:
+        return sum(s.export_revenue_sek for s in self.slots)
+
+    @property
     def net_profit_sek(self) -> float:
-        return self.total_discharge_value - self.total_charge_cost
+        return self.total_discharge_value - self.total_charge_cost + self.total_export_revenue
 
     @property
     def num_cycles(self) -> float:
@@ -362,6 +375,15 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
                     soc += solar_energy
                     solar_charge_kwh = solar_energy
 
+            # Calculate remaining surplus after battery + flex → export to grid
+            remaining_surplus_kw = solar_surplus_kw - (solar_charge_kwh / slot_duration_h if slot_duration_h > 0 else 0)
+            grid_export_kwh = max(0, remaining_surplus_kw * slot_duration_h)
+            export_revenue = 0.0
+            if grid_export_kwh > 0.001:
+                # Export revenue: spot price × factor - provider fee
+                export_ore = spot_ore * config.export_price_factor - config.export_fee_ore
+                export_revenue = grid_export_kwh * max(0, export_ore) / 100
+
             # --- Step 2: Grid charge during cheap slots (if room left) ---
             if i in charge_indices and total_ore < avg_total:
                 grid_charge_kw = config.available_charge_kw(h, month)
@@ -389,6 +411,8 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
                         solar_kw=round(solar_kw, 4),
                         solar_charge_kwh=round(solar_charge_kwh, 4),
                         flex_consumed_kwh=round(flex_consumed_kw * slot_duration_h, 4),
+                        grid_export_kwh=round(grid_export_kwh, 4),
+                        export_revenue_sek=round(export_revenue, 4),
                     ))
                     continue
 
@@ -417,10 +441,12 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
                         solar_kw=round(solar_kw, 4),
                         solar_charge_kwh=round(solar_charge_kwh, 4),
                         flex_consumed_kwh=round(flex_consumed_kw * slot_duration_h, 4),
+                        grid_export_kwh=round(grid_export_kwh, 4),
+                        export_revenue_sek=round(export_revenue, 4),
                     ))
                     continue
 
-            # --- Idle (but may still have solar charging) ---
+            # --- Idle (but may still have solar charging / export) ---
             action = "solar_charge" if solar_charge_kwh > 0.001 else "idle"
             result.slots.append(SlotResult(
                 date=row["date"], hour=row["hour"],
@@ -436,6 +462,9 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
                 saving_sek=0.0,
                 solar_kw=round(solar_kw, 4),
                 solar_charge_kwh=round(solar_charge_kwh, 4),
+                flex_consumed_kwh=round(flex_consumed_kw * slot_duration_h, 4),
+                grid_export_kwh=round(grid_export_kwh, 4),
+                export_revenue_sek=round(export_revenue, 4),
             ))
 
     return result
@@ -558,6 +587,8 @@ def print_summary(result: SimResult, tariff=None, base_fuse_amps: float | None =
         print(f"  Solladdat:        {result.total_solar_charge_kwh:.1f} kWh (gratis)")
     if result.total_flex_consumed_kwh > 0:
         print(f"  Flex-förbrukning: {result.total_flex_consumed_kwh:.1f} kWh (solöverskott → pool etc.)")
+    if result.total_grid_export_kwh > 0:
+        print(f"  Sålt till nät:    {result.total_grid_export_kwh:.1f} kWh → {result.total_export_revenue:.0f} SEK")
     print(f"  Laddkostnad:      {result.total_charge_cost:.2f} SEK (spot + nätavgift)")
     print(f"  Urladdningsvärde: {result.total_discharge_value:.2f} SEK (undvikt spot + nätavgift)")
     print("-" * 70)

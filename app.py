@@ -437,6 +437,15 @@ with tab_solar:
             solar_degradation = st.number_input("Degradering (%/år)", value=0.5, min_value=0.0, max_value=2.0, step=0.1) / 100
             solar_lifetime = st.number_input("Panellivslängd (år)", value=25, min_value=5, step=1)
 
+        st.markdown("**Försäljning av överskottsel**")
+        col1, col2 = st.columns(2)
+        with col1:
+            export_factor = st.number_input("Andel av spotpris vid export", value=1.0, min_value=0.0, max_value=1.5, step=0.05,
+                                            help="1.0 = hela spotpriset, 0.9 = 90% etc.")
+        with col2:
+            export_fee = st.number_input("Leverantörsavgift (öre/kWh)", value=5.0, min_value=0.0, max_value=30.0, step=1.0,
+                                         help="Avgift som Tibber/leverantör tar vid export")
+
         solar_config = SolarConfig(
             capacity_kwp=solar_kwp, tilt=solar_tilt,
             performance_ratio=solar_perf, degradation_per_year=solar_degradation,
@@ -700,6 +709,8 @@ if st.button("KÖR SIMULERING", type="primary", use_container_width=True):
         installation_cost=bat_install,
         cycle_life=cycle_life,
         calendar_life_years=calendar_life,
+        export_price_factor=export_factor if use_solar else 1.0,
+        export_fee_ore=export_fee if use_solar else 5.0,
     )
 
     tariff = None
@@ -794,6 +805,13 @@ if "sim_result" in st.session_state:
         cols[3].metric("Solladdat", f"{result.total_solar_charge_kwh:,.0f} kWh")
     if result.total_flex_consumed_kwh > 0:
         cols[4].metric("Flex-förbrukning", f"{result.total_flex_consumed_kwh:,.0f} kWh")
+
+    if result.total_grid_export_kwh > 0:
+        col_exp1, col_exp2, col_exp3 = st.columns(3)
+        col_exp1.metric("Sålt till nät", f"{result.total_grid_export_kwh:,.0f} kWh")
+        col_exp2.metric("Exportintäkt", f"{result.total_export_revenue:,.0f} SEK")
+        export_per_year = result.total_export_revenue / num_days * 365.25 if num_days > 0 else 0
+        col_exp3.metric("Exportintäkt/år", f"{export_per_year:,.0f} SEK")
 
     # Pre-compute daily data (used by multiple sections)
     df_slots = pd.DataFrame([{

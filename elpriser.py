@@ -237,6 +237,10 @@ def main():
                        help="Solcellers installationskostnad i SEK")
     p_bat.add_argument("--sol-livslängd", type=int, default=25,
                        help="Solcellers livslängd i år (default: 25)")
+    p_bat.add_argument("--export-faktor", type=float, default=1.0,
+                       help="Andel av spotpris vid försäljning till nät (default: 1.0)")
+    p_bat.add_argument("--export-avgift", type=float, default=5.0,
+                       help="Leverantörsavgift vid export öre/kWh (default: 5.0)")
     p_bat.add_argument("--källa", choices=["elpris", "entsoe"], default="elpris",
                        help="Datakälla vid hämtning (default: elpris)")
     p_bat.add_argument("--tariff", choices=["tid", "fast", "ingen"], default="tid",
@@ -477,6 +481,8 @@ def main():
             installation_cost=args.installation,
             cycle_life=args.cykler,
             calendar_life_years=args.livslängd,
+            export_price_factor=args.export_faktor,
+            export_fee_ore=args.export_avgift,
             flexible_loads=flexible_loads,
             **config_kwargs_extra,
         )
