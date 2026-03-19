@@ -1331,3 +1331,211 @@ if "sim_result" in st.session_state:
         })
 
     st.dataframe(pd.DataFrame(fuse_compare), use_container_width=True, hide_index=True)
+
+    # ==============================================================
+    # FORECAST: Future volatility scenarios
+    # ==============================================================
+    st.divider()
+    st.header("Framtidsprognos — ökad prisvolatilitet")
+    st.caption(
+        "Simulerar hur investeringen utvecklas de kommande 5-15 åren om prisvolatiliteten "
+        "ökar, vilket förväntas med mer vind- och solkraft i det nordiska elnätet. "
+        "Beräkningen baseras på historiska prismönster med skalad avvikelse från dagsmedel."
+    )
+
+    def scale_volatility(price_rows, factor):
+        """Scale price deviations from daily mean by factor."""
+        days_map = {}
+        for r in price_rows:
+            days_map.setdefault(r["date"], []).append(r)
+        scaled = []
+        for d, day_rows in days_map.items():
+            mean = sum(float(r["sek_per_kwh"]) for r in day_rows) / len(day_rows)
+            for r in day_rows:
+                new_r = dict(r)
+                price = float(r["sek_per_kwh"])
+                new_price = max(0.001, mean + (price - mean) * factor)
+                new_r["sek_per_kwh"] = round(new_price, 4)
+                new_r["ore_per_kwh"] = round(new_price * 100, 2)
+                scaled.append(new_r)
+        return scaled
+
+    # Run scenarios
+    vol_scenarios = [
+        ("Historisk (idag)", 1.0),
+        ("+20%", 1.2),
+        ("+50%", 1.5),
+        ("+100% (dubbel)", 2.0),
+        ("+150%", 2.5),
+    ]
+
+    # Battery configs to compare
+    bat_configs = [
+        ("32 kWh", 32.15, 15, 25000),
+        ("32 + 16 kWh", 48.15, 22.5, 37500),
+        ("2 × 32 kWh", 64.3, 30, 50000),
+    ]
+
+    with st.spinner("Beräknar framtidsscenarier..."):
+        forecast_data = []
+        for vol_label, vol_factor in vol_scenarios:
+            scaled = scale_volatility(price_rows, vol_factor)
+            for bat_label, cap, charge, bat_price_val in bat_configs:
+                fc_config = BatteryConfig(
+                    capacity_kwh=cap, max_charge_kw=charge, max_discharge_kw=charge,
+                    efficiency=config.efficiency, fuse_amps=config.fuse_amps,
+                    phases=config.phases, base_load_kw=config.base_load_kw,
+                    scheduled_loads=config.scheduled_loads,
+                    hourly_load_profile=config.hourly_load_profile,
+                    seasonal_load_profile=config.seasonal_load_profile,
+                    flexible_loads=config.flexible_loads,
+                    export_price_factor=config.export_price_factor,
+                    export_fee_ore=config.export_fee_ore,
+                    purchase_price=bat_price_val, installation_cost=config.installation_cost,
+                    cycle_life=config.cycle_life, calendar_life_years=config.calendar_life_years,
+                )
+                fc_result = simulate(scaled, fc_config, tariff=tariff, solar=solar_cfg)
+                fc_days = len(set(s.date for s in fc_result.slots))
+                fc_arb_yr = fc_result.net_profit_sek / fc_days * 365.25 if fc_days > 0 else 0
+                fc_invest = bat_price_val + config.installation_cost
+                fc_payback = fc_invest / fc_arb_yr if fc_arb_yr > 0 else 999
+                fc_cycles_yr = fc_result.num_cycles / (fc_days / 365.25) if fc_days > 0 else 0
+
+                forecast_data.append({
+                    "vol_label": vol_label,
+                    "vol_factor": vol_factor,
+                    "bat_label": bat_label,
+                    "capacity": cap,
+                    "arb_yr": fc_arb_yr,
+                    "invest": fc_invest,
+                    "payback": fc_payback,
+                    "cycles_yr": fc_cycles_yr,
+                })
+
+    df_fc = pd.DataFrame(forecast_data)
+
+    # Forecast chart: arbitrage/year per battery size across volatility levels
+    fig_fc = go.Figure()
+    colors = {"32 kWh": "#3498db", "32 + 16 kWh": "#2ecc71", "2 × 32 kWh": "#e74c3c"}
+    for bat_label in [b[0] for b in bat_configs]:
+        df_bat = df_fc[df_fc["bat_label"] == bat_label]
+        fig_fc.add_trace(go.Scatter(
+            x=[f"{v:.0%}" for v in df_bat["vol_factor"]],
+            y=df_bat["arb_yr"],
+            mode="lines+markers",
+            name=bat_label,
+            line=dict(width=2, color=colors.get(bat_label, "#95a5a6")),
+            hovertemplate="%{x} volatilitet<br>%{y:,.0f} SEK/år<extra>" + bat_label + "</extra>",
+        ))
+    fig_fc.update_layout(
+        xaxis_title="Prisvolatilitet (relativt idag)",
+        yaxis_title="Arbitrage (SEK/år)",
+        height=400,
+        margin=dict(l=0, r=0, t=30, b=0),
+        legend=dict(orientation="h", y=1.02),
+    )
+    st.plotly_chart(fig_fc, use_container_width=True)
+
+    # Payback chart
+    fig_pb = go.Figure()
+    for bat_label in [b[0] for b in bat_configs]:
+        df_bat = df_fc[df_fc["bat_label"] == bat_label]
+        fig_pb.add_trace(go.Bar(
+            x=[f"{v:.0%}" for v in df_bat["vol_factor"]],
+            y=df_bat["payback"].clip(upper=20),
+            name=bat_label,
+            marker_color=colors.get(bat_label, "#95a5a6"),
+            hovertemplate="%{x}<br>%{y:.1f} år<extra>" + bat_label + "</extra>",
+        ))
+    fig_pb.update_layout(
+        barmode="group",
+        xaxis_title="Prisvolatilitet",
+        yaxis_title="Återbetalningstid (år)",
+        height=350,
+        margin=dict(l=0, r=0, t=30, b=0),
+        legend=dict(orientation="h", y=1.02),
+    )
+    st.plotly_chart(fig_pb, use_container_width=True)
+
+    # Cumulative profit over 15 years with growing volatility
+    st.subheader("15-årsprognos med gradvis ökande volatilitet")
+    st.caption("Antar att volatiliteten ökar linjärt från dagens nivå till vald nivå över 10 år, sedan konstant")
+
+    target_vol = st.slider("Förväntad volatilitet om 10 år", 1.0, 3.0, 1.5, 0.1,
+                           format="%.1fx")
+
+    fig_15yr = go.Figure()
+    for bat_label, cap, charge, bat_price_val in bat_configs:
+        invest = bat_price_val + config.installation_cost
+        yearly_profits = []
+        cumulative = [-invest]
+
+        for year in range(1, 16):
+            # Volatility ramps up linearly over 10 years
+            if year <= 10:
+                vol = 1.0 + (target_vol - 1.0) * year / 10
+            else:
+                vol = target_vol
+
+            # Find matching scenario (interpolate between nearest)
+            # Use closest precomputed scenario
+            closest = min(vol_scenarios, key=lambda x: abs(x[1] - vol))
+            row = df_fc[(df_fc["bat_label"] == bat_label) & (df_fc["vol_factor"] == closest[1])]
+            if not row.empty:
+                yr_profit = row.iloc[0]["arb_yr"]
+            else:
+                yr_profit = 0
+
+            # Linear interpolation between scenarios
+            below = [(l, f) for l, f in vol_scenarios if f <= vol]
+            above = [(l, f) for l, f in vol_scenarios if f > vol]
+            if below and above:
+                b_label, b_factor = below[-1]
+                a_label, a_factor = above[0]
+                b_row = df_fc[(df_fc["bat_label"] == bat_label) & (df_fc["vol_factor"] == b_factor)]
+                a_row = df_fc[(df_fc["bat_label"] == bat_label) & (df_fc["vol_factor"] == a_factor)]
+                if not b_row.empty and not a_row.empty:
+                    t = (vol - b_factor) / (a_factor - b_factor)
+                    yr_profit = b_row.iloc[0]["arb_yr"] * (1 - t) + a_row.iloc[0]["arb_yr"] * t
+
+            cumulative.append(cumulative[-1] + yr_profit)
+
+        fig_15yr.add_trace(go.Scatter(
+            x=list(range(0, 16)),
+            y=cumulative,
+            mode="lines+markers",
+            name=bat_label,
+            line=dict(width=2, color=colors.get(bat_label, "#95a5a6")),
+            hovertemplate="År %{x}<br>%{y:,.0f} SEK<extra>" + bat_label + "</extra>",
+        ))
+
+    fig_15yr.add_hline(y=0, line_color="gray", line_width=1)
+    fig_15yr.update_layout(
+        xaxis_title="År",
+        yaxis_title="Ackumulerat resultat (SEK)",
+        height=450,
+        margin=dict(l=0, r=0, t=30, b=0),
+        legend=dict(orientation="h", y=1.02),
+    )
+    st.plotly_chart(fig_15yr, use_container_width=True)
+
+    # Summary table
+    st.subheader("Scenariojämförelse")
+    summary_rows = []
+    for bat_label, cap, charge, bat_price_val in bat_configs:
+        invest = bat_price_val + config.installation_cost
+        for vol_label, vol_factor in vol_scenarios:
+            row = df_fc[(df_fc["bat_label"] == bat_label) & (df_fc["vol_factor"] == vol_factor)]
+            if not row.empty:
+                r = row.iloc[0]
+                lifetime = min(config.cycle_life / r["cycles_yr"] if r["cycles_yr"] > 0 else 15, 15)
+                total_profit = r["arb_yr"] * lifetime - invest
+                summary_rows.append({
+                    "Batteri": bat_label,
+                    "Volatilitet": vol_label,
+                    "Arbitrage/år": f"{r['arb_yr']:,.0f} kr",
+                    "Payback": f"{r['payback']:.1f} år",
+                    "Vinst 15 år": f"{total_profit:,.0f} kr",
+                })
+
+    st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
