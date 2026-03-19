@@ -289,12 +289,37 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
             # Effective cost is lower when solar surplus can charge for free
             slot_costs.append((i, total_ore, spot_ore, grid_ore, solar_surplus_kw))
 
-        # Rank by total cost to decide charge/discharge
+        # Smart charge/discharge scheduling:
+        # Calculate how many hours needed to fill battery based on available power per slot
         sorted_by_cost = sorted(slot_costs, key=lambda x: x[1])
-        n = len(sorted_by_cost)
-        charge_indices = {idx for idx, _, _, _, _ in sorted_by_cost[:n // 4]}
-        discharge_indices = {idx for idx, _, _, _, _ in sorted_by_cost[-(n // 4):]}
 
+        # Determine charge slots: fill cheapest hours until battery can be fully charged
+        charge_indices = set()
+        charge_energy_available = 0.0
+        energy_needed = config.usable_kwh / config.efficiency  # account for losses
+        for idx, total_ore, spot_ore, grid_ore, solar_surplus in sorted_by_cost:
+            if charge_energy_available >= energy_needed:
+                break
+            h = int(day_prices[idx]["hour"].split(":")[0])
+            month = int(day_prices[idx]["date"].split("-")[1])
+            avail_kw = config.available_charge_kw(h, month)
+            if avail_kw > 0.1:
+                charge_indices.add(idx)
+                charge_energy_available += avail_kw * slot_duration_h
+
+        # Determine discharge slots: most expensive hours until battery can be fully discharged
+        discharge_indices = set()
+        discharge_energy_available = 0.0
+        energy_to_discharge = config.usable_kwh
+        for idx, total_ore, spot_ore, grid_ore, solar_surplus in reversed(sorted_by_cost):
+            if idx in charge_indices:
+                continue
+            if discharge_energy_available >= energy_to_discharge:
+                break
+            discharge_indices.add(idx)
+            discharge_energy_available += config.max_discharge_kw * slot_duration_h
+
+        # Only charge if price is below average, discharge if above
         avg_total = sum(tc for _, tc, _, _, _ in slot_costs) / len(slot_costs) if slot_costs else 0
 
         # Track daily flexible load energy

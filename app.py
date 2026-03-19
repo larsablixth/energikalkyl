@@ -627,15 +627,63 @@ with tab_invest:
             sol_price = 0
             sol_install = 0
 
+    st.subheader("Finansiering")
+    col1, col2 = st.columns(2)
+    with col1:
+        finance_method = st.radio("Finansiering", ["Eget kapital", "Lån"])
+    with col2:
+        if finance_method == "Lån":
+            loan_rate = st.number_input("Ränta (%)", value=5.0, min_value=0.0, max_value=20.0, step=0.1)
+            loan_years = st.number_input("Lånetid (år)", value=10, min_value=1, max_value=30, step=1)
+        else:
+            loan_rate = 0.0
+            loan_years = 0
+            opportunity_rate = st.number_input(
+                "Alternativavkastning (%)",
+                value=3.0, min_value=0.0, max_value=15.0, step=0.5,
+                help="Vad pengarna hade gett på sparkonto/fonder istället",
+            )
+
     total_inv = bat_price + bat_install + sol_price + sol_install
     st.info(f"Total investering: **{total_inv:,.0f} SEK**")
 
 # ================================================================
 # RUN SIMULATION
 # ================================================================
-st.header("Simulering & Resultat")
+st.divider()
+st.header("Kör simulering")
 
-if st.button("Kör simulering", type="primary", use_container_width=True):
+# Status summary before running
+col_s1, col_s2, col_s3 = st.columns(3)
+with col_s1:
+    num_price_rows = len(df_prices) if df_prices is not None else 0
+    num_price_days = df_prices["date"].nunique() if num_price_rows > 0 else 0
+    if num_price_rows > 0:
+        st.success(f"Prisdata: {num_price_days} dagar")
+    else:
+        st.error("Prisdata: saknas")
+
+with col_s2:
+    has_cons = ("imported_seasonal" in st.session_state or "imported_hourly_profile" in st.session_state
+                or "tibber_seasonal" in st.session_state or "tibber_hourly_profile" in st.session_state
+                or seasonal_load_profile or hourly_load_profile)
+    if has_cons:
+        st.success("Förbrukning: laddad")
+    elif scheduled_loads:
+        st.info(f"Förbrukning: manuell ({len(scheduled_loads)} laster)")
+    else:
+        st.info(f"Förbrukning: grundlast {base_load} kW")
+
+with col_s3:
+    parts = []
+    parts.append(f"Batteri {capacity} kWh")
+    if use_solar:
+        parts.append(f"Sol {solar_kwp} kWp")
+    parts.append(f"Säkring {fuse_amps:.0f}A")
+    st.info(" | ".join(parts))
+
+if st.button("KÖR SIMULERING", type="primary", use_container_width=True):
+    st.divider()
     config = BatteryConfig(
         capacity_kwh=capacity,
         max_charge_kw=charge_kw,
@@ -747,6 +795,21 @@ if "sim_result" in st.session_state:
     if result.total_flex_consumed_kwh > 0:
         cols[4].metric("Flex-förbrukning", f"{result.total_flex_consumed_kwh:,.0f} kWh")
 
+    # Pre-compute daily data (used by multiple sections)
+    df_slots = pd.DataFrame([{
+        "date": s.date, "action": s.action,
+        "energy_kwh": s.energy_kwh, "cost_sek": s.cost_sek,
+        "saving_sek": s.saving_sek, "soc_after": s.soc_after,
+    } for s in result.slots])
+
+    df_daily = df_slots.groupby("date").agg(
+        charged=("energy_kwh", lambda x: x[df_slots.loc[x.index, "action"] == "charge"].sum()),
+        discharged=("energy_kwh", lambda x: x[df_slots.loc[x.index, "action"] == "discharge"].sum()),
+        cost=("cost_sek", "sum"),
+        value=("saving_sek", "sum"),
+    ).reset_index()
+    df_daily["profit"] = df_daily["value"] - df_daily["cost"]
+
     # Investment ROI
     bat_inv = config.purchase_price + config.installation_cost
     sol_inv = (solar_cfg.purchase_price + solar_cfg.installation_cost) if solar_cfg else 0
@@ -776,8 +839,240 @@ if "sim_result" in st.session_state:
         elif per_year > 0:
             st.warning(f"Återbetalas EJ inom livslängden ({payback_years:.1f} > {effective_lifetime:.0f} år)")
 
-        # Breakdown
-        with st.expander("Investeringsdetaljer"):
+        # --- Financial charts ---
+        tab_cashflow, tab_monthly_profit, tab_loan, tab_details = st.tabs([
+            "Kassaflöde", "Månadsvinst", "Lånekalkyl", "Detaljer"
+        ])
+
+        # Cumulative cashflow chart
+        with tab_cashflow:
+            years = list(range(0, int(effective_lifetime) + 1))
+            cashflow_no_loan = []
+            balance = -total_investment
+            for y in years:
+                if y > 0:
+                    balance += per_year
+                cashflow_no_loan.append(balance)
+
+            fig_cf = go.Figure()
+            fig_cf.add_trace(go.Scatter(
+                x=years, y=cashflow_no_loan,
+                mode="lines+markers", name="Eget kapital",
+                line=dict(width=2, color="#2ecc71"),
+                fill="tozeroy",
+                hovertemplate="År %{x}<br>%{y:,.0f} SEK<extra></extra>",
+            ))
+
+            # With loan
+            if loan_rate > 0 and loan_years > 0:
+                monthly_rate = loan_rate / 100 / 12
+                n_payments = loan_years * 12
+                if monthly_rate > 0:
+                    monthly_payment = total_investment * monthly_rate / (1 - (1 + monthly_rate) ** -n_payments)
+                else:
+                    monthly_payment = total_investment / n_payments
+                yearly_payment = monthly_payment * 12
+                total_loan_cost = yearly_payment * loan_years
+
+                # Remaining debt over time (amortization schedule)
+                remaining_debt = total_investment
+                debt_over_time = [remaining_debt]
+                for y in range(1, len(years)):
+                    if y <= loan_years:
+                        # Interest on remaining balance + principal payment
+                        interest_yr = remaining_debt * (loan_rate / 100)
+                        principal_yr = yearly_payment - interest_yr
+                        remaining_debt = max(0, remaining_debt - principal_yr)
+                    else:
+                        remaining_debt = 0
+                    debt_over_time.append(remaining_debt)
+
+                # Net position: cumulative savings - remaining debt
+                net_loan = []
+                cumulative_savings = 0
+                for y in range(len(years)):
+                    if y > 0:
+                        cumulative_savings += per_year
+                        if y <= loan_years:
+                            cumulative_savings -= yearly_payment
+                    net_loan.append(cumulative_savings)
+
+                fig_cf.add_trace(go.Scatter(
+                    x=years, y=net_loan,
+                    mode="lines+markers", name=f"Netto med lån ({loan_rate}%, {loan_years} år)",
+                    line=dict(width=2, color="#e74c3c", dash="dash"),
+                    hovertemplate="År %{x}<br>Netto: %{y:,.0f} SEK<extra></extra>",
+                ))
+
+                fig_cf.add_trace(go.Scatter(
+                    x=years, y=[-d for d in debt_over_time],
+                    mode="lines", name="Kvarvarande skuld",
+                    line=dict(width=1, color="#95a5a6", dash="dot"),
+                    hovertemplate="År %{x}<br>Skuld: %{y:,.0f} SEK<extra></extra>",
+                ))
+
+            # With opportunity cost
+            if loan_rate == 0 and 'opportunity_rate' in dir():
+                try:
+                    opp_rate_val = opportunity_rate / 100
+                    cashflow_opp = []
+                    balance_opp = -total_investment
+                    for y in years:
+                        if y > 0:
+                            balance_opp += per_year
+                        # What the money would have earned in the bank
+                        alt_balance = total_investment * ((1 + opp_rate_val) ** y - 1)
+                        cashflow_opp.append(balance_opp)
+
+                    # Alternative: just invest the money
+                    alt_values = [total_investment * ((1 + opp_rate_val) ** y) - total_investment for y in years]
+                    fig_cf.add_trace(go.Scatter(
+                        x=years, y=alt_values,
+                        mode="lines", name=f"Alternativ ({opportunity_rate}% avkastning)",
+                        line=dict(width=2, color="#f39c12", dash="dot"),
+                        hovertemplate="År %{x}<br>%{y:,.0f} SEK<extra></extra>",
+                    ))
+                except:
+                    pass
+
+            fig_cf.add_hline(y=0, line_color="gray", line_width=1)
+            fig_cf.update_layout(
+                yaxis_title="Ackumulerat kassaflöde (SEK)",
+                xaxis_title="År",
+                height=400,
+                margin=dict(l=0, r=0, t=30, b=0),
+                legend=dict(orientation="h", y=1.02),
+            )
+            st.plotly_chart(fig_cf, use_container_width=True)
+
+        # Monthly profit histogram
+        with tab_monthly_profit:
+            df_slots_m = pd.DataFrame([{
+                "date": s.date,
+                "month": s.date[:7],
+                "cost_sek": s.cost_sek,
+                "saving_sek": s.saving_sek,
+            } for s in result.slots])
+
+            df_month_profit = df_slots_m.groupby("month").agg(
+                cost=("cost_sek", "sum"),
+                value=("saving_sek", "sum"),
+            ).reset_index()
+            df_month_profit["profit"] = df_month_profit["value"] - df_month_profit["cost"]
+
+            fig_mp = go.Figure()
+            fig_mp.add_trace(go.Bar(
+                x=df_month_profit["month"],
+                y=df_month_profit["profit"],
+                name="Månadsvinst",
+                marker_color=["#2ecc71" if p >= 0 else "#e74c3c" for p in df_month_profit["profit"]],
+                hovertemplate="%{x}<br>%{y:,.0f} SEK<extra></extra>",
+            ))
+            avg_monthly = per_year / 12
+            fig_mp.add_hline(y=avg_monthly, line_dash="dash", line_color="#3498db",
+                             annotation_text=f"Snitt {avg_monthly:,.0f} SEK/mån")
+            fig_mp.update_layout(yaxis_title="SEK", height=350, margin=dict(l=0, r=0, t=30, b=0))
+            st.plotly_chart(fig_mp, use_container_width=True)
+
+            # Profit distribution histogram
+            st.caption("Fördelning av daglig vinst")
+            fig_hist = go.Figure()
+            df_daily_for_hist = df_daily.copy()
+            fig_hist.add_trace(go.Histogram(
+                x=df_daily_for_hist["profit"],
+                nbinsx=50,
+                marker_color="#3498db",
+                hovertemplate="%{x:.0f} SEK<br>%{y} dagar<extra></extra>",
+            ))
+            fig_hist.add_vline(x=0, line_color="red", line_width=1)
+            avg_daily_profit = per_year / 365.25
+            fig_hist.add_vline(x=avg_daily_profit, line_dash="dash", line_color="#2ecc71",
+                               annotation_text=f"Snitt {avg_daily_profit:.1f} SEK/dag")
+            fig_hist.update_layout(
+                xaxis_title="Daglig vinst (SEK)", yaxis_title="Antal dagar",
+                height=300, margin=dict(l=0, r=0, t=30, b=0),
+            )
+            st.plotly_chart(fig_hist, use_container_width=True)
+
+            loss_days = len(df_daily_for_hist[df_daily_for_hist["profit"] < 0])
+            profit_days = len(df_daily_for_hist[df_daily_for_hist["profit"] >= 0])
+            st.caption(f"Vinstdagar: {profit_days} | Förlustdagar: {loss_days} | "
+                       f"Andel vinstdagar: {profit_days/(profit_days+loss_days)*100:.0f}%")
+
+        # Loan analysis
+        with tab_loan:
+            st.caption("Jämför olika räntor och lånetider")
+
+            col1, col2 = st.columns(2)
+
+            # Interest rate sensitivity
+            with col1:
+                st.markdown("**Räntan's påverkan på lönsamhet**")
+                rates = [0, 2, 3, 4, 5, 6, 7, 8, 10]
+                loan_data = []
+                for r in rates:
+                    if r == 0:
+                        total_cost = total_investment
+                        monthly_pmt = 0
+                    else:
+                        mr = r / 100 / 12
+                        n = 10 * 12  # 10 year loan
+                        monthly_pmt = total_investment * mr / (1 - (1 + mr) ** -n)
+                        total_cost = monthly_pmt * n
+
+                    interest_cost = total_cost - total_investment
+                    net_after_loan = per_year * effective_lifetime - total_cost
+                    loan_data.append({
+                        "Ränta": f"{r}%",
+                        "Månadskostnad": f"{monthly_pmt:,.0f} kr" if monthly_pmt > 0 else "—",
+                        "Räntekostnad": f"{interest_cost:,.0f} kr",
+                        "Total kostnad": f"{total_cost:,.0f} kr",
+                        "Netto efter lån": f"{net_after_loan:,.0f} kr",
+                        "Lönsamt": "Ja" if net_after_loan > 0 else "Nej",
+                    })
+                st.dataframe(pd.DataFrame(loan_data), use_container_width=True, hide_index=True)
+
+            # Loan term sensitivity
+            with col2:
+                st.markdown("**Lånetidens påverkan (5% ränta)**")
+                terms = [3, 5, 7, 10, 15, 20]
+                term_data = []
+                for t in terms:
+                    mr = 5 / 100 / 12
+                    n = t * 12
+                    mp = total_investment * mr / (1 - (1 + mr) ** -n)
+                    total_cost = mp * n
+                    interest_cost = total_cost - total_investment
+                    yearly_cost = mp * 12
+                    net_yearly = per_year - yearly_cost
+                    term_data.append({
+                        "Lånetid": f"{t} år",
+                        "Månadskostnad": f"{mp:,.0f} kr",
+                        "Räntekostnad": f"{interest_cost:,.0f} kr",
+                        "Netto/år (under lån)": f"{net_yearly:,.0f} kr",
+                        "Kassaflöde +/-": "Positivt" if net_yearly > 0 else "Negativt",
+                    })
+                st.dataframe(pd.DataFrame(term_data), use_container_width=True, hide_index=True)
+
+            # Break-even interest rate
+            if per_year > 0:
+                # Find max rate where it's still profitable over lifetime
+                for test_rate in range(0, 200):
+                    r = test_rate / 10
+                    if r == 0:
+                        continue
+                    mr = r / 100 / 12
+                    n = 10 * 12
+                    mp = total_investment * mr / (1 - (1 + mr) ** -n)
+                    total_cost = mp * n
+                    if per_year * effective_lifetime - total_cost < 0:
+                        max_rate = (test_rate - 1) / 10
+                        st.info(f"Högsta ränta som ger lönsamhet (10 år, {effective_lifetime:.0f} års livslängd): "
+                                f"**{max_rate:.1f}%**")
+                        break
+
+        # Details
+        with tab_details:
             if bat_inv > 0:
                 st.text(f"Batteri inköp:      {config.purchase_price:>10,.0f} SEK")
                 st.text(f"Batteri installation:{config.installation_cost:>10,.0f} SEK")
@@ -814,31 +1109,152 @@ if "sim_result" in st.session_state:
         for k, v in details.items():
             st.text(f"{k:.<40} {v}")
 
-    # Daily profit chart
-    st.subheader("Daglig vinst")
-    df_slots = pd.DataFrame([{
-        "date": s.date, "action": s.action,
-        "energy_kwh": s.energy_kwh, "cost_sek": s.cost_sek,
-        "saving_sek": s.saving_sek, "soc_after": s.soc_after,
-    } for s in result.slots])
-
-    df_daily = df_slots.groupby("date").agg(
-        charged=("energy_kwh", lambda x: x[df_slots.loc[x.index, "action"] == "charge"].sum()),
-        discharged=("energy_kwh", lambda x: x[df_slots.loc[x.index, "action"] == "discharge"].sum()),
-        cost=("cost_sek", "sum"),
-        value=("saving_sek", "sum"),
+    # Monthly battery profit chart
+    st.subheader("Batterivinst per månad")
+    df_daily["month"] = pd.to_datetime(df_daily["date"]).dt.to_period("M").astype(str)
+    df_monthly_profit = df_daily.groupby("month").agg(
+        profit=("profit", "sum"),
+        charged=("charged", "sum"),
+        discharged=("discharged", "sum"),
     ).reset_index()
-    df_daily["profit"] = df_daily["value"] - df_daily["cost"]
 
     fig2 = go.Figure()
     fig2.add_trace(go.Bar(
-        x=df_daily["date"], y=df_daily["profit"],
-        name="Daglig vinst",
-        marker_color=["#2ecc71" if p >= 0 else "#e74c3c" for p in df_daily["profit"]],
-        hovertemplate="%{x}<br>%{y:.2f} SEK<extra></extra>",
+        x=df_monthly_profit["month"], y=df_monthly_profit["profit"],
+        name="Månadsvinst",
+        marker_color=["#2ecc71" if p >= 0 else "#e74c3c" for p in df_monthly_profit["profit"]],
+        hovertemplate="%{x}<br>%{y:,.0f} SEK<extra></extra>",
     ))
+    avg_monthly_profit = per_year / 12
+    fig2.add_hline(y=avg_monthly_profit, line_dash="dash", line_color="#3498db",
+                   annotation_text=f"Snitt {avg_monthly_profit:,.0f} SEK/mån")
     fig2.update_layout(yaxis_title="SEK", height=350, margin=dict(l=0, r=0, t=30, b=0))
     st.plotly_chart(fig2, use_container_width=True)
+
+    with st.expander("Daglig uppdelning"):
+        fig_daily = go.Figure()
+        fig_daily.add_trace(go.Bar(
+            x=df_daily["date"], y=df_daily["profit"],
+            name="Daglig vinst",
+            marker_color=["#2ecc71" if p >= 0 else "#e74c3c" for p in df_daily["profit"]],
+            hovertemplate="%{x}<br>%{y:.2f} SEK<extra></extra>",
+        ))
+        fig_daily.update_layout(yaxis_title="SEK", height=300, margin=dict(l=0, r=0, t=30, b=0))
+        st.plotly_chart(fig_daily, use_container_width=True)
+
+    # Monthly electricity cost comparison
+    st.subheader("Elkostnad per månad — med och utan sol & batteri")
+
+    # Build monthly cost data from simulation slots
+    df_cost = pd.DataFrame([{
+        "date": s.date,
+        "month": s.date[:7],
+        "sek_per_kwh": s.sek_per_kwh,
+        "grid_fee_ore": s.grid_fee_ore,
+        "total_cost_ore": s.total_cost_ore,
+        "action": s.action,
+        "energy_kwh": s.energy_kwh,
+        "cost_sek": s.cost_sek,
+        "saving_sek": s.saving_sek,
+        "solar_kw": s.solar_kw,
+        "solar_charge_kwh": s.solar_charge_kwh,
+        "flex_consumed_kwh": s.flex_consumed_kwh,
+    } for s in result.slots])
+
+    # Estimate slot duration
+    slot_count_per_day = df_cost.groupby("date").size().median()
+    slot_duration = 24 / slot_count_per_day if slot_count_per_day > 0 else 1
+
+    monthly_cost = []
+    for month, grp in df_cost.groupby("month"):
+        num_days_m = grp["date"].nunique()
+
+        # Cost WITHOUT solar/battery: all consumption at full price (spot + grid)
+        # Use average total cost for each slot × estimated consumption
+        avg_total_ore = grp["total_cost_ore"].mean()
+
+        # Estimate household consumption per month from load profile
+        if config.seasonal_load_profile:
+            m_num = int(month.split("-")[1])
+            daily_kwh = sum(config.seasonal_load_profile.get(m_num, {}).values())
+        elif config.hourly_load_profile:
+            daily_kwh = sum(config.hourly_load_profile.values())
+        else:
+            daily_kwh = sum(config.total_load_kw(h) for h in range(24))
+        month_consumption_kwh = daily_kwh * num_days_m
+
+        # Without solar or battery: pay full price for everything
+        cost_without = month_consumption_kwh * avg_total_ore / 100
+
+        # Solar production this month
+        solar_produced = grp["solar_kw"].sum() * slot_duration
+        solar_to_battery = grp["solar_charge_kwh"].sum()
+        flex_consumed = grp["flex_consumed_kwh"].sum()
+        solar_self_consumed = solar_produced - solar_to_battery - flex_consumed
+        solar_self_consumed = max(0, min(solar_self_consumed, month_consumption_kwh))
+
+        # With solar only: reduce consumption by self-consumed solar
+        cost_with_solar = (month_consumption_kwh - solar_self_consumed) * avg_total_ore / 100
+
+        # With solar + battery: further reduce by battery arbitrage
+        battery_saving = grp["saving_sek"].sum() - grp["cost_sek"].sum()
+        cost_with_all = cost_with_solar - battery_saving
+
+        monthly_cost.append({
+            "month": month,
+            "Utan sol/batteri": round(cost_without),
+            "Med sol": round(cost_with_solar),
+            "Med sol + batteri": round(max(0, cost_with_all)),
+            "Besparing sol": round(cost_without - cost_with_solar),
+            "Besparing total": round(cost_without - max(0, cost_with_all)),
+        })
+
+    df_mc = pd.DataFrame(monthly_cost)
+
+    # Bar chart
+    fig_mc = go.Figure()
+    fig_mc.add_trace(go.Bar(
+        x=df_mc["month"], y=df_mc["Utan sol/batteri"],
+        name="Utan sol/batteri", marker_color="#e74c3c",
+        hovertemplate="%{x}<br>%{y:,.0f} SEK<extra></extra>",
+    ))
+    if solar_cfg:
+        fig_mc.add_trace(go.Bar(
+            x=df_mc["month"], y=df_mc["Med sol"],
+            name="Med sol", marker_color="#f39c12",
+            hovertemplate="%{x}<br>%{y:,.0f} SEK<extra></extra>",
+        ))
+    fig_mc.add_trace(go.Bar(
+        x=df_mc["month"], y=df_mc["Med sol + batteri"],
+        name="Med sol + batteri" if solar_cfg else "Med batteri",
+        marker_color="#2ecc71",
+        hovertemplate="%{x}<br>%{y:,.0f} SEK<extra></extra>",
+    ))
+    fig_mc.update_layout(
+        barmode="group", yaxis_title="SEK/månad", height=400,
+        margin=dict(l=0, r=0, t=30, b=0),
+        legend=dict(orientation="h", y=1.02),
+    )
+    st.plotly_chart(fig_mc, use_container_width=True)
+
+    # Summary metrics
+    avg_without = df_mc["Utan sol/batteri"].mean()
+    avg_with_solar = df_mc["Med sol"].mean()
+    avg_with_all = df_mc["Med sol + batteri"].mean()
+
+    cols_mc = st.columns(4)
+    cols_mc[0].metric("Snitt utan sol/batteri", f"{avg_without:,.0f} kr/mån")
+    if solar_cfg:
+        cols_mc[1].metric("Snitt med sol", f"{avg_with_solar:,.0f} kr/mån",
+                          delta=f"-{avg_without - avg_with_solar:,.0f} kr")
+    cols_mc[2].metric("Snitt med sol + batteri" if solar_cfg else "Med batteri",
+                      f"{avg_with_all:,.0f} kr/mån",
+                      delta=f"-{avg_without - avg_with_all:,.0f} kr")
+    cols_mc[3].metric("Total besparing/år",
+                      f"{(avg_without - avg_with_all) * 12:,.0f} kr/år")
+
+    with st.expander("Månadsdetaljer"):
+        st.dataframe(df_mc, use_container_width=True, hide_index=True)
 
     # SOC chart
     st.subheader("Batteristatus (SOC)")
