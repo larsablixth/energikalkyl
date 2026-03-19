@@ -347,6 +347,11 @@ if st.button("KÖR SIMULERING", type="primary", use_container_width=True):
         export_price_factor=export_factor, export_fee_ore=export_fee,
     )
 
+    # Set solar investment on config
+    if solar_config:
+        solar_config.purchase_price = sol_price
+        solar_config.installation_cost = sol_install
+
     tariff_tid = Tidstariff(peak=peak_rate, offpeak=offpeak_rate, energy_tax=energy_tax, fuse_amps=fuse_amps)
     tariff_enkel = FastTariff(flat_rate=flat_rate, energy_tax=energy_tax, fuse_amps=fuse_amps)
 
