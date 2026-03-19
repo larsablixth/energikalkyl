@@ -83,9 +83,11 @@ def hourly_production_factors(month: int) -> dict[int, float]:
         for q in [0.0, 0.25, 0.5, 0.75]:
             t = h + q
             if sunrise <= t <= sunset:
-                # Cosine curve: max at solar noon, zero at sunrise/sunset
+                # cos² curve: more realistic peak concentration than cos
+                # Real panels peak around noon, low output at dawn/dusk
                 angle = (t - solar_noon) / half_day * (math.pi / 2)
-                hour_sum += max(0, math.cos(angle))
+                cos_val = max(0, math.cos(angle))
+                hour_sum += cos_val ** 3  # cos³ for realistic peak concentration
         factors[h] = hour_sum / 4  # average of 4 quarter-hours
         total += factors[h]
 

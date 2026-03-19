@@ -252,7 +252,8 @@ with col_l1:
     if "scheduled_loads" not in st.session_state:
         st.session_state["scheduled_loads"] = [{"name": "Elbil", "power": 11.0, "start": 23, "end": 6}]
 
-    st.markdown("**Schemalagda laster**")
+    st.markdown("**Fasta laster** (körs alltid under dessa timmar)")
+    st.caption("T.ex. elbil (laddas på natten), golvvärme, etc.")
     for i, load in enumerate(st.session_state["scheduled_loads"]):
         c = st.columns([3, 2, 2, 2, 1])
         load["name"] = c[0].text_input("", value=load["name"], key=f"ln_{i}", label_visibility="collapsed")
@@ -275,7 +276,7 @@ with col_l2:
     _month_opts = list(range(1, 13))
 
     st.markdown("**Flexibla laster** (körs på solöverskott)")
-    st.caption("Effekt (kW) | Max daglig energi (kWh) | Aktiva månader")
+    st.caption("Körs från solöverskott under dagtid. T.ex. poolpump, varmvatten.")
     for i, fl in enumerate(st.session_state["flexible_loads"]):
         c = st.columns([3, 2, 2, 2, 2, 1])
         fl["name"] = c[0].text_input("", value=fl["name"], key=f"fn_{i}", label_visibility="collapsed")
