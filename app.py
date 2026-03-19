@@ -19,7 +19,7 @@ from tariff import (
 
 st.set_page_config(page_title="Energikalkyl", page_icon="⚡", layout="wide")
 st.title("Energikalkyl — El, Sol & Batteri")
-st.caption("Lönar sig ett hembatteri? Ladda dina data, konfigurera din anläggning, och få svaret.")
+st.caption("Hur påverkas din elkostnad av batteri och solceller? Ladda dina data, konfigurera din anläggning, och se resultatet.")
 
 # ================================================================
 # STEP 1: LOAD DATA
@@ -43,7 +43,7 @@ with col_prices:
         zone = st.selectbox("Elområde", ZONES, index=2,
                             format_func=lambda z: f"{z} — {ZONE_NAMES[z]}")
         col_d1, col_d2 = st.columns(2)
-        start_date = col_d1.date_input("Från", value=date.today() - timedelta(days=365))
+        start_date = col_d1.date_input("Från", value=date.today() - timedelta(days=3*365))
         end_date = col_d2.date_input("Till", value=date.today() - timedelta(days=1))
         if st.button("Hämta priser", type="primary"):
             with st.spinner("Hämtar..."):
@@ -271,14 +271,21 @@ with col_l2:
     if "flexible_loads" not in st.session_state:
         st.session_state["flexible_loads"] = [{"name": "Poolpump", "power": 3.0, "daily": 20.0, "sm": 5, "em": 9}]
 
-    st.markdown("**Flexibla laster (solöverskott)**")
+    _month_names = ["Jan", "Feb", "Mar", "Apr", "Maj", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dec"]
+    _month_opts = list(range(1, 13))
+
+    st.markdown("**Flexibla laster** (körs på solöverskott)")
+    st.caption("Effekt (kW) | Max daglig energi (kWh) | Aktiva månader")
     for i, fl in enumerate(st.session_state["flexible_loads"]):
         c = st.columns([3, 2, 2, 2, 2, 1])
         fl["name"] = c[0].text_input("", value=fl["name"], key=f"fn_{i}", label_visibility="collapsed")
         fl["power"] = c[1].number_input("kW", value=fl["power"], min_value=0.0, step=0.5, key=f"fp_{i}")
-        fl["daily"] = c[2].number_input("kWh/dag", value=fl["daily"], min_value=0.0, step=1.0, key=f"fd_{i}")
-        fl["sm"] = c[3].number_input("Från mån", value=fl["sm"], min_value=1, max_value=12, key=f"fs_{i}")
-        fl["em"] = c[4].number_input("Till mån", value=fl["em"], min_value=1, max_value=12, key=f"fe_{i}")
+        fl["daily"] = c[2].number_input("Max kWh per dag", value=fl["daily"], min_value=0.0, step=1.0, key=f"fd_{i}",
+                                       help=f"Max energi per dag. {fl['power']} kW × {fl['daily']/fl['power']:.0f}h = {fl['daily']:.0f} kWh" if fl["power"] > 0 else "")
+        fl["sm"] = c[3].selectbox("Aktiv från", _month_opts, index=fl["sm"]-1,
+                                   format_func=lambda m: _month_names[m-1], key=f"fs_{i}")
+        fl["em"] = c[4].selectbox("Aktiv till", _month_opts, index=fl["em"]-1,
+                                   format_func=lambda m: _month_names[m-1], key=f"fe_{i}")
         if c[5].button("X", key=f"fx_{i}"):
             st.session_state["flexible_loads"].pop(i)
             st.rerun()
@@ -410,7 +417,7 @@ if "result" in st.session_state:
         st.success(f"**{tc['best']}** ger bäst resultat — **{diff:,.0f} kr/år** mer än alternativet")
 
     # === THE ANSWER ===
-    st.subheader("Lönar det sig?")
+    st.subheader("Resultat — din elkostnad")
 
     bat_inv = config.purchase_price + config.installation_cost
     sol_inv = (solar_cfg.purchase_price + solar_cfg.installation_cost) if solar_cfg else 0
@@ -420,26 +427,27 @@ if "result" in st.session_state:
         payback = total_investment / per_year
         cycles_yr = result.num_cycles / (num_days / 365.25) if num_days > 0 else 0
         bat_lifetime = min(config.cycle_life / cycles_yr if cycles_yr > 0 else 15, 15)
-        total_profit_15yr = per_year * bat_lifetime - total_investment
+        net_over_lifetime = per_year * bat_lifetime - total_investment
 
         col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Vinst per år", f"{per_year:,.0f} kr")
+        col1.metric("Lägre elkostnad", f"{per_year:,.0f} kr/år")
         col2.metric("Återbetalningstid", f"{payback:.1f} år")
-        col3.metric("Vinst under livslängd", f"{total_profit_15yr:,.0f} kr")
-        col4.metric("ROI", f"{total_profit_15yr/total_investment*100:.0f}%")
+        col3.metric("Netto under livslängd", f"{net_over_lifetime:,.0f} kr",
+                     help="Minskad elkostnad minus investering över batteriets livslängd")
+        col4.metric("Investering", f"{total_investment:,.0f} kr")
 
         if payback < bat_lifetime:
-            st.success(f"**Ja, det lönar sig.** Investering {total_investment:,.0f} kr återbetald på {payback:.1f} år "
-                       f"(livslängd {bat_lifetime:.0f} år). Total vinst: {total_profit_15yr:,.0f} kr.")
+            st.success(f"**Investeringen betalar sig.** {total_investment:,.0f} kr återbetald på {payback:.1f} år "
+                       f"(livslängd {bat_lifetime:.0f} år). Netto: +{net_over_lifetime:,.0f} kr.")
         else:
             st.warning(f"**Osäkert.** Återbetalningstid {payback:.1f} år överstiger livslängden {bat_lifetime:.0f} år.")
     elif per_year > 0:
-        st.success(f"**Vinst: {per_year:,.0f} kr/år** (ingen investering angiven)")
+        st.success(f"**Lägre elkostnad: {per_year:,.0f} kr/år** (ingen investering angiven)")
     else:
-        st.error("Simuleringen visar ingen vinst med dessa inställningar.")
+        st.error("Simuleringen visar ingen skillnad med dessa inställningar.")
 
     # === MONTHLY CASHFLOW BREAKDOWN ===
-    st.subheader("Typiskt år — vad pengarna kommer ifrån")
+    st.subheader("Typiskt år — skillnad i elkostnad per månad")
 
     df_slots = pd.DataFrame([{
         "date": s.date, "month": s.date[:7], "action": s.action,
@@ -546,7 +554,7 @@ if "result" in st.session_state:
     fig_stack.add_hline(y=per_year/12, line_dash="dash", line_color="gray",
                          annotation_text=f"Snitt {per_year/12:,.0f} kr/mån")
     fig_stack.update_layout(
-        barmode="stack", yaxis_title="Besparing (kr/månad, typiskt år)", height=400,
+        barmode="stack", yaxis_title="Lägre elkostnad (kr/månad)", height=400,
         margin=dict(l=0, r=0, t=30, b=0), legend=dict(orientation="h", y=1.02),
     )
     st.plotly_chart(fig_stack, use_container_width=True)
@@ -559,10 +567,10 @@ if "result" in st.session_state:
     col1, col2, col3 = st.columns(3)
     col1.metric("Elkostnad utan sol/batteri", f"{avg_without:,.0f} kr/mån")
     col2.metric("Elkostnad med sol/batteri", f"{max(0, avg_with):,.0f} kr/mån")
-    col3.metric("Total besparing", f"{avg_saving:,.0f} kr/mån", delta=f"{avg_saving*12:,.0f} kr/år")
+    col3.metric("Skillnad", f"{avg_saving:,.0f} kr/mån", delta=f"{avg_saving*12:,.0f} kr/år")
 
     # Itemized yearly breakdown
-    st.markdown("**Var kommer pengarna ifrån?**")
+    st.markdown("**Vad minskar elkostnaden?**")
     breakdown_items = []
     if solar_cfg:
         breakdown_items.append(("Sol → eget hushåll", df_md["solar_self_saving"].sum(),
@@ -684,15 +692,14 @@ if "result" in st.session_state:
 
     # Find best by total profit (what matters is money in your pocket)
     best = df_opt.loc[df_opt["profit_life"].idxmax()]
-    st.success(f"**Mest lönsam: {best['label']}** — **{best['arb_yr']:,.0f} kr/år**, "
-               f"**{best['profit_life']:,.0f} kr total vinst** under livslängden, "
-               f"{best['payback']:.1f} års återbetalningstid")
+    st.success(f"**Bästa val: {best['label']}** — **{best['arb_yr']:,.0f} kr/år lägre elkostnad**, "
+               f"netto **{best['profit_life']:,.0f} kr** efter {best['payback']:.1f} års återbetalningstid")
 
     # Main chart: yearly income + total lifetime profit
     fig_opt = go.Figure()
     fig_opt.add_trace(go.Bar(
         x=df_opt["label"], y=df_opt["arb_yr"],
-        name="Vinst per år (kr)", marker_color="#2ecc71",
+        name="Lägre elkostnad (kr/år)", marker_color="#2ecc71",
         hovertemplate="%{x}<br><b>%{y:,.0f} kr/år</b><extra></extra>",
     ))
     fig_opt.update_layout(yaxis_title="SEK per år", height=350,
@@ -720,9 +727,9 @@ if "result" in st.session_state:
     # Detailed table — money first
     st.dataframe(pd.DataFrame([{
         "Batteri": r["label"],
-        "Vinst/år": f"{r['arb_yr']:,.0f} kr",
-        "Vinst/mån": f"{r['arb_yr']/12:,.0f} kr",
-        "Total vinst (livslängd)": f"{r['profit_life']:,.0f} kr",
+        "Lägre elkostnad/år": f"{r['arb_yr']:,.0f} kr",
+        "Lägre elkostnad/mån": f"{r['arb_yr']/12:,.0f} kr",
+        "Netto under livslängd": f"{r['profit_life']:,.0f} kr",
         "Investering": f"{r['invest']:,.0f} kr",
         "Payback": f"{r['payback']:.1f} år",
         "Kapacitet": f"{r['capacity']:.0f} kWh",
@@ -731,7 +738,7 @@ if "result" in st.session_state:
 
     # Marginal value: what does each step UP give you in extra kr/year?
     st.subheader("Vad ger varje uppgradering?")
-    st.caption("Extra kronor per år om du väljer nästa storlek")
+    st.caption("Extra minskning av elkostnaden per år om du väljer nästa storlek")
 
     marginal_data = []
     for i in range(1, len(opt_results)):
@@ -764,8 +771,8 @@ if "result" in st.session_state:
     st.dataframe(pd.DataFrame([{
         "Uppgradering": m["step"],
         "Extra kostnad": f"{m['extra_cost']:,.0f} kr",
-        "Extra vinst/år": f"{m['extra_arb']:,.0f} kr",
-        "Extra vinst (livslängd)": f"{m['extra_life']:,.0f} kr",
+        "Extra lägre elkostnad/år": f"{m['extra_arb']:,.0f} kr",
+        "Extra netto (livslängd)": f"{m['extra_life']:,.0f} kr",
         "Marginal payback": f"{m['payback']:.1f} år",
         "Värt det?": "Ja" if m["payback"] < 6 else "Tveksamt",
     } for m in marginal_data]), use_container_width=True, hide_index=True)
