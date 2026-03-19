@@ -302,37 +302,92 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
             # Effective cost is lower when solar surplus can charge for free
             slot_costs.append((i, total_ore, spot_ore, grid_ore, solar_surplus_kw))
 
-        # Smart charge/discharge scheduling:
-        # Calculate how many hours needed to fill battery based on available power per slot
+        # Smart multi-cycle charge/discharge scheduling:
+        # With day-ahead prices known at 13:00, we have perfect foresight.
+        # On volatile days (winter), multiple charge-discharge cycles per day
+        # can capture more of the price spread.
+        #
+        # Strategy: find profitable charge-discharge pairs where the spread
+        # covers the round-trip efficiency loss.
+
+        n_slots = len(slot_costs)
+        slot_cost_map = {idx: (total_ore, spot_ore, grid_ore) for idx, total_ore, spot_ore, grid_ore, _ in slot_costs}
+
+        # Sort all slots by price
         sorted_by_cost = sorted(slot_costs, key=lambda x: x[1])
 
-        # Determine charge slots: fill cheapest hours until battery can be fully charged
+        # Calculate break-even spread: need at least (1/efficiency - 1) margin
+        min_spread_factor = 1.0 / config.efficiency  # e.g. 1.075 for 93% efficiency
+
+        # Greedy multi-cycle: pair cheapest unused charge slot with most expensive
+        # unused discharge slot, as long as the spread is profitable
         charge_indices = set()
-        charge_energy_available = 0.0
-        energy_needed = config.usable_kwh / config.efficiency  # account for losses
-        for idx, total_ore, spot_ore, grid_ore, solar_surplus in sorted_by_cost:
-            if charge_energy_available >= energy_needed:
-                break
-            h = int(day_prices[idx]["hour"].split(":")[0])
-            month = int(day_prices[idx]["date"].split("-")[1])
-            avail_kw = config.available_charge_kw(h, month)
-            if avail_kw > 0.1:
-                charge_indices.add(idx)
-                charge_energy_available += avail_kw * slot_duration_h
-
-        # Determine discharge slots: most expensive hours until battery can be fully discharged
         discharge_indices = set()
-        discharge_energy_available = 0.0
-        energy_to_discharge = config.usable_kwh
-        for idx, total_ore, spot_ore, grid_ore, solar_surplus in reversed(sorted_by_cost):
-            if idx in charge_indices:
-                continue
-            if discharge_energy_available >= energy_to_discharge:
-                break
-            discharge_indices.add(idx)
-            discharge_energy_available += config.max_discharge_kw * slot_duration_h
 
-        # Only charge if price is below average, discharge if above
+        cheap_slots = list(sorted_by_cost)  # cheapest first
+        expensive_slots = list(reversed(sorted_by_cost))  # most expensive first
+
+        total_charge_possible = 0.0
+        total_discharge_possible = 0.0
+        max_cycles = 3  # limit to avoid unrealistic cycling
+
+        for cycle in range(max_cycles):
+            # Find next batch of cheap slots to fill battery
+            cycle_charge = set()
+            cycle_charge_energy = 0.0
+            energy_needed = config.usable_kwh / config.efficiency
+
+            for idx, total_ore, spot_ore, grid_ore, solar_surplus in cheap_slots:
+                if idx in charge_indices or idx in discharge_indices:
+                    continue
+                if cycle_charge_energy >= energy_needed:
+                    break
+                h = int(day_prices[idx]["hour"].split(":")[0])
+                month = int(day_prices[idx]["date"].split("-")[1])
+                avail_kw = config.available_charge_kw(h, month)
+                if avail_kw > 0.1:
+                    cycle_charge.add(idx)
+                    cycle_charge_energy += avail_kw * slot_duration_h
+
+            if not cycle_charge:
+                break
+
+            # Find matching expensive discharge slots
+            cycle_discharge = set()
+            cycle_discharge_energy = 0.0
+
+            for idx, total_ore, spot_ore, grid_ore, solar_surplus in expensive_slots:
+                if idx in charge_indices or idx in discharge_indices or idx in cycle_charge:
+                    continue
+                if cycle_discharge_energy >= config.usable_kwh:
+                    break
+                cycle_discharge.add(idx)
+                cycle_discharge_energy += config.max_discharge_kw * slot_duration_h
+
+            if not cycle_discharge:
+                break
+
+            # Check if this cycle is profitable
+            avg_charge_price = sum(slot_cost_map[i][0] for i in cycle_charge) / len(cycle_charge)
+            avg_discharge_price = sum(slot_cost_map[i][0] for i in cycle_discharge) / len(cycle_discharge)
+
+            if avg_discharge_price > avg_charge_price * min_spread_factor:
+                charge_indices.update(cycle_charge)
+                discharge_indices.update(cycle_discharge)
+            else:
+                break  # No more profitable cycles
+
+        # Fallback: if no profitable cycles found, use simple cheapest/expensive split
+        if not charge_indices:
+            for idx, total_ore, spot_ore, grid_ore, solar_surplus in sorted_by_cost[:n_slots // 4]:
+                h = int(day_prices[idx]["hour"].split(":")[0])
+                month = int(day_prices[idx]["date"].split("-")[1])
+                if config.available_charge_kw(h, month) > 0.1:
+                    charge_indices.add(idx)
+            for idx, total_ore, spot_ore, grid_ore, solar_surplus in sorted_by_cost[-(n_slots // 4):]:
+                if idx not in charge_indices:
+                    discharge_indices.add(idx)
+
         avg_total = sum(tc for _, tc, _, _, _ in slot_costs) / len(slot_costs) if slot_costs else 0
 
         # Track daily flexible load energy
