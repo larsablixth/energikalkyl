@@ -435,24 +435,9 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
             solar_surplus_kw = max(0, solar_kw - load_kw)
             soc_before = soc
 
-            # --- Step 0: Flexible loads absorb solar surplus first ---
-            flex_consumed_kw = 0.0
-            for fl in config.flexible_loads:
-                if not fl.is_available(month, h):
-                    continue
-                if fl.daily_kwh > 0 and flex_daily_used[fl.name] >= fl.daily_kwh:
-                    continue  # daily target met
-                if solar_surplus_kw - flex_consumed_kw > 0.1:
-                    absorbed = min(fl.power_kw, solar_surplus_kw - flex_consumed_kw)
-                    flex_consumed_kw += absorbed
-                    flex_daily_used[fl.name] += absorbed * slot_duration_h
-
-            solar_surplus_kw = max(0, solar_surplus_kw - flex_consumed_kw)
-
-            # --- Step 1: Charge from remaining solar surplus (it's free) ---
+            # --- Step 0: Charge battery from solar surplus first (most valuable use) ---
             solar_charge_kwh = 0.0
             if solar_surplus_kw > 0.001:
-                # Solar surplus charges battery (limited by battery charge rate and room)
                 solar_charge_power = min(solar_surplus_kw, config.max_charge_kw)
                 solar_energy = solar_charge_power * slot_duration_h
                 room = (config.capacity_kwh * config.max_soc) - soc
@@ -461,8 +446,21 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
                     soc += solar_energy
                     solar_charge_kwh = solar_energy
 
+            # --- Step 0b: Flexible loads absorb remaining solar surplus ---
+            remaining_after_battery = max(0, solar_surplus_kw - (solar_charge_kwh / slot_duration_h if slot_duration_h > 0 else 0))
+            flex_consumed_kw = 0.0
+            for fl in config.flexible_loads:
+                if not fl.is_available(month, h):
+                    continue
+                if fl.daily_kwh > 0 and flex_daily_used[fl.name] >= fl.daily_kwh:
+                    continue  # daily target met
+                if remaining_after_battery - flex_consumed_kw > 0.1:
+                    absorbed = min(fl.power_kw, remaining_after_battery - flex_consumed_kw)
+                    flex_consumed_kw += absorbed
+                    flex_daily_used[fl.name] += absorbed * slot_duration_h
+
             # Calculate remaining surplus after battery + flex → export to grid
-            remaining_surplus_kw = solar_surplus_kw - (solar_charge_kwh / slot_duration_h if slot_duration_h > 0 else 0)
+            remaining_surplus_kw = max(0, remaining_after_battery - flex_consumed_kw)
             grid_export_kwh = max(0, remaining_surplus_kw * slot_duration_h)
             export_revenue = 0.0
             if grid_export_kwh > 0.001:
