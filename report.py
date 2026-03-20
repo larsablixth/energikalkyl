@@ -263,9 +263,10 @@ def generate_report(
             ], widths=widths)
         pdf.ln(3)
         pdf.body_text(
-            "Konservativt: prissvängningarna förblir som idag. "
-            "Sannolikt: prissvängningarna ökar 50% under 10 år (mer vindkraft, elektrifiering). "
-            "Optimistiskt: prissvängningarna mer än fördubblas (kraftig utbyggnad av förnybart). "
+            "Konservativt: prissvängningarna ökar 50% under 10 år (måttlig utbyggnad av förnybart). "
+            "Sannolikt: prissvängningarna 2-3x under 10 år. Fortsatt utbyggnad av vind/sol, "
+            "fler elbilar, elektrifiering av industri. De flesta energianalytiker förväntar sig detta. "
+            "Hög volatilitet: prissvängningarna 4x (massiv förnybar utbyggnad, kärnkraft fasas ut). "
             "Investeringen är lönsam i samtliga scenarier."
         )
         pdf.ln(3)

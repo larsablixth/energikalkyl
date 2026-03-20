@@ -1681,9 +1681,9 @@ if "all_results" in st.session_state:
 
     # Three scenarios for the recommended battery
     scenarios = [
-        ("Konservativt", 1.0, "Prissvängningarna förblir som idag. Ingen ökning av förnybart utöver befintlig plan."),
-        ("Sannolikt", 1.5, "Prissvängningarna ökar 50% på 10 år. Mer vindkraft, fler elbilar, ökad elektrifiering."),
-        ("Optimistiskt", 2.5, "Prissvängningarna mer än fördubblas. Kraftig utbyggnad av sol/vind, kärnkraft fasas ut."),
+        ("Konservativt", 1.5, "Prissvängningarna ökar 50% på 10 år. Måttlig utbyggnad av förnybart."),
+        ("Sannolikt", 2.5, "Prissvängningarna 2-3x på 10 år. Fortsatt utbyggnad av vind/sol, fler elbilar, elektrifiering av industri. De flesta energianalytiker förväntar sig detta."),
+        ("Hög volatilitet", 4.0, "Prissvängningarna 4x. Massiv utbyggnad av förnybart, kärnkraft fasas ut, ökad europeisk sammankoppling."),
     ]
     vol_levels = [1.0, 1.5, 2.5]
 
@@ -1730,10 +1730,10 @@ if "all_results" in st.session_state:
                "Volatiliteten ökar linjärt till målnivå under de första 10 åren.")
 
     fig_15 = go.Figure()
-    scenario_colors = {"Konservativt": "#3498db", "Sannolikt": "#2ecc71", "Optimistiskt": "#e74c3c"}
+    scenario_colors = {"Konservativt": "#3498db", "Sannolikt": "#2ecc71", "Hög volatilitet": "#e74c3c"}
 
     # Also compute results at intermediate levels for smooth interpolation
-    all_vol_levels = [1.0, 1.2, 1.5, 2.0, 2.5]
+    all_vol_levels = [1.0, 1.5, 2.0, 2.5, 3.0, 4.0]
     vol_arb = {}
     with st.spinner("Beräknar 15-årskurvor..."):
         for vf in all_vol_levels:
