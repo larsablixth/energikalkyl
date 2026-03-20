@@ -1300,7 +1300,7 @@ if "all_results" in st.session_state:
             "Extra kostnad": f"{m['extra_cost']:,.0f} kr",
             "Extra nytta/år": f"{m['extra_arb']:,.0f} kr",
             "Marginal payback": f"{m['payback']:.1f} år",
-            "Värt det?": "Ja" if m["payback"] < 8 else ("Tveksamt" if m["payback"] < 15 else "Nej"),
+            "Värt det?": "Ja" if m["payback"] < 15 else "Nej",
         } for m in marginal_data]), use_container_width=True, hide_index=True)
 
     # === FINANCING PERSPECTIVE ===
