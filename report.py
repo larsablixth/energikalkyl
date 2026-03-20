@@ -344,4 +344,4 @@ def generate_report(
         "väderförhållanden, och ändringar i regelverk eller tariffer."
     ))
 
-    return pdf.output()
+    return bytes(pdf.output())
