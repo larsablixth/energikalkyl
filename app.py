@@ -69,6 +69,8 @@ with col_consumption:
                             "address": addr.get("address1", ""),
                             "city": addr.get("city", ""),
                             "postal_code": addr.get("postalCode", ""),
+                            "latitude": float(addr.get("latitude", 0) or 0),
+                            "longitude": float(addr.get("longitude", 0) or 0),
                         }
                         # Extended home data
                         try:
@@ -454,7 +456,10 @@ if use_heating_model:
     city_names = sorted(SWEDISH_CITIES.keys())
     # Auto-detect city from Tibber if available
     _city_default = city_names.index("Sigtuna") if "Sigtuna" in city_names else 0
-    _tibber_city = st.session_state.get("tibber_home", {}).get("city", "")
+    _th = st.session_state.get("tibber_home", {})
+    _tibber_city = _th.get("city", "")
+    _tibber_lat = _th.get("latitude", 0)
+    _tibber_lon = _th.get("longitude", 0)
     if _tibber_city:
         for i, c in enumerate(city_names):
             if c.lower() == _tibber_city.lower():
@@ -466,7 +471,12 @@ if use_heating_model:
         selected_city = st.selectbox("Stad / ort", city_names, index=_city_default,
                                       help="Välj den ort som är närmast dig. "
                                            "Hämtas automatiskt från Tibber om tillgänglig.")
-    city_lat, city_lon = SWEDISH_CITIES[selected_city]
+
+    # Use exact Tibber coordinates if available, otherwise city center
+    if _tibber_lat and _tibber_lon and selected_city.lower() == _tibber_city.lower():
+        city_lat, city_lon = _tibber_lat, _tibber_lon
+    else:
+        city_lat, city_lon = SWEDISH_CITIES[selected_city]
 
     # Find nearest SMHI station
     try:
@@ -476,7 +486,8 @@ if use_heating_model:
     station_id, station_name, station_dist = find_nearest_station(city_lat, city_lon, stations)
 
     with col_loc2:
-        st.caption(f"Närmaste SMHI-station: **{station_name}** ({station_dist:.0f} km)")
+        _loc_source = "exakta koordinater från Tibber" if (_tibber_lat and _tibber_lon and selected_city.lower() == _tibber_city.lower()) else "stadscentrum"
+        st.caption(f"Närmaste SMHI-station: **{station_name}** ({station_dist:.0f} km, baserat på {_loc_source})")
         # Allow manual override
         with st.expander("Välj annan station", expanded=False):
             station_list = sorted(stations.items(), key=lambda x: x[1][0])
@@ -564,7 +575,12 @@ if use_heating_model:
         # Base load scales with house area: ~0.4 kW for small, ~1.0 for large
         _base_default = round(max(0.3, min(1.2, 0.3 + house_area / 300)), 2)
         # DHW: ~4-8 kWh/day depending on household (proxy: house size)
-        _dhw_default = round(max(3.0, min(10.0, 3.0 + house_area / 50)), 1)
+        # DHW: ~2 kWh electricity/person/day via heat pump, or estimate from house area
+        _tibber_residents = st.session_state.get("tibber_home", {}).get("residents", 0)
+        if _tibber_residents > 0:
+            _dhw_default = round(max(3.0, min(12.0, _tibber_residents * 2.0)), 1)
+        else:
+            _dhw_default = round(max(3.0, min(10.0, 3.0 + house_area / 50)), 1)
 
         # Detailed settings in expander
         with st.expander("Detaljerade VP-inställningar", expanded=False):
