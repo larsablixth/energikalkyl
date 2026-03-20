@@ -1223,22 +1223,9 @@ if "all_results" in st.session_state:
                     f"sparar du **{avg_h:,.0f} kr/år** ({avg_h/12:,.0f} kr/mån)."
                 )
 
-    # === COMPARISON CHART: yearly savings (all data average) ===
-    st.subheader("Jämförelse alla batteristorlekar")
-    labels = [r["label"] for r in all_results]
-
-    fig_comp = go.Figure()
-    fig_comp.add_trace(go.Bar(
-        x=labels, y=[r["total_benefit_yr"] for r in all_results],
-        name="Lägre elkostnad (kr/år, snitt alla år)", marker_color="#2ecc71",
-        hovertemplate="%{x}<br><b>%{y:,.0f} kr/år</b><extra></extra>",
-    ))
-    fig_comp.update_layout(yaxis_title="SEK per år", height=350,
-                            margin=dict(l=0, r=0, t=30, b=0))
-    st.plotly_chart(fig_comp, use_container_width=True)
-
     # === COMPARISON: annualized cost vs annualized savings ===
-    st.subheader("Kostnad vs besparing per år")
+    labels = [r["label"] for r in all_results]
+    st.subheader("Jämförelse alla batteristorlekar")
     st.caption("Investeringen fördelad över batteriets livslängd jämförd med årlig besparing. Samma tidsskala.")
 
     fig_annual = go.Figure()
