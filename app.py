@@ -260,28 +260,48 @@ spread_data = []
 for day, group in df_plot.groupby("date"):
     hourly = group.groupby(group["datetime"].dt.hour)["ore_per_kwh"].mean()
     sorted_p = hourly.sort_values()
-    n = min(4, len(sorted_p))
-    cheap = sorted_p.iloc[:n].mean()
-    rest = sorted_p.iloc[n:].mean() if len(sorted_p) > n else 0
-    spread_data.append({"date": day, "cheap": round(cheap, 1), "rest": round(rest, 1),
-                        "spread": round(rest - cheap, 1)})
+    n_cheap = min(4, len(sorted_p))
+    cheap = sorted_p.iloc[:n_cheap].mean()
+    expensive = sorted_p.iloc[-n_cheap:].mean() if len(sorted_p) > n_cheap else cheap
+    rest = sorted_p.iloc[n_cheap:].mean() if len(sorted_p) > n_cheap else 0
+    day_min = sorted_p.iloc[0]
+    day_max = sorted_p.iloc[-1]
+    spread_data.append({"date": day,
+                        "cheap": round(cheap, 1), "expensive": round(expensive, 1),
+                        "rest": round(rest, 1), "spread": round(rest - cheap, 1),
+                        "min": round(day_min, 1), "max": round(day_max, 1),
+                        "range": round(day_max - day_min, 1)})
 df_spread = pd.DataFrame(spread_data)
 df_spread["datetime"] = pd.to_datetime(df_spread["date"])
 df_spread["month"] = pd.to_datetime(df_spread["date"]).dt.to_period("M").astype(str)
 
-with st.expander(f"Prisspridning i din data (snitt {df_spread['spread'].mean():.0f} öre/kWh)", expanded=False):
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Snitt billigaste 4h", f"{df_spread['cheap'].mean():.0f} öre/kWh")
-    col2.metric("Snitt övriga 20h", f"{df_spread['rest'].mean():.0f} öre/kWh")
-    col3.metric("Snitt spread", f"{df_spread['spread'].mean():.0f} öre/kWh")
+_median_range = df_spread["range"].median()
+_pct80_range = df_spread["range"].quantile(0.8)
+with st.expander(f"Prisspridning — lägsta till högsta: typiskt {_median_range:.0f} öre, bra dagar {_pct80_range:.0f} öre", expanded=False):
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Billigaste timmen", f"{df_spread['min'].mean():.0f} öre/kWh",
+                help="Genomsnittlig lägsta timpris per dag")
+    col2.metric("Dyraste timmen", f"{df_spread['max'].mean():.0f} öre/kWh",
+                help="Genomsnittlig högsta timpris per dag")
+    col3.metric("Typisk dagsskillnad", f"{_median_range:.0f} öre/kWh",
+                help="Median skillnad mellan billigaste och dyraste timmen")
+    col4.metric("Bra dagar (topp 20%)", f"{_pct80_range:.0f} öre/kWh",
+                help="Skillnad på de 20% mest lönsamma dagarna")
+    st.caption("Batteriet laddar under de billigaste 4 timmarna och laddar ur under de dyraste. "
+               "Ju större skillnad, desto mer tjänar batteriet.")
     fig_sp = go.Figure()
-    fig_sp.add_trace(go.Scatter(x=df_spread["datetime"], y=df_spread["spread"],
-                                 mode="lines", name="Daglig spread", line=dict(width=1, color="#f39c12")))
-    monthly_spread = df_spread.groupby("month")["spread"].mean().reset_index()
-    monthly_spread["datetime"] = pd.to_datetime(monthly_spread["month"])
-    fig_sp.add_trace(go.Scatter(x=monthly_spread["datetime"], y=monthly_spread["spread"],
-                                 mode="lines+markers", name="Månadsmedel", line=dict(width=3, color="#e74c3c")))
-    fig_sp.update_layout(yaxis_title="Spread (öre/kWh)", height=300, margin=dict(l=0, r=0, t=30, b=0),
+    fig_sp.add_trace(go.Scatter(x=df_spread["datetime"], y=df_spread["range"],
+                                 mode="lines", name="Daglig skillnad (max-min)",
+                                 line=dict(width=1, color="#f39c12")))
+    monthly_range = df_spread.groupby("month")["range"].median().reset_index()
+    monthly_range["datetime"] = pd.to_datetime(monthly_range["month"])
+    fig_sp.add_trace(go.Scatter(x=monthly_range["datetime"], y=monthly_range["range"],
+                                 mode="lines+markers", name="Månadsmedian",
+                                 line=dict(width=3, color="#e74c3c")))
+    fig_sp.add_hline(y=20, line_dash="dash", line_color="gray",
+                      annotation_text="Min spread för lönsamhet (~20 öre)")
+    fig_sp.update_layout(yaxis_title="Prisskillnad (öre/kWh)", height=300,
+                          margin=dict(l=0, r=0, t=30, b=0),
                           legend=dict(orientation="h", y=1.02))
     st.plotly_chart(fig_sp, use_container_width=True)
 
