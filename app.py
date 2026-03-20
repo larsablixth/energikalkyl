@@ -406,13 +406,17 @@ with col_l1:
 
 with col_l2:
     if "flexible_loads" not in st.session_state:
-        st.session_state["flexible_loads"] = [{"name": "Poolpump", "power": 3.0, "daily": 20.0, "sm": 5, "em": 9}]
+        st.session_state["flexible_loads"] = [
+            {"name": "Poolpump", "power": 3.0, "daily": 20.0, "sm": 5, "em": 9},
+            {"name": "Varmvatten", "power": 3.0, "daily": 8.0, "sm": 1, "em": 12},
+        ]
 
     _month_names = ["Jan", "Feb", "Mar", "Apr", "Maj", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dec"]
     _month_opts = list(range(1, 13))
 
     st.markdown("**Flexibla laster** (solöverskott)")
-    st.caption("Körs när solöverskott finns. T.ex. poolpump, varmvattenberedare.")
+    st.caption("Körs på solöverskott istället för att exportera till nät. "
+               "Varmvatten-element tar upp överskott när batteriet är fullt.")
     for i, fl in enumerate(st.session_state["flexible_loads"]):
         c = st.columns([3, 2, 2, 2, 2, 1])
         fl["name"] = c[0].text_input("", value=fl["name"], key=f"fn_{i}", label_visibility="collapsed")
