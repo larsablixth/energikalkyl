@@ -100,11 +100,20 @@ class BatteryConfig:
         return self.fuse_amps * self.voltage * self.phases / 1000.0
 
     def total_load_kw(self, hour: int, month: int = None, date: str = None) -> float:
-        """Total household load at a given hour (and optionally month/date)."""
+        """Total household load at a given hour (and optionally month/date).
+
+        daily_load_override provides the base house load (heating + DHW + appliances).
+        Scheduled loads (EV, etc.) are ALWAYS added on top.
+        """
         if self.daily_load_override is not None and date is not None:
             day_profile = self.daily_load_override.get(date)
             if day_profile is not None:
-                return day_profile.get(hour, self.base_load_kw)
+                load = day_profile.get(hour, self.base_load_kw)
+                # Always add scheduled loads on top of override
+                for s in self.scheduled_loads:
+                    if s.is_active(hour):
+                        load += s.power_kw
+                return load
         if self.seasonal_load_profile is not None and month is not None:
             return self.seasonal_load_profile.get(month, {}).get(hour, self.base_load_kw)
         if self.hourly_load_profile is not None:

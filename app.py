@@ -297,9 +297,9 @@ st.caption("Laster utöver uppvärmning. EV och pool hanteras separat från hush
 col_l1, col_l2 = st.columns(2)
 
 with col_l1:
-    if not (seasonal_load_profile or hourly_load_profile) and not use_heating_model:
+    if not (seasonal_load_profile or hourly_load_profile):
         base_load = st.number_input("Grundlast (kW)", value=1.5, min_value=0.0, step=0.5,
-                                    help="Hushållets ständiga förbrukning (kyl, frys, standby, etc.)")
+                                    help="Hushållets ständiga förbrukning. Ignoreras om uppvärmningsmodellen är aktiv.")
     else:
         base_load = 1.5  # overridden by profile or heating model
 
@@ -650,10 +650,6 @@ def _estimate_effekt_savings(result, eff_tariff, cfg, num_days):
             date_str = s.date
 
             load_kw = cfg.total_load_kw(h, month, date_str)
-            for sl in cfg.scheduled_loads:
-                if cfg.daily_load_override and date_str in cfg.daily_load_override:
-                    if sl.is_active(h):
-                        load_kw += sl.power_kw
 
             without_kw = load_kw
             factor = eff_tariff.kw_factor(date_str, s.hour)
@@ -715,6 +711,10 @@ if st.button("KÖR SIMULERING", type="primary", use_container_width=True):
             t.offpeak = offpeak_rate
         elif isinstance(t, FastTariff):
             t.flat_rate = flat_rate
+        elif isinstance(t, EffektTariff) and has_effekt:
+            t.effekt_rate = effekt_rate
+            t.energy_rate = effekt_energy
+            t.top_n_peaks = effekt_top_n
     # If operator has no tariffs defined, fall back to Vattenfall defaults
     if not all_tariffs:
         all_tariffs = [
@@ -737,7 +737,9 @@ if st.button("KÖR SIMULERING", type="primary", use_container_width=True):
                 capacity_kwh=cap, max_charge_kw=max_kw, max_discharge_kw=max_kw,
                 efficiency=efficiency, fuse_amps=fuse_amps, phases=phases,
                 base_load_kw=base_load,
-                scheduled_loads=scheduled_loads if not (hourly_load_profile or seasonal_load_profile or daily_load_override) else [],
+                # Scheduled loads: always pass with daily_load_override (house-only, needs EV on top)
+                # Skip when hourly/seasonal profile is loaded (those already include EV pattern)
+                scheduled_loads=scheduled_loads if (daily_load_override or not (hourly_load_profile or seasonal_load_profile)) else [],
                 hourly_load_profile=hourly_load_profile if not (seasonal_load_profile or daily_load_override) else None,
                 seasonal_load_profile=seasonal_load_profile if not daily_load_override else None,
                 daily_load_override=daily_load_override,
@@ -1286,12 +1288,6 @@ if "all_results" in st.session_state:
         h = int(s.hour.split(":")[0])
         month = int(s.date.split("-")[1])
         load_kw = config.total_load_kw(h, month, s.date)
-        # Add scheduled loads if not in daily_load_override
-        if config.daily_load_override and s.date in config.daily_load_override:
-            # daily_load_override = house only; add scheduled loads (EV)
-            for sl in config.scheduled_loads:
-                if sl.is_active(h):
-                    load_kw += sl.power_kw
         # "Without" cost: buy everything from grid at this hour's total price
         slots_per_day = len(result.slots) / num_days if num_days > 0 else 24
         slot_h = 24 / slots_per_day
