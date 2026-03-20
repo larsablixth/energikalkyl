@@ -567,11 +567,32 @@ if use_heating_model:
             house_area = st.number_input("Boyta (m²)", value=_area_default, min_value=30, max_value=500, step=10,
                                           help="Hämtas från Tibber om tillgänglig.")
 
-        # Derive h_loss from energy class + area
+        # Derive h_loss: calibrated data wins over energy class estimate
         kwh_m2 = _ENERGY_CLASSES[energy_class]
         bldg_energy = kwh_m2 * house_area
         heat_elec_est = max(0, bldg_energy - _DHW_ANNUAL - _VENT_ANNUAL)
-        h_loss_default = round(heat_elec_est * _COP_AVG / _DEGREE_HOURS, 3)
+        h_loss_from_class = round(heat_elec_est * _COP_AVG / _DEGREE_HOURS, 3)
+
+        # Check if manual calibration data exists (from "Kalibrera" section below)
+        # or if we can auto-calibrate from loaded consumption profile
+        h_loss_default = h_loss_from_class
+        _calibrated = False
+
+        # Auto-calibrate from consumption profile if available
+        if "seasonal_profile" in st.session_state and temps_data:
+            from heating import fit_heating_model
+            _cal_seasonal = st.session_state["seasonal_profile"]
+            _cal_daily = []
+            for month, hourly in _cal_seasonal.items():
+                days_in_month = [31,28,31,30,31,30,31,31,30,31,30,31][month-1]
+                daily_kwh = sum(hourly.values())
+                for d in range(1, days_in_month+1):
+                    _cal_daily.append({"date": f"2024-{month:02d}-{d:02d}", "consumption_kwh": daily_kwh})
+            _cal_cfg = HeatingConfig(h_loss=h_loss_from_class)
+            _fitted = fit_heating_model(_cal_daily, temps_data, _cal_cfg)
+            if abs(_fitted.h_loss - h_loss_from_class) > 0.005:
+                h_loss_default = round(_fitted.h_loss, 3)
+                _calibrated = True
 
         with col_house2:
             _heating_options = ["Bergvärme (mark/sjö)", "Luftvärmepump", "Fjärrvärme", "Direktel (element)"]
@@ -609,10 +630,15 @@ if use_heating_model:
         with st.expander("Detaljerade VP-inställningar", expanded=False):
             col_h1, col_h2, col_h3 = st.columns(3)
             with col_h1:
+                _hloss_help = (f"Kalibrerat {h_loss_default:.3f} kW/°C från din förbrukningsdata."
+                               if _calibrated else
+                               f"Uppskattat {h_loss_default:.3f} kW/°C från energiklass + yta. "
+                               f"Ladda förbrukningsdata eller fyll i Tibber Insikter för exakt kalibrering.")
                 h_loss = st.number_input("Värmeförlust (kW/°C)", value=h_loss_default,
                                           min_value=0.01, max_value=1.5, step=0.001, format="%.3f",
-                                          help=f"Uppskattat {h_loss_default:.3f} kW/°C från energiklass + yta. "
-                                               f"Kalibreras automatiskt om du har förbrukningsdata.")
+                                          help=_hloss_help)
+                if _calibrated:
+                    st.caption(f"Kalibrerat (energiklass gav {h_loss_from_class:.3f})")
                 hp_max = st.number_input("VP max värmeeffekt (kW)", value=_hp_max_default, min_value=1.0, step=0.5,
                                           help=f"Uppskattat {_hp_max_default} kW för {house_area} m². "
                                                f"Typiskt 4-8 kW för villa, 8-12 kW för större hus.")
@@ -719,23 +745,8 @@ if use_heating_model:
                     st.warning(f"Inte tillräckligt med väderdata för {cal_year} "
                                f"({len(year_temps)} dagar). Behöver minst 300.")
 
-        # Auto-calibrate if consumption profile loaded (fallback if no manual calibration)
-        if "seasonal_profile" in st.session_state and cal_heating == 0:
-            seasonal = st.session_state["seasonal_profile"]
-            consumption_daily = []
-            for month, hourly in seasonal.items():
-                days_in_month = [31,28,31,30,31,30,31,31,30,31,30,31][month-1]
-                daily_kwh = sum(hourly.values())
-                for d in range(1, days_in_month+1):
-                    date_str = f"2024-{month:02d}-{d:02d}"
-                    consumption_daily.append({"date": date_str, "consumption_kwh": daily_kwh})
-            fitted = fit_heating_model(consumption_daily, temps_data, heating_config)
-            if abs(fitted.h_loss - h_loss) > 0.005:
-                st.success(f"Modellen kalibrerad mot din förbrukningsdata. "
-                           f"Husets värmeförlust anpassad: **{fitted.h_loss:.3f} kW/°C** "
-                           f"(energiklass-uppskattning var {h_loss:.3f}). "
-                           f"Detta ger en mer realistisk simulering.")
-                heating_config = fitted
+        # Note: auto-calibration from consumption profile is done BEFORE the widget
+        # (see h_loss_default computation above) so it's already applied
 
         # Build daily_load_override: house load per hour per date
         daily_load_override = {}
