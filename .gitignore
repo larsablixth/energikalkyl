@@ -12,7 +12,10 @@ __pycache__/
 venv/
 
 # Data files (generated/downloaded)
-*.csv
-tibber_*.csv
-historik_*.csv
 priser.csv
+tibber_daglig.csv
+tibber_historik.csv
+
+# Keep these for deployment:
+# historik_SE3_3ar.csv
+# .weather_cache/arlanda_temp.csv

@@ -1,0 +1,8 @@
+__pycache__
+*.pyc
+.git
+.price_cache
+.fx_cache.json
+.tibber_token
+.entsoe_key
+*.xlsx

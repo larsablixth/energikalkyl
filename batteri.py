@@ -81,6 +81,7 @@ class BatteryConfig:
     scheduled_loads: list[LoadSchedule] = field(default_factory=list)
     hourly_load_profile: dict[int, float] | None = None  # actual kW per hour (0-23), overrides base+scheduled
     seasonal_load_profile: dict[int, dict[int, float]] | None = None  # month -> hour -> kW
+    daily_load_override: dict[str, dict[int, float]] | None = None  # date -> hour -> kW (temp-aware)
     flexible_loads: list[FlexibleLoad] = field(default_factory=list)
     min_soc: float = 0.05             # minimum state of charge (fraction)
     max_soc: float = 0.95             # maximum state of charge (fraction)
@@ -98,8 +99,12 @@ class BatteryConfig:
         """Max power from grid based on fuse size."""
         return self.fuse_amps * self.voltage * self.phases / 1000.0
 
-    def total_load_kw(self, hour: int, month: int = None) -> float:
-        """Total household load at a given hour (and optionally month)."""
+    def total_load_kw(self, hour: int, month: int = None, date: str = None) -> float:
+        """Total household load at a given hour (and optionally month/date)."""
+        if self.daily_load_override is not None and date is not None:
+            day_profile = self.daily_load_override.get(date)
+            if day_profile is not None:
+                return day_profile.get(hour, self.base_load_kw)
         if self.seasonal_load_profile is not None and month is not None:
             return self.seasonal_load_profile.get(month, {}).get(hour, self.base_load_kw)
         if self.hourly_load_profile is not None:
@@ -110,9 +115,9 @@ class BatteryConfig:
                 load += s.power_kw
         return load
 
-    def available_charge_kw(self, hour: int, month: int = None) -> float:
+    def available_charge_kw(self, hour: int, month: int = None, date: str = None) -> float:
         """Max charging power considering fuse headroom at a given hour."""
-        headroom = self.grid_max_kw - self.total_load_kw(hour, month)
+        headroom = self.grid_max_kw - self.total_load_kw(hour, month, date)
         return min(self.max_charge_kw, max(0.0, headroom))
 
     @property
@@ -297,7 +302,8 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
             solar_kw = _solar_kw(p["date"], p["hour"])
             h = int(p["hour"].split(":")[0])
             month = int(p["date"].split("-")[1])
-            load_kw = config.total_load_kw(h, month)
+            date_str = p["date"]
+            load_kw = config.total_load_kw(h, month, date_str)
             solar_surplus_kw = max(0, solar_kw - load_kw)
             # Effective cost is lower when solar surplus can charge for free
             slot_costs.append((i, total_ore, spot_ore, grid_ore, solar_surplus_kw))
@@ -353,7 +359,8 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
                     break
                 h = int(day_prices[idx]["hour"].split(":")[0])
                 month = int(day_prices[idx]["date"].split("-")[1])
-                avail_kw = config.available_charge_kw(h, month)
+                d_str = day_prices[idx]["date"]
+                avail_kw = config.available_charge_kw(h, month, d_str)
                 if avail_kw > 0.1:
                     cycle_charge.add(idx)
                     cycle_charge_energy += avail_kw * slot_duration_h
@@ -395,7 +402,8 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
             for idx, total_ore, spot_ore, grid_ore, solar_surplus in sorted_by_cost[:n_slots // 4]:
                 h = int(day_prices[idx]["hour"].split(":")[0])
                 month = int(day_prices[idx]["date"].split("-")[1])
-                if config.available_charge_kw(h, month) > 0.1:
+                d_str = day_prices[idx]["date"]
+                if config.available_charge_kw(h, month, d_str) > 0.1:
                     charge_indices.add(idx)
             for idx, total_ore, spot_ore, grid_ore, solar_surplus in sorted_by_cost[-(n_slots // 4):]:
                 if idx not in charge_indices:
@@ -412,8 +420,9 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
             total_ore = spot_ore + grid_ore
             h = int(row["hour"].split(":")[0])
             month = int(row["date"].split("-")[1])
-            solar_kw = _solar_kw(row["date"], row["hour"])
-            load_kw = config.total_load_kw(h, month)
+            date_str = row["date"]
+            solar_kw = _solar_kw(date_str, row["hour"])
+            load_kw = config.total_load_kw(h, month, date_str)
             solar_surplus_kw = max(0, solar_kw - load_kw)
             soc_before = soc
 
@@ -454,7 +463,7 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
 
             # --- Step 2: Grid charge during cheap slots (if room left) ---
             if i in charge_indices and total_ore < avg_total:
-                grid_charge_kw = config.available_charge_kw(h, month)
+                grid_charge_kw = config.available_charge_kw(h, month, date_str)
                 # Reduce grid charge by any solar already charging
                 if solar_charge_kwh > 0:
                     grid_charge_kw = max(0, grid_charge_kw - solar_charge_kwh / slot_duration_h)

@@ -146,6 +146,215 @@ class FastTariff:
         return self.flat_rate
 
 
+@dataclass
+class EffektTariff:
+    """Power demand tariff (effekttariff) — charges based on peak kW demand.
+
+    Monthly cost = fixed_fee + energy_rate × kWh + effekt_rate × peak_kW
+    Peak kW = average of top N hourly peaks from different days during peak hours.
+    """
+    # Energy component (öre/kWh, inkl. moms) — much lower than tidstariff
+    energy_rate: float = 7.0
+    # Energiskatt (öre/kWh, inkl. moms)
+    energy_tax: float = 54.88
+    # Effektavgift (kr/kW/månad, inkl. moms)
+    effekt_rate: float = 81.25
+    # How many top peaks to average
+    top_n_peaks: int = 3
+    # Night discount (22-06): kW counted at this fraction
+    night_discount: float = 0.5
+    # Peak hours restriction (None = all hours like Ellevio)
+    peak_months: tuple | None = None  # e.g. (1,2,3,11,12) for winter only
+    peak_weekday_only: bool = False
+    peak_hour_start: int = 0
+    peak_hour_end: int = 24
+    # Fixed fee
+    fuse_amps: float = 25.0
+    monthly_fee: float = 395.0  # Ellevio default for 16-25A
+    name: str = "Effekttariff"
+
+    def total_cost_ore(self, d: str, hour: str) -> float:
+        """Energy cost component in öre/kWh (excludes the demand charge)."""
+        return self.energy_rate + self.energy_tax
+
+    def transfer_fee_ore(self, d: str, hour: str) -> float:
+        return self.energy_rate
+
+    def is_peak_hour(self, d: str, hour: str) -> bool:
+        """Check if this hour counts toward peak demand measurement."""
+        dt = date.fromisoformat(d)
+        h = int(hour.split(":")[0])
+        if self.peak_months and dt.month not in self.peak_months:
+            return False
+        if self.peak_weekday_only and dt.weekday() >= 5:
+            return False
+        if self.peak_weekday_only and dt in _swedish_holidays(dt.year):
+            return False
+        if not (self.peak_hour_start <= h < self.peak_hour_end):
+            return False
+        return True
+
+    def kw_factor(self, d: str, hour: str) -> float:
+        """How much a kW in this hour counts toward peak (1.0 or night_discount)."""
+        h = int(hour.split(":")[0])
+        if 22 <= h or h < 6:
+            return self.night_discount
+        return 1.0
+
+    def monthly_demand_cost(self, peak_kw: float) -> float:
+        """Monthly effektavgift given the measured peak kW."""
+        return self.effekt_rate * peak_kw
+
+
+# === Grid operator presets ===
+
+GRID_OPERATORS = {
+    "Vattenfall Eldistribution": {
+        "tariffs": ["Tidstariff", "Enkeltariff"],
+        "fuse_fees": {16: 5775, 20: 8085, 25: 10125, 35: 13890, 50: 19945, 63: 26875},
+        "tidstariff": {"peak": 76.5, "offpeak": 30.5},
+        "enkeltariff": {"flat_rate": 44.5},
+        "effekttariff": None,  # not yet for private ≤63A
+    },
+    "Ellevio": {
+        "tariffs": ["Effekttariff"],
+        "fuse_fees": {16: 4740, 25: 4740, 35: 11880, 50: 18180, 63: 26100},
+        "effekttariff": {
+            "energy_rate": 7.0,
+            "effekt_rate": 81.25,
+            "top_n_peaks": 3,
+            "night_discount": 0.5,
+            "peak_months": None,  # all year
+            "peak_weekday_only": False,
+            "peak_hour_start": 0,
+            "peak_hour_end": 24,
+        },
+    },
+    "E.ON Energidistribution": {
+        "tariffs": ["Tidstariff", "Enkeltariff"],
+        "fuse_fees": {16: 4500, 20: 5700, 25: 7500, 35: 10200, 50: 15600, 63: 21000},
+        "tidstariff": {"peak": 67.0, "offpeak": 22.5},
+        "enkeltariff": {"flat_rate": 39.0},
+        "effekttariff": None,
+    },
+    "Göteborg Energi": {
+        "tariffs": ["Effekttariff", "Enkeltariff"],
+        "fuse_fees": {16: 3900, 20: 5100, 25: 6600, 35: 9000, 50: 13200, 63: 18000},
+        "effekttariff": {
+            "energy_rate": 6.5,
+            "effekt_rate": 135.0,
+            "top_n_peaks": 3,
+            "night_discount": 1.0,  # no night discount
+            "peak_months": (11, 12, 1, 2, 3),
+            "peak_weekday_only": True,
+            "peak_hour_start": 7,
+            "peak_hour_end": 20,
+        },
+        "enkeltariff": {"flat_rate": 23.0},
+    },
+    "Mälarenergi": {
+        "tariffs": ["Effekttariff"],
+        "fuse_fees": {16: 3600, 20: 4800, 25: 6000, 35: 8400, 50: 12000, 63: 16800},
+        "effekttariff": {
+            "energy_rate": 21.5,  # 17.2 × 1.25
+            "effekt_rate": 59.25,  # 47.4 × 1.25
+            "top_n_peaks": 1,  # single highest
+            "night_discount": 1.0,
+            "peak_months": None,
+            "peak_weekday_only": True,
+            "peak_hour_start": 7,
+            "peak_hour_end": 19,
+        },
+    },
+    "Jämtkraft (Jämtland)": {
+        "tariffs": ["Enkeltariff"],
+        "fuse_fees": {16: 5700, 20: 9340, 25: 11880, 35: 16940, 50: 24290, 63: 31380},
+        "enkeltariff": {"flat_rate": 7.5},
+        "effekttariff": None,
+    },
+    "SEOM (Sollentuna)": {
+        "tariffs": ["Effekttariff"],
+        # Flat grundavgift — 16-25A same tier, then steps up
+        "fuse_fees": {16: 1780, 20: 1780, 25: 1780, 35: 3175, 50: 4475, 63: 5445},
+        "effekttariff": {
+            "energy_rate": 5.0,   # 5 öre/kWh inkl. moms
+            "effekt_rate": 145.0,  # höglast Nov-Mar (72.5 låglast Apr-Okt)
+            "top_n_peaks": 3,
+            "night_discount": 1.0,  # no night discount — only weekday 07-19
+            "peak_months": (11, 12, 1, 2, 3),
+            "peak_weekday_only": True,
+            "peak_hour_start": 7,
+            "peak_hour_end": 19,
+        },
+    },
+    "Anpassad": {
+        "tariffs": ["Tidstariff", "Enkeltariff", "Effekttariff"],
+        "fuse_fees": FUSE_YEARLY_FEE,
+        "tidstariff": {"peak": 76.5, "offpeak": 30.5},
+        "enkeltariff": {"flat_rate": 44.5},
+        "effekttariff": {
+            "energy_rate": 7.0,
+            "effekt_rate": 81.25,
+            "top_n_peaks": 3,
+            "night_discount": 0.5,
+            "peak_months": None,
+            "peak_weekday_only": False,
+            "peak_hour_start": 0,
+            "peak_hour_end": 24,
+        },
+    },
+}
+
+
+def get_operator_fuse_fees(operator: str) -> dict[float, float]:
+    """Get fuse fees for a grid operator."""
+    op = GRID_OPERATORS.get(operator)
+    if op:
+        return op.get("fuse_fees", FUSE_YEARLY_FEE)
+    return FUSE_YEARLY_FEE
+
+
+def create_tariffs_for_operator(operator: str, fuse_amps: float = 25.0,
+                                 energy_tax: float = 54.88) -> list:
+    """Create tariff objects for a grid operator."""
+    op = GRID_OPERATORS.get(operator, GRID_OPERATORS["Anpassad"])
+    tariffs = []
+    fees = op.get("fuse_fees", FUSE_YEARLY_FEE)
+    monthly_fee = fees.get(fuse_amps, 0) / 12
+
+    if "Tidstariff" in op["tariffs"] and "tidstariff" in op:
+        t = op["tidstariff"]
+        tariffs.append(Tidstariff(
+            peak=t["peak"], offpeak=t["offpeak"], energy_tax=energy_tax,
+            fuse_amps=fuse_amps, monthly_fee=monthly_fee,
+            name=f"{operator} Tidstariff",
+        ))
+
+    if "Enkeltariff" in op["tariffs"] and "enkeltariff" in op:
+        t = op["enkeltariff"]
+        tariffs.append(FastTariff(
+            flat_rate=t["flat_rate"], energy_tax=energy_tax,
+            fuse_amps=fuse_amps, monthly_fee=monthly_fee,
+            name=f"{operator} Enkeltariff",
+        ))
+
+    if "Effekttariff" in op["tariffs"] and op.get("effekttariff"):
+        t = op["effekttariff"]
+        tariffs.append(EffektTariff(
+            energy_rate=t["energy_rate"], energy_tax=energy_tax,
+            effekt_rate=t["effekt_rate"], top_n_peaks=t["top_n_peaks"],
+            night_discount=t["night_discount"],
+            peak_months=t.get("peak_months"),
+            peak_weekday_only=t.get("peak_weekday_only", False),
+            peak_hour_start=t.get("peak_hour_start", 0),
+            peak_hour_end=t.get("peak_hour_end", 24),
+            fuse_amps=fuse_amps, monthly_fee=monthly_fee,
+            name=f"{operator} Effekttariff",
+        ))
+
+    return tariffs
+
+
 def print_tariff_info(tariff):
     """Print tariff details."""
     print(f"\n  Nätavgiftsmodell:  {tariff.name}")

@@ -1,0 +1,11 @@
+services:
+  energikalkyl:
+    build: .
+    ports:
+      - "8501:8501"
+    volumes:
+      # Mount API tokens (optional — needed for Tibber/ENTSO-E features)
+      - ./.tibber_token:/app/.tibber_token:ro
+      - ./.entsoe_key:/app/.entsoe_key:ro
+      # Persist price cache between runs
+      - ./.price_cache:/app/.price_cache
