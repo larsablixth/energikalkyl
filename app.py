@@ -900,7 +900,7 @@ if "all_results" in st.session_state:
     )
     st.download_button(
         "Ladda ner PDF-rapport (bankunderlag)",
-        data=pdf_bytes,
+        data=bytes(pdf_bytes),
         file_name=f"energikalkyl_{date.today().isoformat()}.pdf",
         mime="application/pdf",
     )
