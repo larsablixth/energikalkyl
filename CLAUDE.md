@@ -63,7 +63,8 @@ The app follows a 6-step flow:
 - Multi-cycle: up to 3 charge/discharge cycles per day when spread justifies it
 - Minimum 20 öre/kWh absolute spread required to cycle (avoid wear on low-spread days)
 - Solar-aware: estimates expected daily solar surplus, reduces grid charging to leave room for free solar
-- Priority chain: household load → flex loads (pool) → battery charging → grid export
+- Priority chain: household load → battery charging → flex loads (pool/varmvatten) → grid export
+- IMPORTANT: battery MUST charge before flex loads — flex loads steal solar otherwise (cost 5,000 kr/yr)
 - Charging power limited by fuse headroom (fuse capacity − household load at that hour)
 - `daily_load_override`: when set, provides date+hour specific load (from heating model), overriding seasonal/hourly profiles
 - All tariff types simulated automatically — best picked per battery size
@@ -119,13 +120,17 @@ The app follows a 6-step flow:
 - **All tariffs tested**: per battery size, across operator's available tariff types
 - **Cashflow is "money in/out"**, not "profit" — language matters for user understanding
 - **Monthly view** preferred over daily (bills are monthly)
-- **Mortgage perspective**: at 3% over 50 years, even 2×32 kWh is cash-flow positive from day 1
+- **Mortgage perspective**: financing section compares over battery LIFETIME, not loan term (50yr mortgage outlives 15yr battery)
 - **Battery alone is profitable**: 32 kWh without solar saves ~4,800 kr/yr on Tidstariff arbitrage alone
 - **Solar self-consumption value** only counted when solar is part of investment
 - **The battery doesn't save kWh** — it shifts WHEN you buy (cheap night → expensive peak)
-- **EV is tidsstyrd last** (car at work during day), pool is flexibel last (solar surplus)
-- **Tibber fee**: 49 kr/mån subscription, 0 kr/kWh markup — included in "without" cost baseline
-- **Temperature-aware load model**: hour-by-hour heating demand from actual weather → realistic self-consumption decisions
+- **EV is tidsstyrd last** (car at work during day), pool + varmvatten are flexibla laster (solar surplus)
+- **Zero-export strategy**: varmvatten element (3 kW, no daily cap) absorbs surplus after battery. Near-zero grid export. No need for export-capable inverter or microproducer registration.
+- **Tibber auto-fill**: one click fetches address, city, grid operator, fuse size, house area, residents, heating type, price area — all auto-configured
+- **Tibber Insights calibration**: manual input of annual breakdown (heating/EV/active/always-on) for per-house h_loss fitting
+- **Calibrated h_loss overrides energy class**: if consumption data is loaded, calibration runs BEFORE widget renders
+- **Three future scenarios**: Konservativt (1.5x), Sannolikt (2.5x), Hög volatilitet (4.0x) — based on analyst consensus
+- **PDF bank report**: includes methodology, scenarios, battery comparison, financing analysis
 
 ## API keys (not in repo)
 - `.entsoe_key` — ENTSO-E transparency platform token
@@ -146,12 +151,20 @@ The app follows a 6-step flow:
 - LiFePO4, 8000 cycles, Seplos 300A BMS
 - Supports parallel connection (up to 16 units)
 
+## Lessons learned (bugs found and fixed)
+- **Battery must charge before flex loads** — flex loads stole 5,000 kr/yr from battery when given priority
+- **Calibrated h_loss must be computed before widget renders** — Streamlit widgets lock their default on first render
+- **EV scheduled_loads must be passed with daily_load_override** — total_load_kw now adds them automatically
+- **Financing over battery lifetime, not loan term** — 50yr mortgage makes anything look positive, but battery dies at 15yr
+- **Test the actual integration path** — writing PDF to file works, Streamlit download_button needs bytes not bytearray
+
 ## Known issues / future work
 - Solar model is simplified (monthly averages, no weather variation)
 - No degradation modeling for battery capacity over time
 - Tibber hourly data limited to ~30 days via API, monthly goes back ~12 months
 - Pool heat pump modeled as constant 3 kW but real heat pumps vary with temperature
-- EV daily consumption assumed constant but varies seasonally
+- EV modeled as 11 kW for full scheduled window — actual usage is ~23 kWh/day (2 hours). Conservative.
 - Effekttariff savings estimation is approximate (compares peak with/without, doesn't model real-time peak shaving strategy)
+- Grid operator data is manually maintained — rates may change
 - Grid operator data is manually maintained — rates may change
 - **Future project**: real-time battery controller (separate repo) that talks to Tibber API, BMS, EV charger (OCPP/Modbus) for live optimization + grid flexibility rewards
