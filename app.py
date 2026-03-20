@@ -1292,42 +1292,6 @@ if "all_results" in st.session_state:
     )
     st.plotly_chart(fig_life, use_container_width=True)
 
-    # === MARGINAL VALUE ===
-    if len(all_results) > 1:
-        st.subheader("Vad ger varje uppgradering?")
-        st.caption("Extra nytta per år om du väljer nästa storlek")
-
-        marginal_data = []
-        for i in range(1, len(all_results)):
-            prev, curr = all_results[i-1], all_results[i]
-            extra_cost = curr["bat_cost"] - prev["bat_cost"]
-            extra_arb = curr["total_benefit_yr"] - prev["total_benefit_yr"]
-            marginal_payback = extra_cost / extra_arb if extra_arb > 0 else 999
-            marginal_data.append({
-                "step": f"{prev['label']} → {curr['label']}",
-                "extra_cost": extra_cost, "extra_arb": extra_arb,
-                "payback": marginal_payback,
-            })
-
-        fig_marginal = go.Figure()
-        fig_marginal.add_trace(go.Bar(
-            x=[m["step"] for m in marginal_data],
-            y=[m["extra_arb"] for m in marginal_data],
-            marker_color=["#2ecc71" if m["extra_arb"] > 0 else "#e74c3c" for m in marginal_data],
-            hovertemplate="%{x}<br>+%{y:,.0f} kr/år<extra></extra>",
-        ))
-        fig_marginal.update_layout(yaxis_title="Extra SEK/år", height=300,
-                                    margin=dict(l=0, r=0, t=30, b=0))
-        st.plotly_chart(fig_marginal, use_container_width=True)
-
-        st.dataframe(pd.DataFrame([{
-            "Uppgradering": m["step"],
-            "Extra kostnad": f"{m['extra_cost']:,.0f} kr",
-            "Extra nytta/år": f"{m['extra_arb']:,.0f} kr",
-            "Marginal payback": f"{m['payback']:.1f} år",
-            "Värt det?": "Ja" if m["payback"] < 15 else "Nej",
-        } for m in marginal_data]), use_container_width=True, hide_index=True)
-
     # === FINANCING PERSPECTIVE ===
     st.divider()
     st.subheader("Finansiering — netto per månad")
