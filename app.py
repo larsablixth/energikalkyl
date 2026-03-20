@@ -1495,13 +1495,20 @@ if "all_results" in st.session_state:
             best_fuse = max(fuse_comparison, key=lambda fc: fc["net_yr"])
             if not best_fuse["current"]:
                 extra = best_fuse["net_yr"] - fuse_comparison[0]["net_yr"]
-                st.success(f"**Uppgradera till {best_fuse['fuse']:.0f}A** — "
-                           f"ger {extra:+,.0f} kr/år netto efter abonnemangshöjning "
-                           f"({best_fuse.get('extra_fee_yr', 0):+,.0f} kr/år avgift, "
-                           f"{best_fuse.get('extra_benefit_yr', 0):+,.0f} kr/år extra besparing)")
+                st.success(f"**{best_fuse['fuse']:.0f}A ger bäst netto** — "
+                           f"{extra:+,.0f} kr/år mer än {fuse_amps:.0f}A "
+                           f"(extra avgift {best_fuse.get('extra_fee_yr', 0):+,.0f} kr/år, "
+                           f"extra besparing {best_fuse.get('extra_benefit_yr', 0):+,.0f} kr/år)")
             else:
-                st.info(f"Nuvarande {fuse_amps:.0f}A är optimal — "
-                        f"större säkring ger inte tillräckligt extra besparing.")
+                # Find closest upgrade and show what it costs vs gives
+                upgrades = [fc for fc in fuse_comparison if not fc["current"]]
+                if upgrades:
+                    next_up = upgrades[0]
+                    st.info(f"**{fuse_amps:.0f}A ger bäst netto för batteriet.** "
+                            f"Uppgradering till {next_up['fuse']:.0f}A kostar "
+                            f"{next_up.get('extra_fee_yr', 0):,.0f} kr/år mer men ger bara "
+                            f"{next_up.get('extra_benefit_yr', 0):,.0f} kr/år extra besparing. "
+                            f"Kan ändå vara värt det för marginal och framtida behov.")
 
     # ================================================================
     # STEP 5: DEEP-DIVE — detail view for selected battery
