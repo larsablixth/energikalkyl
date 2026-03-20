@@ -25,6 +25,7 @@ from weather import (
     load_temperatures, get_stations, find_nearest_station,
     fetch_station_data, SWEDISH_CITIES,
 )
+from report import generate_report
 
 st.set_page_config(page_title="Energikalkyl", page_icon="⚡", layout="wide")
 st.title("Energikalkyl — El, Sol & Batteri")
@@ -847,6 +848,62 @@ if "all_results" in st.session_state:
 
     # Tariff recommendation (from best size)
     st.info(f"Bästa tariff: **{best['best_tariff']}**")
+
+    # === PDF REPORT ===
+    # Calculate financing for report
+    _report_loan_cost = 0
+    _report_net = best["total_benefit_yr"] / 12
+    if loan_rate > 0 and loan_years > 0:
+        _mr = loan_rate / 100 / 12
+        _np = loan_years * 12
+        _report_loan_cost = best["total_invest"] * _mr / (1 - (1 + _mr) ** -_np) if _mr > 0 else best["total_invest"] / _np
+        _report_net = best["total_benefit_yr"] / 12 - _report_loan_cost
+
+    # Gather scenario data if available (computed below, but we can peek at price_rows)
+    _normal_yrs = []
+    _high_yrs = []
+    _normal_save = 0
+    _high_save = 0
+
+    _pdf_address = f"{selected_city}" if use_heating_model else ""
+    _pdf_weather = station_name if use_heating_model and temps_data else ""
+
+    pdf_bytes = generate_report(
+        address=_pdf_address,
+        grid_operator=grid_operator,
+        fuse_amps=fuse_amps,
+        solar_kwp=solar_kwp if use_solar else 0,
+        battery_label=best["label"],
+        battery_capacity=best["capacity"],
+        battery_price=best["bat_cost"],
+        installation_cost=bat_install,
+        solar_price=sol_price if use_solar else 0,
+        solar_install=sol_install if use_solar else 0,
+        total_investment=best["total_invest"],
+        savings_per_year=best["total_benefit_yr"],
+        savings_per_month=best["total_benefit_yr"] / 12,
+        payback_years=best["payback"],
+        lifetime_years=best["lifetime"],
+        lifetime_profit=best["profit_life"],
+        cycles_per_year=best["cycles_yr"],
+        best_tariff=best["best_tariff"],
+        loan_rate=loan_rate,
+        loan_years=loan_years,
+        monthly_loan_cost=_report_loan_cost,
+        monthly_net=_report_net,
+        price_data_range=f"{df_prices['date'].min()} — {df_prices['date'].max()}" if df_prices is not None else "",
+        price_data_days=df_prices["date"].nunique() if df_prices is not None else 0,
+        weather_station=_pdf_weather,
+        all_results=[{"label": r["label"], "total_benefit_yr": r["total_benefit_yr"],
+                       "total_invest": r["total_invest"], "payback": r["payback"],
+                       "profit_life": r["profit_life"]} for r in all_results],
+    )
+    st.download_button(
+        "Ladda ner PDF-rapport (bankunderlag)",
+        data=pdf_bytes,
+        file_name=f"energikalkyl_{date.today().isoformat()}.pdf",
+        mime="application/pdf",
+    )
 
     # === SCENARIO SPLIT: Normal years vs High-price period ===
     # Split simulation results by year to show realistic range
