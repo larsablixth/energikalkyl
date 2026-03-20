@@ -408,7 +408,7 @@ with col_l2:
     if "flexible_loads" not in st.session_state:
         st.session_state["flexible_loads"] = [
             {"name": "Poolpump", "power": 3.0, "daily": 20.0, "sm": 5, "em": 9},
-            {"name": "Varmvatten", "power": 3.0, "daily": 8.0, "sm": 1, "em": 12},
+            {"name": "Varmvatten", "power": 3.0, "daily": 99.0, "sm": 1, "em": 12},
         ]
 
     _month_names = ["Jan", "Feb", "Mar", "Apr", "Maj", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dec"]
