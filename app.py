@@ -1259,9 +1259,10 @@ if "all_results" in st.session_state:
     ))
     fig_life.add_trace(go.Scatter(
         x=labels, y=[-r["total_invest"] for r in all_results],
-        mode="markers", name="Investering (negativt)",
+        mode="markers", name="Investering",
         marker=dict(size=12, color="#e74c3c", symbol="diamond"),
-        hovertemplate="%{x}<br>Investering: %{y:,.0f} kr<extra></extra>",
+        hovertemplate="%{x}<br>Investering: %{customdata:,.0f} kr<extra></extra>",
+        customdata=[r["total_invest"] for r in all_results],
     ))
     fig_life.update_layout(yaxis_title="SEK", height=350,
                            margin=dict(l=0, r=0, t=30, b=0), legend=dict(orientation="h", y=1.02))
