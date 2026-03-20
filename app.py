@@ -60,7 +60,7 @@ with col_consumption:
                         fetch_monthly_consumption, build_seasonal_hourly_profile,
                         get_homes,
                     )
-                    # Fetch home info (address, grid company)
+                    # Fetch home info (address, grid company, fuse, house size, heating)
                     homes = get_homes()
                     if homes:
                         home = homes[0]
@@ -70,14 +70,24 @@ with col_consumption:
                             "city": addr.get("city", ""),
                             "postal_code": addr.get("postalCode", ""),
                         }
-                        # Grid company from metering point
+                        # Extended home data
                         try:
                             from tibber_source import _get_token, _query
                             token = _get_token()
-                            gq = '{viewer{homes{meteringPointData{gridCompany}}}}'
-                            gdata = _query(gq, token)
-                            gc = gdata["data"]["viewer"]["homes"][0].get("meteringPointData", {})
-                            tibber_home["grid_company"] = gc.get("gridCompany", "")
+                            hq = ('{viewer{homes{'
+                                  'meteringPointData{gridCompany priceAreaCode estimatedAnnualConsumption}'
+                                  ' mainFuseSize size numberOfResidents primaryHeatingSource'
+                                  '}}}')
+                            hdata = _query(hq, token)
+                            hinfo = hdata["data"]["viewer"]["homes"][0]
+                            mp = hinfo.get("meteringPointData", {})
+                            tibber_home["grid_company"] = mp.get("gridCompany", "")
+                            tibber_home["price_area"] = mp.get("priceAreaCode", "")
+                            tibber_home["annual_consumption"] = mp.get("estimatedAnnualConsumption", 0)
+                            tibber_home["fuse_size"] = hinfo.get("mainFuseSize", 0)
+                            tibber_home["house_size"] = hinfo.get("size", 0)
+                            tibber_home["residents"] = hinfo.get("numberOfResidents", 0)
+                            tibber_home["heating_source"] = hinfo.get("primaryHeatingSource", "")
                         except Exception:
                             tibber_home["grid_company"] = ""
                         st.session_state["tibber_home"] = tibber_home
@@ -92,13 +102,22 @@ with col_consumption:
 
                     home_info = st.session_state.get("tibber_home", {})
                     addr_str = f"{home_info.get('address', '')} {home_info.get('city', '')}".strip()
-                    grid_str = home_info.get("grid_company", "")
-                    msg = "Förbrukningsprofil laddad från Tibber"
+                    parts = ["Tibber-data laddad"]
                     if addr_str:
-                        msg += f" | {addr_str}"
-                    if grid_str:
-                        msg += f" | Nätägare: {grid_str}"
-                    st.success(msg)
+                        parts.append(addr_str)
+                    if home_info.get("grid_company"):
+                        parts.append(f"Nät: {home_info['grid_company']}")
+                    if home_info.get("fuse_size"):
+                        parts.append(f"Säkring: {home_info['fuse_size']}A")
+                    if home_info.get("house_size"):
+                        parts.append(f"Yta: {home_info['house_size']} m²")
+                    if home_info.get("heating_source"):
+                        _hs_map = {"GROUND": "Bergvärme", "AIR2AIR": "Luft-luft",
+                                    "AIR2WATER": "Luft-vatten", "DISTRICT": "Fjärrvärme",
+                                    "ELECTRIC": "Direktel", "OTHER": "Övrigt"}
+                        parts.append(_hs_map.get(home_info["heating_source"],
+                                                  home_info["heating_source"]))
+                    st.success(" | ".join(parts))
                 except Exception as e:
                     st.error(f"Tibber-fel: {e}")
 
@@ -310,8 +329,14 @@ with col_sys3:
     op_info = GRID_OPERATORS[grid_operator]
     op_fuse_fees = get_operator_fuse_fees(grid_operator)
     fuse_options = sorted(op_fuse_fees.keys())
+    # Auto-detect fuse size from Tibber
+    _fuse_default = 25
+    _tibber_fuse = st.session_state.get("tibber_home", {}).get("fuse_size", 0)
+    if _tibber_fuse and _tibber_fuse in fuse_options:
+        _fuse_default = _tibber_fuse
     fuse_amps = st.selectbox("Säkring (A)", fuse_options,
-                              index=fuse_options.index(25) if 25 in fuse_options else 0)
+                              index=fuse_options.index(_fuse_default) if _fuse_default in fuse_options else 0,
+                              help="Hämtas automatiskt från Tibber om tillgänglig.")
     phases = st.selectbox("Faser", [3, 1], index=0)
     energy_tax = st.number_input("Energiskatt (öre/kWh)", value=54.88, step=0.1,
                                   help="43.90 öre + 25% moms = 54.88 (2026)")
@@ -503,7 +528,10 @@ if use_heating_model:
                                          list(_ENERGY_CLASSES.keys()), index=2,
                                          help="Finns i husets energideklaration. Vet du inte? "
                                               "Klass C-D är vanligast för hus byggda 1990-2020.")
-            house_area = st.number_input("Boyta (m²)", value=150, min_value=30, max_value=500, step=10)
+            _tibber_size = st.session_state.get("tibber_home", {}).get("house_size", 0)
+            _area_default = _tibber_size if _tibber_size > 0 else 150
+            house_area = st.number_input("Boyta (m²)", value=_area_default, min_value=30, max_value=500, step=10,
+                                          help="Hämtas från Tibber om tillgänglig.")
 
         # Derive h_loss from energy class + area
         kwh_m2 = _ENERGY_CLASSES[energy_class]
@@ -512,9 +540,13 @@ if use_heating_model:
         h_loss_default = round(heat_elec_est * _COP_AVG / _DEGREE_HOURS, 3)
 
         with col_house2:
-            heating_type = st.selectbox("Uppvärmning", [
-                "Bergvärme (mark/sjö)", "Luftvärmepump", "Fjärrvärme", "Direktel (element)"
-            ], help="Typ av värmekälla. Påverkar COP-beräkningen.")
+            _heating_options = ["Bergvärme (mark/sjö)", "Luftvärmepump", "Fjärrvärme", "Direktel (element)"]
+            _tibber_heat = st.session_state.get("tibber_home", {}).get("heating_source", "")
+            _heat_map = {"GROUND": 0, "AIR2AIR": 1, "AIR2WATER": 1,
+                          "DISTRICT": 2, "ELECTRIC": 3}
+            _heat_default = _heat_map.get(_tibber_heat, 0)
+            heating_type = st.selectbox("Uppvärmning", _heating_options, index=_heat_default,
+                                         help="Hämtas från Tibber om tillgänglig. Påverkar COP-beräkningen.")
 
             if heating_type == "Bergvärme (mark/sjö)":
                 cop_info = "COP 2.3–5.0 beroende på utetemperatur"
