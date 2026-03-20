@@ -626,6 +626,70 @@ st.header("4. Resultat")
 st.caption("Tryck på knappen nedan för att simulera alla batteristorlekar. "
            "Simuleringen testar alla tariffer och väljer den bästa för varje storlek.")
 
+def _estimate_effekt_savings(result, eff_tariff, cfg, num_days):
+    """Estimate annual savings from peak demand reduction with effekttariff.
+
+    Compares peak demand WITH battery (discharge reduces grid draw)
+    vs WITHOUT battery (raw household load).
+    """
+    from collections import defaultdict
+
+    monthly_slots = defaultdict(list)
+    for s in result.slots:
+        ym = s.date[:7]
+        monthly_slots[ym].append(s)
+
+    total_saving = 0
+    for ym, slots in monthly_slots.items():
+        daily_peaks_with = defaultdict(float)
+        daily_peaks_without = defaultdict(float)
+
+        for s in slots:
+            h = int(s.hour.split(":")[0])
+            month = int(s.date.split("-")[1])
+            date_str = s.date
+
+            load_kw = cfg.total_load_kw(h, month, date_str)
+            for sl in cfg.scheduled_loads:
+                if cfg.daily_load_override and date_str in cfg.daily_load_override:
+                    if sl.is_active(h):
+                        load_kw += sl.power_kw
+
+            without_kw = load_kw
+            factor = eff_tariff.kw_factor(date_str, s.hour)
+            if eff_tariff.is_peak_hour(date_str, s.hour):
+                weighted_without = without_kw * factor
+                if weighted_without > daily_peaks_without[date_str]:
+                    daily_peaks_without[date_str] = weighted_without
+
+            if s.action == "discharge":
+                with_kw = max(0, load_kw - s.power_kw)
+            elif s.action in ("charge", "solar_charge"):
+                with_kw = load_kw + (s.power_kw if s.action == "charge" else 0)
+            else:
+                with_kw = load_kw
+            if s.solar_kw > 0:
+                with_kw = max(0, with_kw - s.solar_kw)
+
+            if eff_tariff.is_peak_hour(date_str, s.hour):
+                weighted_with = with_kw * factor
+                if weighted_with > daily_peaks_with[date_str]:
+                    daily_peaks_with[date_str] = weighted_with
+
+        n = eff_tariff.top_n_peaks
+        peaks_without = sorted(daily_peaks_without.values(), reverse=True)[:n]
+        peaks_with = sorted(daily_peaks_with.values(), reverse=True)[:n]
+
+        avg_without = sum(peaks_without) / len(peaks_without) if peaks_without else 0
+        avg_with = sum(peaks_with) / len(peaks_with) if peaks_with else 0
+
+        saving = (avg_without - avg_with) * eff_tariff.effekt_rate
+        total_saving += max(0, saving)
+
+    years = num_days / 365.25
+    return total_saving / years if years > 0 else 0
+
+
 if st.button("KÖR SIMULERING", type="primary", use_container_width=True):
     # Clear old results
     for key in ["all_results", "solar_cfg", "price_rows", "shared_config"]:
@@ -637,78 +701,6 @@ if st.button("KÖR SIMULERING", type="primary", use_container_width=True):
     if len(valid_rows) == 0:
         st.error("Ange minst ett batteri i pristabellen.")
         st.stop()
-
-    def _estimate_effekt_savings(result, eff_tariff, cfg, num_days):
-        """Estimate annual savings from peak demand reduction with effekttariff.
-
-        Compares peak demand WITH battery (discharge reduces grid draw)
-        vs WITHOUT battery (raw household load).
-        """
-        from collections import defaultdict
-
-        # Group slots by month
-        monthly_slots = defaultdict(list)
-        for s in result.slots:
-            ym = s.date[:7]  # YYYY-MM
-            monthly_slots[ym].append(s)
-
-        total_saving = 0
-        for ym, slots in monthly_slots.items():
-            # Peak kW per day WITH battery (net grid draw = load - discharge + charge)
-            daily_peaks_with = defaultdict(float)
-            daily_peaks_without = defaultdict(float)
-
-            for s in slots:
-                h = int(s.hour.split(":")[0])
-                month = int(s.date.split("-")[1])
-                date_str = s.date
-
-                # Load at this hour
-                load_kw = cfg.total_load_kw(h, month, date_str)
-                for sl in cfg.scheduled_loads:
-                    if cfg.daily_load_override and date_str in cfg.daily_load_override:
-                        if sl.is_active(h):
-                            load_kw += sl.power_kw
-
-                # Grid draw WITHOUT battery
-                without_kw = load_kw
-                # Apply kW factor (night discount)
-                factor = eff_tariff.kw_factor(date_str, s.hour)
-                if eff_tariff.is_peak_hour(date_str, s.hour):
-                    weighted_without = without_kw * factor
-                    if weighted_without > daily_peaks_without[date_str]:
-                        daily_peaks_without[date_str] = weighted_without
-
-                # Grid draw WITH battery
-                if s.action == "discharge":
-                    with_kw = max(0, load_kw - s.power_kw)
-                elif s.action in ("charge", "solar_charge"):
-                    with_kw = load_kw + (s.power_kw if s.action == "charge" else 0)
-                else:
-                    with_kw = load_kw
-                # Subtract solar self-consumption
-                if s.solar_kw > 0:
-                    with_kw = max(0, with_kw - s.solar_kw)
-
-                if eff_tariff.is_peak_hour(date_str, s.hour):
-                    weighted_with = with_kw * factor
-                    if weighted_with > daily_peaks_with[date_str]:
-                        daily_peaks_with[date_str] = weighted_with
-
-            # Top N peaks from different days
-            n = eff_tariff.top_n_peaks
-            peaks_without = sorted(daily_peaks_without.values(), reverse=True)[:n]
-            peaks_with = sorted(daily_peaks_with.values(), reverse=True)[:n]
-
-            avg_without = sum(peaks_without) / len(peaks_without) if peaks_without else 0
-            avg_with = sum(peaks_with) / len(peaks_with) if peaks_with else 0
-
-            saving = (avg_without - avg_with) * eff_tariff.effekt_rate
-            total_saving += max(0, saving)
-
-        # Annualize
-        years = num_days / 365.25
-        return total_saving / years if years > 0 else 0
 
     if solar_config:
         solar_config.purchase_price = sol_price
