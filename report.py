@@ -10,6 +10,29 @@ from datetime import date
 from fpdf import FPDF
 
 
+def _safe(text: str) -> str:
+    """Replace characters that latin-1 can't encode."""
+    replacements = {
+        '\u2014': '-',   # em dash
+        '\u2013': '-',   # en dash
+        '\u2018': "'",   # left single quote
+        '\u2019': "'",   # right single quote
+        '\u201c': '"',   # left double quote
+        '\u201d': '"',   # right double quote
+        '\u2026': '...', # ellipsis
+        '\u2022': '*',   # bullet
+        '\u00d7': 'x',   # multiplication sign
+        '\u2265': '>=',  # greater than or equal
+        '\u2264': '<=',  # less than or equal
+        '\u2192': '->',  # right arrow
+        '\u2190': '<-',  # left arrow
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    # Fallback: replace any remaining non-latin-1 chars
+    return text.encode('latin-1', errors='replace').decode('latin-1')
+
+
 class EnergiReport(FPDF):
     """Custom PDF with header/footer for Energikalkyl reports."""
 
@@ -28,7 +51,7 @@ class EnergiReport(FPDF):
     def section_title(self, title):
         self.set_font("Helvetica", "B", 14)
         self.set_text_color(44, 62, 80)
-        self.cell(0, 10, title, new_x="LMARGIN", new_y="NEXT")
+        self.cell(0, 10, _safe(title), new_x="LMARGIN", new_y="NEXT")
         self.set_draw_color(46, 204, 113)
         self.line(self.l_margin, self.get_y(), self.w - self.r_margin, self.get_y())
         self.ln(4)
@@ -36,22 +59,22 @@ class EnergiReport(FPDF):
     def sub_title(self, title):
         self.set_font("Helvetica", "B", 11)
         self.set_text_color(52, 73, 94)
-        self.cell(0, 8, title, new_x="LMARGIN", new_y="NEXT")
+        self.cell(0, 8, _safe(title), new_x="LMARGIN", new_y="NEXT")
         self.ln(2)
 
     def body_text(self, text):
         self.set_font("Helvetica", "", 10)
         self.set_text_color(50, 50, 50)
-        self.multi_cell(0, 5, text)
+        self.multi_cell(0, 5, _safe(text))
         self.ln(2)
 
     def key_value(self, key, value, bold_value=False):
         self.set_font("Helvetica", "", 10)
         self.set_text_color(80, 80, 80)
-        self.cell(85, 6, key)
+        self.cell(85, 6, _safe(key))
         self.set_font("Helvetica", "B" if bold_value else "", 10)
         self.set_text_color(30, 30, 30)
-        self.cell(0, 6, str(value), new_x="LMARGIN", new_y="NEXT")
+        self.cell(0, 6, _safe(str(value)), new_x="LMARGIN", new_y="NEXT")
 
     def table_row(self, cells, header=False, widths=None):
         if widths is None:
@@ -64,7 +87,7 @@ class EnergiReport(FPDF):
             self.set_text_color(50, 50, 50)
         for i, cell in enumerate(cells):
             align = "R" if i > 0 and not header else "L"
-            self.cell(widths[i], 7, str(cell), border=0 if header else 0,
+            self.cell(widths[i], 7, _safe(str(cell)), border=0 if header else 0,
                       fill=header, align=align)
         self.ln()
         if header:
@@ -127,7 +150,7 @@ def generate_report(
     pdf.cell(0, 10, "Hembatteri och solceller", new_x="LMARGIN", new_y="NEXT")
     if address:
         pdf.set_font("Helvetica", "", 12)
-        pdf.cell(0, 8, address, new_x="LMARGIN", new_y="NEXT")
+        pdf.cell(0, 8, _safe(address), new_x="LMARGIN", new_y="NEXT")
     pdf.ln(5)
 
     # === EXECUTIVE SUMMARY ===
@@ -153,7 +176,7 @@ def generate_report(
     pdf.set_fill_color(46, 204, 113)
     pdf.set_text_color(255, 255, 255)
     pdf.set_font("Helvetica", "B", 12)
-    pdf.cell(0, 10, f"  Netto i fickan: +{monthly_net:,.0f} kr/mån (kassaflödespositivt dag 1)",
+    pdf.cell(0, 10, _safe(f"  Netto i fickan: +{monthly_net:,.0f} kr/man (kassaflodespositivt dag 1)"),
              fill=True, new_x="LMARGIN", new_y="NEXT")
     pdf.set_text_color(50, 50, 50)
     pdf.ln(5)
@@ -314,11 +337,11 @@ def generate_report(
     # === DISCLAIMER ===
     pdf.set_font("Helvetica", "I", 8)
     pdf.set_text_color(130, 130, 130)
-    pdf.multi_cell(0, 4,
+    pdf.multi_cell(0, 4, _safe(
         "Denna rapport är genererad av Energikalkyl och utgör ett beräkningsunderlag baserat på "
         "historisk data och modellerade antaganden. Den utgör inte finansiell rådgivning. "
         "Faktiska besparingar kan avvika från beräknade värden beroende på framtida elpriser, "
         "väderförhållanden, och ändringar i regelverk eller tariffer."
-    )
+    ))
 
     return pdf.output()
