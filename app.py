@@ -1282,23 +1282,13 @@ if "all_results" in st.session_state:
     # Monthly cashflow breakdown
     st.subheader("Typiskt år — skillnad i elkostnad per månad")
 
-    # Compute per-slot data including "without" cost
     slot_data = []
     for s in result.slots:
-        h = int(s.hour.split(":")[0])
-        month = int(s.date.split("-")[1])
-        load_kw = config.total_load_kw(h, month, s.date)
-        # "Without" cost: buy everything from grid at this hour's total price
-        slots_per_day = len(result.slots) / num_days if num_days > 0 else 24
-        slot_h = 24 / slots_per_day
-        without_cost_sek = load_kw * slot_h * s.total_cost_ore / 100
-
         slot_data.append({
             "date": s.date, "hour": s.hour, "cost_sek": s.cost_sek,
             "saving_sek": s.saving_sek, "solar_charge_kwh": s.solar_charge_kwh,
             "export_revenue_sek": s.export_revenue_sek,
-            "solar_kw": s.solar_kw, "without_cost_sek": without_cost_sek,
-            "load_kw": load_kw,
+            "solar_kw": s.solar_kw,
         })
 
     df_slots = pd.DataFrame(slot_data)
@@ -1314,42 +1304,25 @@ if "all_results" in st.session_state:
         discharge_value = grp["saving_sek"].sum() / years_in_data
         export_rev = grp["export_revenue_sek"].sum() / years_in_data
         solar_charged = grp["solar_charge_kwh"].sum() / years_in_data
-        without_cost = grp["without_cost_sek"].sum() / years_in_data
         net = discharge_value - charge_cost + export_rev
         monthly_detail.append({
             "month": months_sv[m_num], "month_num": m_num,
             "charge_cost": charge_cost, "discharge_value": discharge_value,
-            "export_rev": export_rev, "solar_charged": solar_charged,
-            "net": net, "without_cost": without_cost,
+            "export_rev": export_rev, "solar_charged": solar_charged, "net": net,
         })
 
     df_md = pd.DataFrame(monthly_detail).sort_values("month_num")
 
-    # "Without" summary
-    # Fixed monthly costs (same with or without system — doesn't affect savings)
-    tibber_monthly = 49  # Tibber app subscription
+    # Summary: savings per month
+    col_w1, col_w2 = st.columns(2)
+    col_w1.metric("Lägre elkostnad", f"{per_year/12:,.0f} kr/mån",
+                   delta=f"{per_year:,.0f} kr/år")
     op_fees = get_operator_fuse_fees(grid_operator)
     fuse_monthly = op_fees.get(fuse_amps, 0) / 12
-    fixed_monthly = tibber_monthly + fuse_monthly
-
-    without_yr = df_md["without_cost"].sum()
-    with_yr = without_yr - per_year
-    col_w1, col_w2, col_w3 = st.columns(3)
-    col_w1.metric("Utan sol & batteri", f"{without_yr/12 + fixed_monthly:,.0f} kr/mån")
-    col_w2.metric("Med sol & batteri", f"{with_yr/12 + fixed_monthly:,.0f} kr/mån")
-    col_w3.metric("Besparing", f"{per_year/12:,.0f} kr/mån",
-                   delta=f"{per_year:,.0f} kr/år")
-    st.caption(f"Inkl. fasta kostnader: Tibber {tibber_monthly} kr/mån + "
-               f"{grid_operator} abonnemang {fuse_monthly:,.0f} kr/mån ({fuse_amps}A). "
-               f"Dessa är samma med/utan system.")
+    col_w2.metric("Fasta kostnader (samma med/utan)", f"{49 + fuse_monthly:,.0f} kr/mån",
+                   help=f"Tibber 49 kr + {grid_operator} {fuse_monthly:,.0f} kr ({fuse_amps}A)")
 
     fig_stack = go.Figure()
-    # "Without" reference bars (faded)
-    fig_stack.add_trace(go.Bar(
-        x=df_md["month"], y=df_md["without_cost"],
-        name="Elkostnad utan sol & batteri", marker_color="rgba(200,200,200,0.5)",
-        hovertemplate="%{x}<br>%{y:,.0f} kr<extra>Utan system</extra>",
-    ))
     fig_stack.add_trace(go.Bar(
         x=df_md["month"], y=df_md["discharge_value"],
         name="Urladdat (undviken elkostnad)", marker_color="#2ecc71",
@@ -1366,21 +1339,27 @@ if "all_results" in st.session_state:
         name="Laddkostnad (från nät)", marker_color="#e74c3c",
         hovertemplate="%{x}<br>%{y:,.0f} kr<extra>Kostnad att ladda</extra>",
     ))
+    # Net per month as line
+    fig_stack.add_trace(go.Scatter(
+        x=df_md["month"], y=df_md["net"],
+        mode="lines+markers", name="Netto besparing",
+        line=dict(width=3, color="#2c3e50"),
+        hovertemplate="%{x}<br>Netto: %{y:,.0f} kr/mån<extra></extra>",
+    ))
     fig_stack.add_hline(y=sel["arb_yr"]/12, line_dash="dash", line_color="gray",
-                         annotation_text=f"Snitt besparing {sel['arb_yr']/12:,.0f} kr/mån")
-    fig_stack.update_layout(barmode="group", yaxis_title="kr/månad (typiskt år)", height=400,
+                         annotation_text=f"Snitt {sel['arb_yr']/12:,.0f} kr/mån")
+    fig_stack.update_layout(barmode="relative", yaxis_title="kr/månad (typiskt år)", height=400,
                              margin=dict(l=0, r=0, t=30, b=0), legend=dict(orientation="h", y=1.02))
     st.plotly_chart(fig_stack, use_container_width=True)
 
     with st.expander("Detaljer per månad"):
         st.dataframe(pd.DataFrame([{
             "Månad": r["month"],
-            "Utan system (kr)": f"{r['without_cost']:,.0f}",
             "Urladdat (kr)": f"{r['discharge_value']:,.0f}",
             "Laddkostnad (kr)": f"{r['charge_cost']:,.0f}",
             "Export (kr)": f"{r['export_rev']:,.0f}",
             "Sol→batteri (kWh)": f"{r['solar_charged']:,.0f}",
-            "Besparing (kr)": f"{r['net']:,.0f}",
+            "Netto besparing (kr)": f"{r['net']:,.0f}",
         } for r in monthly_detail]), use_container_width=True, hide_index=True)
 
     # ================================================================
