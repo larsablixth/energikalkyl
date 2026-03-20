@@ -865,10 +865,17 @@ if "all_results" in st.session_state:
     _normal_save = 0
     _high_save = 0
 
-    _pdf_address = f"{selected_city}" if use_heating_model else ""
-    _pdf_weather = station_name if use_heating_model and temps_data else ""
+    try:
+        _pdf_address = selected_city if 'selected_city' in dir() else ""
+    except Exception:
+        _pdf_address = ""
+    try:
+        _pdf_weather = station_name if 'station_name' in dir() and temps_data else ""
+    except Exception:
+        _pdf_weather = ""
 
-    pdf_bytes = generate_report(
+    try:
+        pdf_bytes = generate_report(
         address=_pdf_address,
         grid_operator=grid_operator,
         fuse_amps=fuse_amps,
@@ -898,12 +905,14 @@ if "all_results" in st.session_state:
                        "total_invest": r["total_invest"], "payback": r["payback"],
                        "profit_life": r["profit_life"]} for r in all_results],
     )
-    st.download_button(
-        "Ladda ner PDF-rapport (bankunderlag)",
-        data=bytes(pdf_bytes),
-        file_name=f"energikalkyl_{date.today().isoformat()}.pdf",
-        mime="application/pdf",
-    )
+        st.download_button(
+            "Ladda ner PDF-rapport (bankunderlag)",
+            data=bytes(pdf_bytes),
+            file_name=f"energikalkyl_{date.today().isoformat()}.pdf",
+            mime="application/pdf",
+        )
+    except Exception as e:
+        st.warning(f"Kunde inte generera PDF: {e}")
 
     # === SCENARIO SPLIT: Normal years vs High-price period ===
     # Split simulation results by year to show realistic range
