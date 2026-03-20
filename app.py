@@ -1347,8 +1347,15 @@ if "all_results" in st.session_state:
                 m_cost = total / n_payments
             m_saving = r["total_benefit_yr"] / 12
             net = m_saving - m_cost
+            # True lifetime profit: savings during battery life - loan payments during same period
+            lifetime = r["lifetime"]
+            total_savings_life = r["total_benefit_yr"] * lifetime
+            total_loan_life = m_cost * 12 * lifetime
+            net_lifetime = total_savings_life - total_loan_life
             fin_data.append({"label": r["label"], "total": total,
-                             "monthly_cost": m_cost, "monthly_saving": m_saving, "net": net})
+                             "monthly_cost": m_cost, "monthly_saving": m_saving,
+                             "net": net, "net_lifetime": net_lifetime,
+                             "lifetime": lifetime})
 
         # Chart
         fig_fin = go.Figure()
@@ -1379,22 +1386,26 @@ if "all_results" in st.session_state:
 
         st.dataframe(pd.DataFrame([{
             "Batteri": d["label"],
-            "Total investering": f"{d['total']:,.0f} kr",
-            f"{loan_label}kostnad": f"{d['monthly_cost']:,.0f} kr/mån",
-            "Lägre elkostnad": f"{d['monthly_saving']:,.0f} kr/mån",
-            "Netto i fickan": f"{d['net']:+,.0f} kr/mån",
-            "Netto per år": f"{d['net']*12:+,.0f} kr/år",
+            "Investering": f"{d['total']:,.0f} kr",
+            f"{loan_label}/mån": f"{d['monthly_cost']:,.0f} kr",
+            "Besparing/mån": f"{d['monthly_saving']:,.0f} kr",
+            "Kassaflöde/mån": f"{d['net']:+,.0f} kr",
+            f"Netto {d['lifetime']:.0f} år": f"{d['net_lifetime']:+,.0f} kr",
         } for d in fin_data]), use_container_width=True, hide_index=True)
 
-        best_fin = max(fin_data, key=lambda d: d["net"])
-        all_positive = all(d["net"] > 0 for d in fin_data)
-        if all_positive:
-            st.success(f"**Alla storlekar ger positivt kassaflöde!** Bäst: **{best_fin['label']}** "
-                       f"med **+{best_fin['net']:,.0f} kr/mån** netto.")
-        elif best_fin["net"] > 0:
-            st.info(f"**{best_fin['label']}** ger bäst kassaflöde: **+{best_fin['net']:,.0f} kr/mån** netto.")
+        best_fin = max(fin_data, key=lambda d: d["net_lifetime"])
+        profitable = [d for d in fin_data if d["net_lifetime"] > 0]
+        if len(profitable) == len(fin_data):
+            st.success(f"**Alla storlekar lönsamma under batteriets livslängd.** "
+                       f"Bäst: **{best_fin['label']}** — "
+                       f"+{best_fin['net']:,.0f} kr/mån kassaflöde, "
+                       f"+{best_fin['net_lifetime']:,.0f} kr netto under {best_fin['lifetime']:.0f} år.")
+        elif profitable:
+            st.info(f"**{best_fin['label']}** ger bäst resultat: "
+                    f"+{best_fin['net']:,.0f} kr/mån kassaflöde, "
+                    f"+{best_fin['net_lifetime']:,.0f} kr netto under {best_fin['lifetime']:.0f} år.")
         else:
-            st.warning("Ingen storlek ger positivt kassaflöde med dessa lånvillkor.")
+            st.warning("Ingen storlek ger positivt netto under batteriets livslängd med dessa lånvillkor.")
     else:
         # Eget kapital — show simple cashflow over time for recommended battery
         st.caption("Kontant betalning — ackumulerat kassaflöde per batteristorlek")
