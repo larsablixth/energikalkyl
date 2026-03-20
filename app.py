@@ -526,6 +526,14 @@ if use_heating_model:
                 cop_info = "COP = 1.0 (ren eluppvärmning)"
             st.caption(cop_info)
 
+        # Derive sensible defaults from house area
+        # HP size: roughly 1 kW thermal per 25 m² for well-insulated house
+        _hp_max_default = round(max(4.0, min(12.0, house_area / 25)), 1)
+        # Base load scales with house area: ~0.4 kW for small, ~1.0 for large
+        _base_default = round(max(0.3, min(1.2, 0.3 + house_area / 300)), 2)
+        # DHW: ~4-8 kWh/day depending on household (proxy: house size)
+        _dhw_default = round(max(3.0, min(10.0, 3.0 + house_area / 50)), 1)
+
         # Detailed settings in expander
         with st.expander("Detaljerade VP-inställningar", expanded=False):
             col_h1, col_h2, col_h3 = st.columns(3)
@@ -534,18 +542,20 @@ if use_heating_model:
                                           min_value=0.01, max_value=1.5, step=0.001, format="%.3f",
                                           help=f"Uppskattat {h_loss_default:.3f} kW/°C från energiklass + yta. "
                                                f"Kalibreras automatiskt om du har förbrukningsdata.")
-                hp_max = st.number_input("VP max värmeeffekt (kW)", value=6.0, min_value=1.0, step=0.5,
-                                          help="Termisk effekt från värmepumpen. Typiskt 4-8 kW för villa.")
+                hp_max = st.number_input("VP max värmeeffekt (kW)", value=_hp_max_default, min_value=1.0, step=0.5,
+                                          help=f"Uppskattat {_hp_max_default} kW för {house_area} m². "
+                                               f"Typiskt 4-8 kW för villa, 8-12 kW för större hus.")
             with col_h2:
                 elpatron_kw = st.number_input("Elpatron (kW)", value=3.0, min_value=0.0, step=0.5,
                                                help="Tillsatsvärme vid extremkyla. 0 om ingen.")
-                dhw_kwh = st.number_input("Varmvatten (kWh el/dag)", value=6.0, min_value=0.0, step=1.0,
-                                           help="Elförbrukning för varmvatten via värmepumpen. ~5-8 kWh/dag för familj.")
+                dhw_kwh = st.number_input("Varmvatten (kWh el/dag)", value=_dhw_default, min_value=0.0, step=1.0,
+                                           help=f"Uppskattat {_dhw_default} kWh/dag för {house_area} m². "
+                                                f"Beror på antal personer (~2 kWh/person/dag via VP).")
             with col_h3:
-                non_heat_base = st.number_input("Bas utan värme/EV (kW)", value=0.68, min_value=0.0,
+                non_heat_base = st.number_input("Bas utan värme/EV (kW)", value=_base_default, min_value=0.0,
                                                  step=0.01, format="%.2f",
-                                                 help="Grundlast exkl. uppvärmning, EV och pool. "
-                                                      "Belysning, kyl/frys, ventilation, etc. Typiskt 0.4-1.0 kW.")
+                                                 help=f"Uppskattat {_base_default} kW för {house_area} m². "
+                                                      f"Belysning, kyl/frys, ventilation, etc.")
 
         st.caption(f"Uppskattat: energiklass {energy_class.split()[0]}, {house_area} m², "
                    f"h_loss = {h_loss:.3f} kW/°C | "
