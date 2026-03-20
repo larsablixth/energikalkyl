@@ -1390,7 +1390,8 @@ if "all_results" in st.session_state:
             f"{loan_label}/mån": f"{d['monthly_cost']:,.0f} kr",
             "Besparing/mån": f"{d['monthly_saving']:,.0f} kr",
             "Kassaflöde/mån": f"{d['net']:+,.0f} kr",
-            f"Netto {d['lifetime']:.0f} år": f"{d['net_lifetime']:+,.0f} kr",
+            "Livslängd": f"{d['lifetime']:.0f} år",
+            "Netto livslängd": f"{d['net_lifetime']:+,.0f} kr",
         } for d in fin_data]), use_container_width=True, hide_index=True)
 
         best_fin = max(fin_data, key=lambda d: d["net_lifetime"])
