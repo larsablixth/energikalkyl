@@ -417,6 +417,13 @@ daily_load_override = None
 heating_config = None
 
 if use_heating_model:
+    st.caption(
+        "Modellen beräknar husets elförbrukning för uppvärmning timme för timme, "
+        "baserat på **verklig temperatur** från SMHI och **husets egenskaper** (energiklass, yta, värmepumptyp). "
+        "Kall timme = hög förbrukning = mer egenanvändning av sol/batteri. "
+        "Varm timme = låg förbrukning = mer överskott att sälja. "
+        "Har du laddat förbrukningsdata (Tibber/Vattenfall) kalibreras modellen automatiskt mot din verkliga förbrukning."
+    )
     # --- Location selection ---
     st.markdown("**Plats (för väderdata)**")
     city_names = sorted(SWEDISH_CITIES.keys())
@@ -572,9 +579,10 @@ if use_heating_model:
                     consumption_daily.append({"date": date_str, "consumption_kwh": daily_kwh})
             fitted = fit_heating_model(consumption_daily, temps_data, heating_config)
             if abs(fitted.h_loss - h_loss) > 0.005:
-                st.success(f"Modellen kalibrerad mot din förbrukningsdata: "
-                           f"**h_loss = {fitted.h_loss:.3f} kW/°C** "
-                           f"(energiklass-uppskattning var {h_loss:.3f})")
+                st.success(f"Modellen kalibrerad mot din förbrukningsdata. "
+                           f"Husets värmeförlust anpassad: **{fitted.h_loss:.3f} kW/°C** "
+                           f"(energiklass-uppskattning var {h_loss:.3f}). "
+                           f"Detta ger en mer realistisk simulering.")
                 heating_config = fitted
 
         # Build daily_load_override: house load per hour per date
