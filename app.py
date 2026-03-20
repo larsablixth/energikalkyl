@@ -91,7 +91,7 @@ with col_consumption:
 
     if cons_source == "Tibber API":
         st.caption("Kräver .tibber_token-fil med din Tibber API-nyckel.")
-        if st.button("Hämta från Tibber"):
+        if st.button("Hämta från Tibber", type="primary"):
             with st.spinner("Hämtar förbrukningsprofil från Tibber..."):
                 try:
                     from tibber_source import (
