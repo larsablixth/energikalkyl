@@ -1249,23 +1249,24 @@ if "all_results" in st.session_state:
         "Tariff": r["best_tariff"],
     } for r in all_results]), use_container_width=True, hide_index=True)
 
-    # === INVESTMENT vs RETURN CHART ===
+    # === CUMULATIVE CASHFLOW OVER TIME ===
     fig_life = go.Figure()
-    fig_life.add_trace(go.Bar(
-        x=labels, y=[r["total_invest"] for r in all_results],
-        name="Investering",
-        marker_color="#e74c3c",
-        hovertemplate="%{x}<br>Investering: %{y:,.0f} kr<extra></extra>",
-    ))
-    fig_life.add_trace(go.Bar(
-        x=labels,
-        y=[r["total_benefit_yr"] * r["lifetime"] for r in all_results],
-        name=f"Total besparing under livslängd",
-        marker_color="#2ecc71",
-        hovertemplate="%{x}<br>Besparing: %{y:,.0f} kr<extra></extra>",
-    ))
-    fig_life.update_layout(barmode="group", yaxis_title="SEK", height=350,
-                           margin=dict(l=0, r=0, t=30, b=0), legend=dict(orientation="h", y=1.02))
+    colors = ["#3498db", "#2ecc71", "#e74c3c", "#9b59b6", "#f39c12", "#1abc9c"]
+    years = list(range(0, 16))
+    for i, r in enumerate(all_results):
+        cum = [-r["total_invest"]]
+        for yr in range(1, 16):
+            cum.append(cum[-1] + r["total_benefit_yr"])
+        fig_life.add_trace(go.Scatter(
+            x=years, y=cum, mode="lines+markers", name=r["label"],
+            line=dict(width=2, color=colors[i % len(colors)]),
+            hovertemplate=f"{r['label']}<br>År %{{x}}: %{{y:,.0f}} kr<extra></extra>",
+        ))
+    fig_life.add_hline(y=0, line_color="gray", line_width=1)
+    fig_life.update_layout(
+        xaxis_title="År", yaxis_title="Ackumulerat kassaflöde (SEK)", height=400,
+        margin=dict(l=0, r=0, t=30, b=0), legend=dict(orientation="h", y=1.02),
+    )
     st.plotly_chart(fig_life, use_container_width=True)
 
     # === MARGINAL VALUE ===
