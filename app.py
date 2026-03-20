@@ -1237,15 +1237,39 @@ if "all_results" in st.session_state:
                             margin=dict(l=0, r=0, t=30, b=0))
     st.plotly_chart(fig_comp, use_container_width=True)
 
+    # === COMPARISON: annualized cost vs annualized savings ===
+    st.subheader("Kostnad vs besparing per år")
+    st.caption("Investeringen fördelad över batteriets livslängd jämförd med årlig besparing. Samma tidsskala.")
+
+    fig_annual = go.Figure()
+    fig_annual.add_trace(go.Bar(
+        x=labels,
+        y=[r["total_invest"] / r["lifetime"] for r in all_results],
+        name="Investeringskostnad per år",
+        marker_color="#e74c3c",
+        hovertemplate="%{x}<br>Kostnad: %{y:,.0f} kr/år<extra></extra>",
+    ))
+    fig_annual.add_trace(go.Bar(
+        x=labels,
+        y=[r["total_benefit_yr"] for r in all_results],
+        name="Lägre elkostnad per år",
+        marker_color="#2ecc71",
+        hovertemplate="%{x}<br>Besparing: %{y:,.0f} kr/år<extra></extra>",
+    ))
+    fig_annual.update_layout(barmode="group", yaxis_title="kr/år", height=350,
+                              margin=dict(l=0, r=0, t=30, b=0),
+                              legend=dict(orientation="h", y=1.02))
+    st.plotly_chart(fig_annual, use_container_width=True)
+
     # === COMPARISON TABLE ===
     st.dataframe(pd.DataFrame([{
         "Batteri": r["label"],
-        "Lägre elkostnad/år": f"{r['total_benefit_yr']:,.0f} kr",
-        "Lägre elkostnad/mån": f"{r['total_benefit_yr']/12:,.0f} kr",
-        "Batteripris": f"{r['bat_cost']:,.0f} kr",
-        "Total investering": f"{r['total_invest']:,.0f} kr",
-        "Payback": f"{r['payback']:.1f} år",
-        "Netto under livslängd": f"{r['profit_life']:,.0f} kr",
+        "Besparing/år": f"{r['total_benefit_yr']:,.0f} kr",
+        "Kostnad/år": f"{r['total_invest'] / r['lifetime']:,.0f} kr",
+        "Netto/år": f"{r['total_benefit_yr'] - r['total_invest'] / r['lifetime']:,.0f} kr",
+        "Netto/mån": f"{(r['total_benefit_yr'] - r['total_invest'] / r['lifetime']) / 12:,.0f} kr",
+        "Investering": f"{r['total_invest']:,.0f} kr",
+        "Livslängd": f"{r['lifetime']:.0f} år",
         "Tariff": r["best_tariff"],
     } for r in all_results]), use_container_width=True, hide_index=True)
 
