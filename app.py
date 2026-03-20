@@ -1249,22 +1249,22 @@ if "all_results" in st.session_state:
         "Tariff": r["best_tariff"],
     } for r in all_results]), use_container_width=True, hide_index=True)
 
-    # === LIFETIME PROFIT CHART ===
+    # === INVESTMENT vs RETURN CHART ===
     fig_life = go.Figure()
     fig_life.add_trace(go.Bar(
-        x=labels, y=[r["profit_life"] for r in all_results],
-        name="Total vinst under livslängd",
-        marker_color=["#2ecc71" if r["profit_life"] > 0 else "#e74c3c" for r in all_results],
-        hovertemplate="%{x}<br><b>%{y:,.0f} kr</b> total vinst<extra></extra>",
+        x=labels, y=[r["total_invest"] for r in all_results],
+        name="Investering",
+        marker_color="#e74c3c",
+        hovertemplate="%{x}<br>Investering: %{y:,.0f} kr<extra></extra>",
     ))
-    fig_life.add_trace(go.Scatter(
-        x=labels, y=[-r["total_invest"] for r in all_results],
-        mode="markers", name="Investering",
-        marker=dict(size=12, color="#e74c3c", symbol="diamond"),
-        hovertemplate="%{x}<br>Investering: %{customdata:,.0f} kr<extra></extra>",
-        customdata=[r["total_invest"] for r in all_results],
+    fig_life.add_trace(go.Bar(
+        x=labels,
+        y=[r["total_benefit_yr"] * r["lifetime"] for r in all_results],
+        name=f"Total besparing under livslängd",
+        marker_color="#2ecc71",
+        hovertemplate="%{x}<br>Besparing: %{y:,.0f} kr<extra></extra>",
     ))
-    fig_life.update_layout(yaxis_title="SEK", height=350,
+    fig_life.update_layout(barmode="group", yaxis_title="SEK", height=350,
                            margin=dict(l=0, r=0, t=30, b=0), legend=dict(orientation="h", y=1.02))
     st.plotly_chart(fig_life, use_container_width=True)
 
