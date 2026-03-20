@@ -304,8 +304,10 @@ with col_sys2:
     use_solar = st.checkbox("Solceller", value=True)
     if use_solar:
         solar_kwp = st.number_input("System (kWp)", value=15.0, min_value=0.0, step=0.5)
-        export_factor = st.number_input("Exportpris (andel av spot)", value=1.0, min_value=0.0, max_value=1.5, step=0.05)
-        export_fee = st.number_input("Exportavgift (öre/kWh)", value=5.0, min_value=0.0, step=1.0)
+        export_factor = st.number_input("Försäljningspris (andel av spot)", value=1.0, min_value=0.0, max_value=1.5, step=0.05,
+                                        help="1.0 = du får hela spotpriset. 0 = ingen försäljning till nät.")
+        export_fee = st.number_input("Försäljningsavgift (öre/kWh)", value=5.0, min_value=0.0, step=1.0,
+                                      help="Tibber tar ~5 öre/kWh vid försäljning till nät.")
         solar_config = SolarConfig(capacity_kwp=solar_kwp) if solar_kwp > 0 else None
     else:
         solar_config = None
@@ -1629,7 +1631,7 @@ if "all_results" in st.session_state:
             "Månad": r["month"],
             "Urladdat (kr)": f"{r['discharge_value']:,.0f}",
             "Laddkostnad (kr)": f"{r['charge_cost']:,.0f}",
-            "Export (kr)": f"{r['export_rev']:,.0f}",
+            "Sålt till nät (kr)": f"{r['export_rev']:,.0f}",
             "Sol→batteri (kWh)": f"{r['solar_charged']:,.0f}",
             "Netto besparing (kr)": f"{r['net']:,.0f}",
         } for r in monthly_detail]), use_container_width=True, hide_index=True)
