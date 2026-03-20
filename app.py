@@ -577,8 +577,79 @@ if use_heating_model:
             cop_base=cop_base, cop_slope=cop_slope,
         )
 
-        # Auto-calibrate if consumption data is available
-        if "seasonal_profile" in st.session_state:
+        # --- Manual calibration from Tibber Insights ---
+        with st.expander("Kalibrera mot din förbrukning (Tibber-användare)", expanded=False):
+            st.caption(
+                "Har du Tibber? I appen under 'Min el' → 'Insikter' ser du en uppdelning av din "
+                "årsförbrukning (uppvärmning, elbil, matlagning, etc.). "
+                "Fyll i siffrorna nedan för en exakt kalibrering av din modell."
+            )
+            col_cal1, col_cal2 = st.columns(2)
+            with col_cal1:
+                cal_year = st.selectbox("År att kalibrera mot", [2025, 2024, 2023], index=0,
+                                         key="cal_year")
+                cal_total = st.number_input("Total förbrukning (kWh/år)", value=0, min_value=0,
+                                             step=100, key="cal_total",
+                                             help="Hela årets elförbrukning från Tibber/elräkning")
+                cal_heating = st.number_input("Uppvärmning + varmvatten (kWh/år)", value=0, min_value=0,
+                                               step=100, key="cal_heating",
+                                               help="'Uppvärmning' i Tibber Insikter")
+            with col_cal2:
+                cal_ev = st.number_input("Elbil (kWh/år)", value=0, min_value=0,
+                                          step=100, key="cal_ev",
+                                          help="'Elbil' i Tibber Insikter")
+                cal_active = st.number_input("Matlagning, belysning etc (kWh/år)", value=0, min_value=0,
+                                              step=100, key="cal_active",
+                                              help="'Matlagning, belysning' i Tibber Insikter")
+                cal_always = st.number_input("Alltid på (kWh/år)", value=0, min_value=0,
+                                              step=100, key="cal_always",
+                                              help="'Alltid på' i Tibber Insikter (kyl, frys, ventilation)")
+
+            if cal_heating > 0 and cal_total > 0:
+                # Calibrate h_loss from heating data + temperature
+                year_temps = {d: h for d, h in temps_data.items() if d.startswith(str(cal_year))}
+                if len(year_temps) > 300:
+                    # DHW is included in Tibber's "heating" category
+                    # Estimate: heating_kwh = space_heating_elec + DHW_elec
+                    _cal_dhw_annual = dhw_kwh * 365
+                    _cal_space = max(0, cal_heating - _cal_dhw_annual)
+
+                    _cal_sum = 0
+                    for d, hourly in year_temps.items():
+                        for hr, t in hourly:
+                            delta_t = max(0, heating_config.t_indoor - t)
+                            if delta_t > 0:
+                                cop = max(heating_config.cop_min,
+                                          heating_config.cop_base + heating_config.cop_slope * t)
+                                _cal_sum += delta_t / cop
+
+                    if _cal_sum > 0:
+                        cal_h_loss = _cal_space / _cal_sum
+                        # Update base load from non-heating data
+                        cal_base = (cal_active + cal_always) / 365 / 24 if (cal_active + cal_always) > 0 else non_heat_base
+
+                        st.success(
+                            f"Kalibrerat mot {cal_year}: **h_loss = {cal_h_loss:.3f} kW/°C**, "
+                            f"bas = {cal_base:.2f} kW "
+                            f"(uppvärmning {cal_heating:,} kWh, EV {cal_ev:,} kWh, "
+                            f"övrigt {cal_active + cal_always:,} kWh)"
+                        )
+
+                        # Apply calibration
+                        heating_config = HeatingConfig(
+                            h_loss=round(cal_h_loss, 4),
+                            hp_max_heat_kw=hp_max,
+                            elpatron_kw=elpatron_kw,
+                            dhw_kwh_per_day=dhw_kwh,
+                            cop_base=cop_base, cop_slope=cop_slope,
+                        )
+                        non_heat_base = cal_base
+                else:
+                    st.warning(f"Inte tillräckligt med väderdata för {cal_year} "
+                               f"({len(year_temps)} dagar). Behöver minst 300.")
+
+        # Auto-calibrate if consumption profile loaded (fallback if no manual calibration)
+        if "seasonal_profile" in st.session_state and cal_heating == 0:
             seasonal = st.session_state["seasonal_profile"]
             consumption_daily = []
             for month, hourly in seasonal.items():
