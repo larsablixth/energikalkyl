@@ -92,12 +92,35 @@ with col_consumption:
     if cons_source == "Tibber API":
         st.caption("Kräver .tibber_token-fil med din Tibber API-nyckel.")
         if st.button("Hämta från Tibber", type="primary"):
-            with st.spinner("Hämtar förbrukningsprofil från Tibber..."):
+            with st.spinner("Hämtar förbrukningsprofil och heminfo från Tibber..."):
                 try:
                     from tibber_source import (
                         fetch_consumption, consumption_to_load_profile,
                         fetch_monthly_consumption, build_seasonal_hourly_profile,
+                        get_homes,
                     )
+                    # Fetch home info (address, grid company)
+                    homes = get_homes()
+                    if homes:
+                        home = homes[0]
+                        addr = home.get("address", {})
+                        tibber_home = {
+                            "address": addr.get("address1", ""),
+                            "city": addr.get("city", ""),
+                            "postal_code": addr.get("postalCode", ""),
+                        }
+                        # Grid company from metering point
+                        try:
+                            from tibber_source import _get_token, _query
+                            token = _get_token()
+                            gq = '{viewer{homes{meteringPointData{gridCompany}}}}'
+                            gdata = _query(gq, token)
+                            gc = gdata["data"]["viewer"]["homes"][0].get("meteringPointData", {})
+                            tibber_home["grid_company"] = gc.get("gridCompany", "")
+                        except Exception:
+                            tibber_home["grid_company"] = ""
+                        st.session_state["tibber_home"] = tibber_home
+
                     nodes = fetch_consumption(hours=24*30)
                     profile = consumption_to_load_profile(nodes)
                     st.session_state["hourly_profile"] = profile
@@ -105,7 +128,16 @@ with col_consumption:
                     if len(monthly) >= 6:
                         seasonal = build_seasonal_hourly_profile(nodes, monthly)
                         st.session_state["seasonal_profile"] = seasonal
-                    st.success("Förbrukningsprofil laddad från Tibber")
+
+                    home_info = st.session_state.get("tibber_home", {})
+                    addr_str = f"{home_info.get('address', '')} {home_info.get('city', '')}".strip()
+                    grid_str = home_info.get("grid_company", "")
+                    msg = "Förbrukningsprofil laddad från Tibber"
+                    if addr_str:
+                        msg += f" | {addr_str}"
+                    if grid_str:
+                        msg += f" | Nätägare: {grid_str}"
+                    st.success(msg)
                 except Exception as e:
                     st.error(f"Tibber-fel: {e}")
 
@@ -251,8 +283,19 @@ with col_sys2:
 
 with col_sys3:
     st.subheader("Elnät")
-    grid_operator = st.selectbox("Nätägare", list(GRID_OPERATORS.keys()), index=0,
-                                  help="Din elnätsägare (står på elnätsfakturan). Avgör tariffer och avgifter.")
+    # Auto-detect grid operator from Tibber if available
+    _op_names = list(GRID_OPERATORS.keys())
+    _op_default = 0
+    _tibber_home = st.session_state.get("tibber_home", {})
+    if _tibber_home.get("grid_company"):
+        _gc = _tibber_home["grid_company"].lower()
+        for i, name in enumerate(_op_names):
+            if name.lower().split()[0] in _gc or _gc.split()[0] in name.lower():
+                _op_default = i
+                break
+    grid_operator = st.selectbox("Nätägare", _op_names, index=_op_default,
+                                  help="Din elnätsägare (står på elnätsfakturan). "
+                                       "Hämtas automatiskt från Tibber om tillgänglig.")
     op_info = GRID_OPERATORS[grid_operator]
     op_fuse_fees = get_operator_fuse_fees(grid_operator)
     fuse_options = sorted(op_fuse_fees.keys())
@@ -366,11 +409,20 @@ if use_heating_model:
     # --- Location selection ---
     st.markdown("**Plats (för väderdata)**")
     city_names = sorted(SWEDISH_CITIES.keys())
+    # Auto-detect city from Tibber if available
+    _city_default = city_names.index("Sigtuna") if "Sigtuna" in city_names else 0
+    _tibber_city = st.session_state.get("tibber_home", {}).get("city", "")
+    if _tibber_city:
+        for i, c in enumerate(city_names):
+            if c.lower() == _tibber_city.lower():
+                _city_default = i
+                break
+
     col_loc1, col_loc2 = st.columns([2, 3])
     with col_loc1:
-        selected_city = st.selectbox("Stad / ort", city_names,
-                                      index=city_names.index("Sigtuna") if "Sigtuna" in city_names else 0,
-                                      help="Välj den ort som är närmast dig. Bestämmer vilken SMHI-station som används.")
+        selected_city = st.selectbox("Stad / ort", city_names, index=_city_default,
+                                      help="Välj den ort som är närmast dig. "
+                                           "Hämtas automatiskt från Tibber om tillgänglig.")
     city_lat, city_lon = SWEDISH_CITIES[selected_city]
 
     # Find nearest SMHI station
@@ -866,7 +918,13 @@ if "all_results" in st.session_state:
     _high_save = 0
 
     try:
-        _pdf_address = selected_city if 'selected_city' in dir() else ""
+        _th = st.session_state.get("tibber_home", {})
+        if _th.get("address") and _th.get("city"):
+            _pdf_address = f"{_th['address']}, {_th['city']}"
+        elif 'selected_city' in dir():
+            _pdf_address = selected_city
+        else:
+            _pdf_address = ""
     except Exception:
         _pdf_address = ""
     try:
