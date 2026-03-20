@@ -176,7 +176,7 @@ def generate_report(
     pdf.set_fill_color(46, 204, 113)
     pdf.set_text_color(255, 255, 255)
     pdf.set_font("Helvetica", "B", 12)
-    pdf.cell(0, 10, _safe(f"  Netto i fickan: +{monthly_net:,.0f} kr/man (kassaflodespositivt dag 1)"),
+    pdf.cell(0, 10, _safe(f"  Netto i fickan: +{monthly_net:,.0f} kr/mån (kassaflödespositivt dag 1)"),
              fill=True, new_x="LMARGIN", new_y="NEXT")
     pdf.set_text_color(50, 50, 50)
     pdf.ln(5)
