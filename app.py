@@ -295,9 +295,9 @@ with st.expander(f"Prisspridning — lägsta till högsta: typiskt {_median_rang
                                  line=dict(width=1, color="#f39c12")))
     monthly_range = df_spread.groupby("month")["range"].median().reset_index()
     monthly_range["datetime"] = pd.to_datetime(monthly_range["month"])
-    fig_sp.add_trace(go.Scatter(x=monthly_range["datetime"], y=monthly_range["range"],
-                                 mode="lines+markers", name="Månadsmedian",
-                                 line=dict(width=3, color="#e74c3c")))
+    fig_sp.add_trace(go.Bar(x=monthly_range["datetime"], y=monthly_range["range"],
+                             name="Månadsmedian", marker_color="rgba(231,76,60,0.7)",
+                             hovertemplate="%{x}<br>Median: %{y:.0f} öre<extra></extra>"))
     fig_sp.add_hline(y=20, line_dash="dash", line_color="gray",
                       annotation_text="Min spread för lönsamhet (~20 öre)")
     fig_sp.update_layout(yaxis_title="Prisskillnad (öre/kWh)", height=300,
