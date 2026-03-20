@@ -35,54 +35,15 @@ st.caption("Simulera lönsamheten i hembatteri och solceller baserat på verklig
 # STEP 1: LOAD DATA
 # ================================================================
 st.header("1. Ladda data")
+st.caption("Börja med Tibber om du har det — då fylls förbrukning, plats och nätägare i automatiskt.")
 
-col_prices, col_consumption = st.columns(2)
+col_consumption, col_prices = st.columns(2)
 
-# --- Price data ---
-with col_prices:
-    st.subheader("Elpriser (spotpris)")
-    st.caption("Historiska spotpriser behövs för simuleringen. Ju mer data, desto bättre resultat.")
-    price_source = st.radio("Källa", ["Hämta från API", "Ladda CSV"], key="price_src",
-                             help="API hämtar från elprisetjustnu.se. CSV om du har en egen fil.")
-
-    if price_source == "Ladda CSV":
-        price_file = st.file_uploader("Pris-CSV", type=["csv"], key="price_csv",
-                                       help="CSV med kolumner: date, hour, sek_per_kwh")
-        if price_file:
-            df_prices = pd.read_csv(price_file)
-            st.session_state["df_prices"] = df_prices
-        else:
-            df_prices = st.session_state.get("df_prices")
-    else:
-        zone = st.selectbox("Elområde", ZONES, index=2,
-                            format_func=lambda z: f"{z} — {ZONE_NAMES[z]}")
-        col_d1, col_d2 = st.columns(2)
-        start_date = col_d1.date_input("Från", value=date.today() - timedelta(days=3*365))
-        end_date = col_d2.date_input("Till", value=date.today() - timedelta(days=1))
-        if st.button("Hämta priser", type="primary"):
-            with st.spinner("Hämtar spotpriser..."):
-                rows = fetch_range(start_date, end_date, zone)
-                if rows:
-                    df_prices = pd.DataFrame(rows)
-                    st.session_state["df_prices"] = df_prices
-                else:
-                    st.error("Inga priser hittades. Kontrollera datum och elområde.")
-        else:
-            df_prices = st.session_state.get("df_prices")
-
-    if df_prices is not None and len(df_prices) > 0:
-        for col in ["sek_per_kwh", "ore_per_kwh"]:
-            if col in df_prices.columns:
-                df_prices[col] = pd.to_numeric(df_prices[col], errors="coerce")
-        n_days = df_prices["date"].nunique()
-        st.success(f"Prisdata laddad: **{n_days} dagar** ({df_prices['date'].min()} → {df_prices['date'].max()})")
-    else:
-        st.warning("Ladda spotpriser ovan för att kunna köra simuleringen.")
-
-# --- Consumption data ---
+# --- Consumption data (FIRST — Tibber auto-fills everything) ---
 with col_consumption:
-    st.subheader("Förbrukningsprofil (valfritt)")
-    st.caption("Ger bättre resultat om du har den. Annars används standardvärden i steg 2.")
+    st.subheader("Förbrukningsprofil")
+    st.caption("Tibber-kunder: klicka Hämta — resten fylls i automatiskt. "
+               "Annars: ladda data eller ange manuellt i steg 2.")
     cons_source = st.radio("Källa", ["Manuell", "Tibber API", "Vattenfall/CSV/Excel"], key="cons_src",
                              help="Manuell = ange grundlast och laster i steg 2. Tibber/Vattenfall = importera din faktiska profil.")
 
@@ -206,6 +167,56 @@ with col_consumption:
         st.info(f"Förbrukningsprofil: timvis, medel {avg:.1f} kW")
     elif cons_source == "Manuell":
         st.info("Ange grundlast och laster i steg 2 nedan.")
+
+# --- Price data (right column) ---
+with col_prices:
+    st.subheader("Elpriser (spotpris)")
+    st.caption("Historiska spotpriser behövs för simuleringen. Ju mer data, desto bättre resultat.")
+
+    # Auto-detect zone from Tibber city if available
+    _tibber_city = st.session_state.get("tibber_home", {}).get("city", "")
+    _default_zone_idx = 2  # SE3 default
+    # Most of Sweden is SE3; Skåne/Blekinge is SE4; Norrland varies
+    _se4_cities = {"malmö", "lund", "helsingborg", "kristianstad", "karlskrona", "växjö", "kalmar"}
+    if _tibber_city.lower() in _se4_cities:
+        _default_zone_idx = 3  # SE4
+
+    price_source = st.radio("Källa", ["Hämta från API", "Ladda CSV"], key="price_src",
+                             help="API hämtar från elprisetjustnu.se. CSV om du har en egen fil.")
+
+    if price_source == "Ladda CSV":
+        price_file = st.file_uploader("Pris-CSV", type=["csv"], key="price_csv",
+                                       help="CSV med kolumner: date, hour, sek_per_kwh")
+        if price_file:
+            df_prices = pd.read_csv(price_file)
+            st.session_state["df_prices"] = df_prices
+        else:
+            df_prices = st.session_state.get("df_prices")
+    else:
+        zone = st.selectbox("Elområde", ZONES, index=_default_zone_idx,
+                            format_func=lambda z: f"{z} — {ZONE_NAMES[z]}")
+        col_d1, col_d2 = st.columns(2)
+        start_date = col_d1.date_input("Från", value=date.today() - timedelta(days=3*365))
+        end_date = col_d2.date_input("Till", value=date.today() - timedelta(days=1))
+        if st.button("Hämta priser", type="primary"):
+            with st.spinner("Hämtar spotpriser..."):
+                rows = fetch_range(start_date, end_date, zone)
+                if rows:
+                    df_prices = pd.DataFrame(rows)
+                    st.session_state["df_prices"] = df_prices
+                else:
+                    st.error("Inga priser hittades. Kontrollera datum och elområde.")
+        else:
+            df_prices = st.session_state.get("df_prices")
+
+    if df_prices is not None and len(df_prices) > 0:
+        for col in ["sek_per_kwh", "ore_per_kwh"]:
+            if col in df_prices.columns:
+                df_prices[col] = pd.to_numeric(df_prices[col], errors="coerce")
+        n_days = df_prices["date"].nunique()
+        st.success(f"Prisdata laddad: **{n_days} dagar** ({df_prices['date'].min()} → {df_prices['date'].max()})")
+    else:
+        st.warning("Ladda spotpriser för att köra simuleringen.")
 
 # --- Data status summary ---
 if df_prices is None or len(df_prices) == 0:
