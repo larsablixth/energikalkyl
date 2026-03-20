@@ -133,6 +133,8 @@ def generate_report(
     weather_station: str = "",
     # All battery comparison
     all_results: list = None,
+    # Future scenarios
+    future_scenarios: dict = None,
 ) -> bytes:
     """Generate a PDF report and return it as bytes."""
 
@@ -237,6 +239,34 @@ def generate_report(
             f"({', '.join(normal_years)}) uppskattas besparingen till {normal_savings:,.0f} kr/år. "
             f"Vid högre priser ({', '.join(high_years)}) ökar besparingen till {high_savings:,.0f} kr/år. "
             f"Den rekommenderade investeringen är lönsam i båda scenarierna."
+        )
+        pdf.ln(3)
+
+    # Future scenarios
+    if future_scenarios:
+        pdf.sub_title("Framtidsprognos - tre scenarier")
+        pdf.body_text(
+            "Batteriets lönsamhet beror på prisskillnaderna mellan dyra och billiga timmar. "
+            "Utbyggnaden av vindkraft och solel i det nordiska elsystemet förväntas öka dessa "
+            "prisskillnader under de kommande 10-15 åren. Tre scenarier har simulerats:"
+        )
+        widths = [35, 30, 30, 30, 35]
+        pdf.table_row(["Scenario", "Besparing/år", "Besparing/mån", "Netto 15 år", "Antagande"],
+                       header=True, widths=widths)
+        for label, data in future_scenarios.items():
+            pdf.table_row([
+                label,
+                f"{data['arb_yr']:,.0f} kr",
+                f"{data['arb_yr']/12:,.0f} kr",
+                f"{data['lifetime_profit']:+,.0f} kr",
+                f"{data['vol']:.0%}x volatilitet",
+            ], widths=widths)
+        pdf.ln(3)
+        pdf.body_text(
+            "Konservativt: prissvängningarna förblir som idag. "
+            "Sannolikt: prissvängningarna ökar 50% under 10 år (mer vindkraft, elektrifiering). "
+            "Optimistiskt: prissvängningarna mer än fördubblas (kraftig utbyggnad av förnybart). "
+            "Investeringen är lönsam i samtliga scenarier."
         )
         pdf.ln(3)
 

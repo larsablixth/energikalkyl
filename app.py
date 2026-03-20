@@ -1133,6 +1133,7 @@ if "all_results" in st.session_state:
         all_results=[{"label": r["label"], "total_benefit_yr": r["total_benefit_yr"],
                        "total_invest": r["total_invest"], "payback": r["payback"],
                        "profit_life": r["profit_life"]} for r in all_results],
+        future_scenarios=st.session_state.get("scenario_results"),
     )
         st.download_button(
             "Ladda ner PDF-rapport (bankunderlag)",
@@ -1654,14 +1655,15 @@ if "all_results" in st.session_state:
         } for r in monthly_detail]), use_container_width=True, hide_index=True)
 
     # ================================================================
-    # STEP 6: FUTURE VOLATILITY
+    # STEP 6: FUTURE SCENARIOS
     # ================================================================
     st.divider()
     st.header("6. Framtidsprognos")
-    st.caption("Hur påverkas lönsamheten om prisvolatiliteten ökar? "
-               "Mer sol/vind i elnätet → större prisskillnader → mer att tjäna.")
-
-    target_vol = st.slider("Förväntad volatilitet om 10 år (relativt idag)", 1.0, 3.0, 1.5, 0.1, format="%.1fx")
+    st.caption(
+        "Tre scenarier baserat på hur elprisernas volatilitet utvecklas. "
+        "Mer förnybart i elnätet ger större prisskillnader mellan timmar — "
+        "det är vad batteriet tjänar på."
+    )
 
     def scale_vol(rows, factor):
         days_map = {}
@@ -1677,33 +1679,74 @@ if "all_results" in st.session_state:
                 out.append(nr)
         return out
 
-    # Use top 3 sizes from user's price table for volatility scenarios
-    sorted_by_cap = sorted(all_results, key=lambda r: r["capacity"])
-    if len(sorted_by_cap) > 3:
-        # Pick small, recommended, and largest
-        vol_picks = [sorted_by_cap[0], best, sorted_by_cap[-1]]
-        # Deduplicate
-        seen = set()
-        vol_picks = [r for r in vol_picks if r["label"] not in seen and not seen.add(r["label"])]
-    else:
-        vol_picks = sorted_by_cap
-
-    bat_configs = [(r["label"], r["capacity"], r["max_kw"], round(r["bat_cost"]))
-                   for r in vol_picks]
-    vol_levels = [1.0, 1.2, 1.5, 2.0, 2.5]
-    palette = ["#3498db", "#2ecc71", "#e74c3c", "#9b59b6", "#f39c12"]
-    colors_bat = {bc[0]: palette[i % len(palette)] for i, bc in enumerate(bat_configs)}
+    # Three scenarios for the recommended battery
+    scenarios = [
+        ("Konservativt", 1.0, "Prissvängningarna förblir som idag. Ingen ökning av förnybart utöver befintlig plan."),
+        ("Sannolikt", 1.5, "Prissvängningarna ökar 50% på 10 år. Mer vindkraft, fler elbilar, ökad elektrifiering."),
+        ("Optimistiskt", 2.5, "Prissvängningarna mer än fördubblas. Kraftig utbyggnad av sol/vind, kärnkraft fasas ut."),
+    ]
+    vol_levels = [1.0, 1.5, 2.5]
 
     ref_cfg = st.session_state.get("shared_config") or all_results[0]["config"]
     ref_tariff = best["tariff"]
+    bl = best["label"]
+    bp = round(best["bat_cost"])
+    inv = best["total_invest"]
 
-    with st.spinner("Beräknar scenarier..."):
-        fc_data = []
-        for vf in vol_levels:
+    with st.spinner("Beräknar framtidsscenarier..."):
+        scenario_results = {}
+        for label, vf, desc in scenarios:
             scaled = scale_vol(price_rows, vf)
-            for bl, cap, chg, bp in bat_configs:
+            fc_cfg = BatteryConfig(
+                capacity_kwh=best["capacity"], max_charge_kw=best["max_kw"],
+                max_discharge_kw=best["max_kw"],
+                efficiency=ref_cfg.efficiency, fuse_amps=ref_cfg.fuse_amps, phases=ref_cfg.phases,
+                base_load_kw=ref_cfg.base_load_kw, scheduled_loads=ref_cfg.scheduled_loads,
+                hourly_load_profile=ref_cfg.hourly_load_profile,
+                seasonal_load_profile=ref_cfg.seasonal_load_profile,
+                daily_load_override=ref_cfg.daily_load_override,
+                flexible_loads=ref_cfg.flexible_loads,
+                export_price_factor=ref_cfg.export_price_factor, export_fee_ore=ref_cfg.export_fee_ore,
+                purchase_price=bp, installation_cost=ref_cfg.installation_cost,
+                cycle_life=ref_cfg.cycle_life, calendar_life_years=15,
+            )
+            r = simulate(scaled, fc_cfg, tariff=ref_tariff, solar=solar_cfg)
+            d = len(set(s.date for s in r.slots))
+            ay = r.net_profit_sek / d * 365.25 if d > 0 else 0
+            scenario_results[label] = {"arb_yr": ay, "vol": vf, "desc": desc}
+
+    # Summary metrics
+    col_s1, col_s2, col_s3 = st.columns(3)
+    for col, (label, vf, desc) in zip([col_s1, col_s2, col_s3], scenarios):
+        sr = scenario_results[label]
+        lifetime_profit = sr["arb_yr"] * best["lifetime"] - inv
+        col.metric(label, f"{sr['arb_yr']:,.0f} kr/år",
+                    delta=f"Netto {lifetime_profit:+,.0f} kr under {best['lifetime']:.0f} år")
+        col.caption(desc)
+
+    # 15-year cumulative cashflow for each scenario
+    st.subheader(f"15-årsprognos — {best['label']}")
+    st.caption("Ackumulerat kassaflöde under batteriets livslängd i tre scenarier. "
+               "Volatiliteten ökar linjärt till målnivå under de första 10 åren.")
+
+    fig_15 = go.Figure()
+    scenario_colors = {"Konservativt": "#3498db", "Sannolikt": "#2ecc71", "Optimistiskt": "#e74c3c"}
+
+    # Also compute results at intermediate levels for smooth interpolation
+    all_vol_levels = [1.0, 1.2, 1.5, 2.0, 2.5]
+    vol_arb = {}
+    with st.spinner("Beräknar 15-årskurvor..."):
+        for vf in all_vol_levels:
+            if vf in [s[1] for s in scenarios]:
+                # Already computed
+                for label, svf, _ in scenarios:
+                    if svf == vf:
+                        vol_arb[vf] = scenario_results[label]["arb_yr"]
+            else:
+                scaled = scale_vol(price_rows, vf)
                 fc_cfg = BatteryConfig(
-                    capacity_kwh=cap, max_charge_kw=chg, max_discharge_kw=chg,
+                    capacity_kwh=best["capacity"], max_charge_kw=best["max_kw"],
+                    max_discharge_kw=best["max_kw"],
                     efficiency=ref_cfg.efficiency, fuse_amps=ref_cfg.fuse_amps, phases=ref_cfg.phases,
                     base_load_kw=ref_cfg.base_load_kw, scheduled_loads=ref_cfg.scheduled_loads,
                     hourly_load_profile=ref_cfg.hourly_load_profile,
@@ -1716,60 +1759,50 @@ if "all_results" in st.session_state:
                 )
                 r = simulate(scaled, fc_cfg, tariff=ref_tariff, solar=solar_cfg)
                 d = len(set(s.date for s in r.slots))
-                ay = r.net_profit_sek / d * 365.25 if d > 0 else 0
-                inv = bp + ref_cfg.installation_cost
-                fc_data.append({"vol": vf, "bat": bl, "arb_yr": ay, "invest": inv,
-                                "payback": inv/ay if ay > 0 else 999})
+                vol_arb[vf] = r.net_profit_sek / d * 365.25 if d > 0 else 0
 
-    df_fc = pd.DataFrame(fc_data)
-
-    fig_fc = go.Figure()
-    for bl in [bc[0] for bc in bat_configs]:
-        d = df_fc[df_fc["bat"] == bl]
-        fig_fc.add_trace(go.Scatter(
-            x=[f"{v:.0%}" for v in d["vol"]], y=d["arb_yr"],
-            mode="lines+markers", name=bl, line=dict(width=2, color=colors_bat.get(bl)),
-        ))
-    fig_fc.update_layout(xaxis_title="Volatilitet", yaxis_title="Arbitrage (SEK/år)", height=350,
-                          margin=dict(l=0, r=0, t=30, b=0), legend=dict(orientation="h", y=1.02))
-    st.plotly_chart(fig_fc, use_container_width=True)
-
-    st.subheader("15-årsprognos")
-    st.caption(f"Volatiliteten ökar linjärt till {target_vol:.1f}x över 10 år, sedan konstant")
-
-    fig_15 = go.Figure()
-    for bl, cap, chg, bp in bat_configs:
-        inv = bp + ref_cfg.installation_cost
+    for label, target_vol, desc in scenarios:
         cum = [-inv]
         for yr in range(1, 16):
             vol = 1.0 + (target_vol - 1.0) * min(yr, 10) / 10
-            below = [v for v in vol_levels if v <= vol]
-            above = [v for v in vol_levels if v > vol]
+            # Interpolate from precomputed volatility levels
+            below = [v for v in all_vol_levels if v <= vol]
+            above = [v for v in all_vol_levels if v > vol]
             if below and above:
                 b, a = below[-1], above[0]
-                rb = df_fc[(df_fc["bat"]==bl) & (df_fc["vol"]==b)]["arb_yr"].iloc[0]
-                ra = df_fc[(df_fc["bat"]==bl) & (df_fc["vol"]==a)]["arb_yr"].iloc[0]
                 t = (vol - b) / (a - b)
-                yr_profit = rb * (1-t) + ra * t
+                yr_profit = vol_arb[b] * (1-t) + vol_arb[a] * t
             elif below:
-                yr_profit = df_fc[(df_fc["bat"]==bl) & (df_fc["vol"]==below[-1])]["arb_yr"].iloc[0]
+                yr_profit = vol_arb[below[-1]]
             else:
-                yr_profit = df_fc[(df_fc["bat"]==bl) & (df_fc["vol"]==vol_levels[0])]["arb_yr"].iloc[0]
+                yr_profit = vol_arb[all_vol_levels[0]]
             cum.append(cum[-1] + yr_profit)
 
-        fig_15.add_trace(go.Scatter(x=list(range(16)), y=cum, mode="lines+markers",
-                                     name=bl, line=dict(width=2, color=colors_bat.get(bl))))
+        fig_15.add_trace(go.Scatter(
+            x=list(range(16)), y=cum, mode="lines",
+            name=label, line=dict(width=3, color=scenario_colors[label]),
+            hovertemplate=f"{label}<br>År %{{x}}: %{{y:,.0f}} kr<extra></extra>",
+        ))
 
-    fig_15.add_hline(y=0, line_color="gray", line_width=1)
-    fig_15.update_layout(xaxis_title="År", yaxis_title="Ackumulerat (SEK)", height=400,
+    fig_15.add_hline(y=0, line_color="gray", line_width=1,
+                      annotation_text="Återbetald", annotation_position="bottom right")
+    fig_15.update_layout(xaxis_title="År", yaxis_title="Ackumulerat kassaflöde (SEK)", height=400,
                           margin=dict(l=0, r=0, t=30, b=0), legend=dict(orientation="h", y=1.02))
     st.plotly_chart(fig_15, use_container_width=True)
 
-    summary = []
-    for bl in [bc[0] for bc in bat_configs]:
-        for vl in vol_levels:
-            r = df_fc[(df_fc["bat"]==bl) & (df_fc["vol"]==vl)].iloc[0]
-            summary.append({"Batteri": bl, "Volatilitet": f"{vl:.0%}",
-                            "Vinst/år": f"{r['arb_yr']:,.0f} kr",
-                            "Payback": f"{r['payback']:.1f} år"})
-    st.dataframe(pd.DataFrame(summary), use_container_width=True, hide_index=True)
+    # Summary table
+    st.dataframe(pd.DataFrame([{
+        "Scenario": label,
+        "Volatilitet": f"{vf:.0%}x om 10 år",
+        "Besparing/år": f"{scenario_results[label]['arb_yr']:,.0f} kr",
+        "Besparing/mån": f"{scenario_results[label]['arb_yr']/12:,.0f} kr",
+        "Netto 15 år": f"{scenario_results[label]['arb_yr'] * best['lifetime'] - inv:+,.0f} kr",
+    } for label, vf, desc in scenarios]), use_container_width=True, hide_index=True)
+
+    # Store scenario data for PDF report
+    st.session_state["scenario_results"] = {
+        label: {"arb_yr": scenario_results[label]["arb_yr"],
+                "vol": vf, "desc": desc,
+                "lifetime_profit": scenario_results[label]["arb_yr"] * best["lifetime"] - inv}
+        for label, vf, desc in scenarios
+    }
