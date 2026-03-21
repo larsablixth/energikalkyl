@@ -7,6 +7,7 @@
 .price_cache/
 .fx_cache.json
 .bemserver_cache/
+.app_state/
 
 # Python
 __pycache__/

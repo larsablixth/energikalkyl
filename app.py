@@ -26,8 +26,17 @@ from weather import (
     fetch_station_data, SWEDISH_CITIES,
 )
 from report import generate_report
+from app_state import save_state, load_state
 
 st.set_page_config(page_title="Energikalkyl", page_icon="⚡", layout="wide")
+
+# Restore persisted state on first load
+if "_state_restored" not in st.session_state:
+    if load_state(st.session_state):
+        st.session_state["_state_restored"] = "loaded"
+    else:
+        st.session_state["_state_restored"] = "empty"
+
 st.title("Energikalkyl — El, Sol & Batteri")
 st.caption("Simulera lönsamheten i hembatteri och solceller baserat på verkliga elpriser och din förbrukning.")
 
@@ -339,6 +348,9 @@ with col_prices:
         st.warning("Ladda spotpriser för att köra simuleringen.")
 
 # --- Data status summary ---
+# Persist loaded data so it survives page refresh
+save_state(st.session_state)
+
 if df_prices is None or len(df_prices) == 0:
     st.error("**Steg 1 ej klart** — ladda spotpriser ovan för att fortsätta.")
     st.stop()
