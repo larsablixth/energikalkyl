@@ -928,42 +928,73 @@ if use_heating_model:
 # ================================================================
 st.header("3. Investering")
 
-# Battery price table
+# Battery pricing mode
 st.subheader("Batteripriser")
-st.caption("Redigera tabellen nedan — lägg till/ta bort rader, ändra priser. "
-           "NKON ESS Pro (LiFePO4) som standard.")
+_pricing_mode = st.radio("Prismodell", ["Specificerade batterier (NKON)", "SEK per kWh — hitta optimal storlek"],
+                          key="pricing_mode", horizontal=True)
 
-EUR_SEK = st.number_input("EUR/SEK växelkurs", value=11.5, min_value=5.0, max_value=20.0, step=0.1,
-                           key="eur_sek_rate")
+if _pricing_mode == "SEK per kWh — hitta optimal storlek":
+    st.caption("Ange pris per kWh och max laddeffekt. Simuleringen testar storlekar "
+               "från 5 till 100 kWh och hittar den storlek som maximerar egenförbrukning.")
+    col_sek1, col_sek2, col_sek3 = st.columns(3)
+    with col_sek1:
+        sek_per_kwh = st.number_input("Batteripris (SEK/kWh)", value=1000, min_value=100, max_value=5000,
+                                       step=50, key="sek_per_kwh",
+                                       help="Typiskt 800-1500 SEK/kWh för LiFePO4.")
+    with col_sek2:
+        max_charge_kw = st.number_input("Max ladd/urladdning (kW)", value=11.0, min_value=1.0, max_value=30.0,
+                                         step=0.5, key="max_charge_kw_auto",
+                                         help="Begränsas av inverter. NKON: 11 kW (16 kWh), 15 kW (32 kWh).")
+    with col_sek3:
+        _step_kwh = st.number_input("Steg (kWh)", value=5, min_value=1, max_value=20, step=1,
+                                     key="auto_step_kwh",
+                                     help="Storlekar testas i detta steg: 5, 10, 15, ... kWh")
 
-default_batteries = pd.DataFrame([
-    {"Namn": "5 kWh",      "Kapacitet_kWh": 5.12,  "Max_kW": 3.8,  "Pris_SEK": round(600 * EUR_SEK)},
-    {"Namn": "10 kWh",     "Kapacitet_kWh": 10.24, "Max_kW": 7.5,  "Pris_SEK": round(1177 * EUR_SEK)},
-    {"Namn": "16 kWh",     "Kapacitet_kWh": 16.10, "Max_kW": 11.0, "Pris_SEK": round(1512 * EUR_SEK)},
-    {"Namn": "32 kWh",     "Kapacitet_kWh": 32.15, "Max_kW": 15.0, "Pris_SEK": round(2857 * EUR_SEK)},
-    {"Namn": "32+16 kWh",  "Kapacitet_kWh": 48.25, "Max_kW": 15.0, "Pris_SEK": round((2857+1512) * EUR_SEK)},
-    {"Namn": "2x32 kWh",   "Kapacitet_kWh": 64.30, "Max_kW": 15.0, "Pris_SEK": round(2857 * 2 * EUR_SEK)},
-])
+    # Generate battery table from SEK/kWh
+    _sizes = list(range(_step_kwh, 101, _step_kwh))
+    battery_table = pd.DataFrame([
+        {"Namn": f"{s} kWh", "Kapacitet_kWh": float(s),
+         "Max_kW": min(max_charge_kw, s * 0.5),  # C-rate max ~0.5C
+         "Pris_SEK": round(s * sek_per_kwh)}
+        for s in _sizes
+    ])
+    st.caption(f"Testar {len(_sizes)} storlekar: {_sizes[0]}–{_sizes[-1]} kWh à {sek_per_kwh} kr/kWh")
 
-battery_table = st.data_editor(
-    default_batteries,
-    num_rows="dynamic",
-    use_container_width=True,
-    column_config={
-        "Namn": st.column_config.TextColumn("Namn"),
-        "Kapacitet_kWh": st.column_config.NumberColumn("Kapacitet (kWh)", min_value=0.1, format="%.2f"),
-        "Max_kW": st.column_config.NumberColumn("Max effekt (kW)", min_value=0.1, format="%.1f"),
-        "Pris_SEK": st.column_config.NumberColumn("Pris (SEK)", min_value=0, format="%d"),
-    },
-    key="battery_table",
-)
+else:
+    st.caption("Redigera tabellen nedan — lägg till/ta bort rader, ändra priser. "
+               "NKON ESS Pro (LiFePO4) som standard.")
 
-# Show kr/kWh for each row
-if len(battery_table) > 0:
-    battery_table["kr_per_kWh"] = (battery_table["Pris_SEK"] / battery_table["Kapacitet_kWh"]).round(0)
-    st.caption("Pris per kWh: " + " | ".join(
-        f"{r['Namn']}: {r['kr_per_kWh']:.0f} kr/kWh" for _, r in battery_table.iterrows()
-        if r["Kapacitet_kWh"] > 0))
+    EUR_SEK = st.number_input("EUR/SEK växelkurs", value=11.5, min_value=5.0, max_value=20.0, step=0.1,
+                               key="eur_sek_rate")
+
+    default_batteries = pd.DataFrame([
+        {"Namn": "5 kWh",      "Kapacitet_kWh": 5.12,  "Max_kW": 3.8,  "Pris_SEK": round(600 * EUR_SEK)},
+        {"Namn": "10 kWh",     "Kapacitet_kWh": 10.24, "Max_kW": 7.5,  "Pris_SEK": round(1177 * EUR_SEK)},
+        {"Namn": "16 kWh",     "Kapacitet_kWh": 16.10, "Max_kW": 11.0, "Pris_SEK": round(1512 * EUR_SEK)},
+        {"Namn": "32 kWh",     "Kapacitet_kWh": 32.15, "Max_kW": 15.0, "Pris_SEK": round(2857 * EUR_SEK)},
+        {"Namn": "32+16 kWh",  "Kapacitet_kWh": 48.25, "Max_kW": 15.0, "Pris_SEK": round((2857+1512) * EUR_SEK)},
+        {"Namn": "2x32 kWh",   "Kapacitet_kWh": 64.30, "Max_kW": 15.0, "Pris_SEK": round(2857 * 2 * EUR_SEK)},
+    ])
+
+    battery_table = st.data_editor(
+        default_batteries,
+        num_rows="dynamic",
+        use_container_width=True,
+        column_config={
+            "Namn": st.column_config.TextColumn("Namn"),
+            "Kapacitet_kWh": st.column_config.NumberColumn("Kapacitet (kWh)", min_value=0.1, format="%.2f"),
+            "Max_kW": st.column_config.NumberColumn("Max effekt (kW)", min_value=0.1, format="%.1f"),
+            "Pris_SEK": st.column_config.NumberColumn("Pris (SEK)", min_value=0, format="%d"),
+        },
+        key="battery_table",
+    )
+
+    # Show kr/kWh for each row
+    if len(battery_table) > 0:
+        battery_table["kr_per_kWh"] = (battery_table["Pris_SEK"] / battery_table["Kapacitet_kWh"]).round(0)
+        st.caption("Pris per kWh: " + " | ".join(
+            f"{r['Namn']}: {r['kr_per_kWh']:.0f} kr/kWh" for _, r in battery_table.iterrows()
+            if r["Kapacitet_kWh"] > 0))
 
 # Other costs
 col_i1, col_i2, col_i3 = st.columns(3)
@@ -1180,6 +1211,10 @@ if st.button("KÖR SIMULERING", type="primary", use_container_width=True):
             payback = total_invest / total_benefit_yr if total_benefit_yr > 0 else 999
             profit_life = total_benefit_yr * lifetime - total_invest
 
+            # Track grid export for self-consumption optimization
+            _yrs = num_days / 365.25 if num_days > 0 else 1
+            grid_export_yr = result.total_grid_export_kwh / _yrs
+
             all_results.append({
                 "label": label, "capacity": cap, "max_kw": max_kw,
                 "bat_cost": bat_cost, "invest": invest, "total_invest": total_invest,
@@ -1190,6 +1225,7 @@ if st.button("KÖR SIMULERING", type="primary", use_container_width=True):
                 "best_tariff": best_tariff,
                 "result": result, "config": cfg, "tariff": tariff,
                 "num_days": num_days,
+                "grid_export_yr": grid_export_yr,
             })
 
     st.session_state["all_results"] = all_results
@@ -1224,6 +1260,49 @@ if "all_results" in st.session_state:
 
     # Tariff recommendation (from best size)
     st.info(f"Bästa tariff: **{best['best_tariff']}**")
+
+    # Self-consumption optimization (when using SEK/kWh mode)
+    if st.session_state.get("pricing_mode", "").startswith("SEK"):
+        # Find smallest battery where grid export is near zero
+        _sorted_by_cap = sorted(all_results, key=lambda r: r["capacity"])
+        _zero_export = None
+        for r in _sorted_by_cap:
+            if r["grid_export_yr"] < 10:  # less than 10 kWh/yr = effectively zero
+                _zero_export = r
+                break
+        if _zero_export:
+            st.success(
+                f"**Maximal egenförbrukning: {_zero_export['label']}** — "
+                f"nära noll export ({_zero_export['grid_export_yr']:.0f} kWh/år till nät), "
+                f"investering {_zero_export['total_invest']:,.0f} kr, "
+                f"lägre elkostnad {_zero_export['total_benefit_yr']:,.0f} kr/år"
+            )
+        else:
+            _min_export = min(all_results, key=lambda r: r["grid_export_yr"])
+            st.info(
+                f"**Lägst export: {_min_export['label']}** — "
+                f"{_min_export['grid_export_yr']:.0f} kWh/år exporteras fortfarande till nät. "
+                f"Investering {_min_export['total_invest']:,.0f} kr. "
+                f"Överväg större batteri eller fler flexibla laster för att nå noll export."
+            )
+
+        # Show export vs battery size chart
+        _cap_list = [r["capacity"] for r in _sorted_by_cap]
+        _export_list = [r["grid_export_yr"] for r in _sorted_by_cap]
+        _benefit_list = [r["total_benefit_yr"] for r in _sorted_by_cap]
+        fig_self = go.Figure()
+        fig_self.add_trace(go.Bar(x=_cap_list, y=_export_list, name="Export till nät (kWh/år)",
+                                   marker_color="indianred"))
+        fig_self.add_trace(go.Scatter(x=_cap_list, y=_benefit_list, name="Lägre elkostnad (kr/år)",
+                                       yaxis="y2", mode="lines+markers", marker_color="seagreen"))
+        fig_self.update_layout(
+            title="Egenförbrukning vs batteristorlek",
+            xaxis_title="Batterikapacitet (kWh)",
+            yaxis_title="Export till nät (kWh/år)",
+            yaxis2=dict(title="Lägre elkostnad (kr/år)", overlaying="y", side="right"),
+            height=400,
+        )
+        st.plotly_chart(fig_self, use_container_width=True)
 
     # === PDF REPORT ===
     # Calculate financing for report
