@@ -253,7 +253,15 @@ with col_consumption:
     if "seasonal_profile" in st.session_state:
         seasonal_load_profile = st.session_state["seasonal_profile"]
         all_kw = [kw for m in seasonal_load_profile.values() for kw in m.values()]
-        st.info(f"Förbrukningsprofil laddad: {min(all_kw):.1f}–{max(all_kw):.1f} kW")
+        _vf = st.session_state.get("vattenfall_hourly", [])
+        if _vf:
+            _vf_days = len(set(r["date"] for r in _vf))
+            _vf_total = sum(r["kwh"] for r in _vf)
+            _vf_avg = _vf_total / _vf_days if _vf_days > 0 else 0
+            st.info(f"Förbrukningsdata: **{len(_vf):,} timvärden** ({_vf_days} dagar) | "
+                    f"Snitt: {_vf_avg:.0f} kWh/dag | ~{_vf_avg*365:,.0f} kWh/år")
+        else:
+            st.info(f"Förbrukningsprofil laddad: {min(all_kw):.1f}–{max(all_kw):.1f} kW")
     elif "hourly_profile" in st.session_state:
         hourly_load_profile = st.session_state["hourly_profile"]
         avg = sum(hourly_load_profile.values()) / 24
