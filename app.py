@@ -355,9 +355,9 @@ with col_sys3:
     _tibber_fuse = st.session_state.get("tibber_home", {}).get("fuse_size", 0)
     if _tibber_fuse and _tibber_fuse in fuse_options:
         _fuse_default = _tibber_fuse
-    fuse_amps = st.selectbox("Säkring (A)", fuse_options,
+    fuse_amps = st.selectbox("Nuvarande säkring (A)", fuse_options,
                               index=fuse_options.index(_fuse_default) if _fuse_default in fuse_options else 0,
-                              help="Hämtas automatiskt från Tibber om tillgänglig.")
+                              help="Din nuvarande säkring. Simuleringen utvärderar om du bör uppgradera.")
     phases = st.selectbox("Faser", [3, 1], index=0)
     energy_tax = st.number_input("Energiskatt (öre/kWh)", value=54.88, step=0.1,
                                   help="43.90 öre + 25% moms = 54.88 (2026)")
