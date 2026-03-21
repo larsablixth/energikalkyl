@@ -684,21 +684,34 @@ if use_heating_model:
         h_loss_default = h_loss_from_class
         _calibrated = False
 
-        # Auto-calibrate from consumption profile if available
+        # Auto-calibrate from consumption profile via BEMServer-style pipeline
         if "seasonal_profile" in st.session_state and temps_data:
-            from heating import fit_heating_model
+            from bemserver_store import store_and_cleanse
+            from energy_analysis import analyze as ea_analyze
             _cal_seasonal = st.session_state["seasonal_profile"]
-            _cal_daily = []
+            # Build hourly consumption list from seasonal profile
+            _hourly_consumption = []
             for month, hourly in _cal_seasonal.items():
                 days_in_month = [31,28,31,30,31,30,31,31,30,31,30,31][month-1]
-                daily_kwh = sum(hourly.values())
                 for d in range(1, days_in_month+1):
-                    _cal_daily.append({"date": f"2024-{month:02d}-{d:02d}", "consumption_kwh": daily_kwh})
-            _cal_cfg = HeatingConfig(h_loss=h_loss_from_class)
-            _fitted = fit_heating_model(_cal_daily, temps_data, _cal_cfg)
-            if abs(_fitted.h_loss - h_loss_from_class) > 0.005:
-                h_loss_default = round(_fitted.h_loss, 3)
-                _calibrated = True
+                    for h, kwh in hourly.items():
+                        _hourly_consumption.append({
+                            "date": f"2024-{month:02d}-{d:02d}", "hour": h, "kwh": kwh
+                        })
+            # Store + cleanse via BEMServer-style pipeline
+            _cleansed = store_and_cleanse(_hourly_consumption, temps_data, source="seasonal")
+            # Run energy analysis on cleansed data
+            _analysis = ea_analyze(
+                _cleansed["hourly_consumption"], _cleansed["hourly_temperatures"],
+                floor_area_m2=house_area, heating_system="auto"
+            )
+            if _analysis.data_days >= 60 and _analysis.ua_value_w_per_k > 0:
+                # Map UA (W/K) to h_loss (kW/°C)
+                _ea_h_loss = round(_analysis.ua_value_w_per_k / 1000, 3)
+                if abs(_ea_h_loss - h_loss_from_class) > 0.005:
+                    h_loss_default = _ea_h_loss
+                    _calibrated = True
+                st.session_state["energy_analysis"] = _analysis
 
         with col_house2:
             _heating_options = ["Bergvärme (mark/sjö)", "Luftvärmepump", "Fjärrvärme", "Direktel (element)"]
@@ -776,6 +789,13 @@ if use_heating_model:
         st.caption(f"Uppskattat: energiklass {energy_class.split()[0]}, {house_area} m², "
                    f"h_loss = {h_loss:.3f} kW/°C | "
                    f"Väderdata: {len(temps_data)} dagar ({min(temps_data.keys())} — {max(temps_data.keys())})")
+        if "energy_analysis" in st.session_state:
+            _ea = st.session_state["energy_analysis"]
+            _ea_sys = {"ground_source": "Bergvärme", "direct_electric": "Direktel",
+                       "air_air": "Luft-luft", "air_water": "Luft-vatten"}.get(_ea.detected_system, "")
+            st.caption(f"Energianalys (BEMServer): UA={_ea.ua_value_w_per_k:.0f} W/K, "
+                       f"R²={_ea.r_squared:.2f}, {_ea_sys} detekterat | "
+                       f"{_ea.total_kwh_m2_year:.0f} kWh/m²/år — {_ea.benchmark_rating}")
 
         # Adjust COP model for heating type
         if heating_type == "Luftvärmepump":
