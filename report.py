@@ -318,8 +318,10 @@ def generate_report(
         pdf.sub_title("Uppvärmningsmodell")
         pdf.body_text(
             f"Husets elförbrukning för uppvärmning modelleras timme för timme baserat på "
-            f"verklig temperaturdata från SMHI ({weather_station}). Modellen tar hänsyn till "
-            f"värmepumpens verkningsgrad (COP), som varierar med utetemperaturen. "
+            f"verklig temperaturdata från SMHI ({weather_station}). "
+            f"Värmepumpens verkningsgrad (COP) modelleras utifrån typ: bergvärme har "
+            f"nära konstant COP (brintemperaturen varierar inte med utomhustemperaturen), "
+            f"medan luftvärmepumpar har COP som sjunker vid kyla. "
             f"Uppvärmningsbehovet beräknas från husets energiklass och yta."
         )
 
