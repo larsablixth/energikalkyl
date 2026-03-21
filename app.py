@@ -422,7 +422,9 @@ with col_l1:
         st.session_state["scheduled_loads"] = [{"name": "Elbil", "power": 11.0, "start": 23, "end": 6}]
 
     st.markdown("**Tidsstyrda laster**")
-    st.caption("Laster som alltid körs under specifika timmar, t.ex. elbil nattetid.")
+    st.caption("Laster med fast schema. Elbil: modelleras som nattladdning 23-06. "
+               "I verkligheten laddar elbilen smartare (billigaste timmarna, "
+               "flexibelt på helger) — simuleringen är konservativ.")
     for i, load in enumerate(st.session_state["scheduled_loads"]):
         c = st.columns([3, 2, 2, 2, 1])
         load["name"] = c[0].text_input("", value=load["name"], key=f"ln_{i}", label_visibility="collapsed")
