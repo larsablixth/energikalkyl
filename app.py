@@ -706,9 +706,9 @@ if use_heating_model:
         # --- Manual calibration from Tibber Insights ---
         with st.expander("Kalibrera mot din förbrukning", expanded=True):
             st.caption(
-                "Har du Tibber? I appen under 'Min el' → 'Insikter' ser du en uppdelning av din "
-                "årsförbrukning (uppvärmning, elbil, matlagning, etc.). "
-                "Fyll i siffrorna nedan för en exakt kalibrering av din modell."
+                "Fyll i din årsförbrukning uppdelad per kategori för exakt kalibrering. "
+                "Hittas i din elapp: Tibber (Insikter), Greenely (Förbrukningsanalys), "
+                "eller på din elnätsägares Mina sidor."
             )
             col_cal1, col_cal2 = st.columns(2)
             with col_cal1:
@@ -716,20 +716,20 @@ if use_heating_model:
                                          key="cal_year")
                 cal_total = st.number_input("Total förbrukning (kWh/år)", value=0, min_value=0,
                                              step=100, key="cal_total",
-                                             help="Hela årets elförbrukning från Tibber/elräkning")
+                                             help="Hela årets elförbrukning. Finns på elräkningen eller i din elapp.")
                 cal_heating = st.number_input("Uppvärmning + varmvatten (kWh/år)", value=0, min_value=0,
                                                step=100, key="cal_heating",
-                                               help="'Uppvärmning' i Tibber Insikter")
+                                               help="Värmepump + varmvatten. Kallas 'Uppvärmning' i Tibber/Greenely.")
             with col_cal2:
                 cal_ev = st.number_input("Elbil (kWh/år)", value=0, min_value=0,
                                           step=100, key="cal_ev",
-                                          help="'Elbil' i Tibber Insikter")
+                                          help="Laddning av elbil. 0 om ingen elbil.")
                 cal_active = st.number_input("Matlagning, belysning etc (kWh/år)", value=0, min_value=0,
                                               step=100, key="cal_active",
-                                              help="'Matlagning, belysning' i Tibber Insikter")
+                                              help="Spis, ugn, belysning, tvätt, disk — det du aktivt använder.")
                 cal_always = st.number_input("Alltid på (kWh/år)", value=0, min_value=0,
                                               step=100, key="cal_always",
-                                              help="'Alltid på' i Tibber Insikter (kyl, frys, ventilation)")
+                                              help="Kyl, frys, ventilation, standby — det som alltid drar.")
 
             if cal_heating > 0 and cal_total > 0:
                 # Calibrate h_loss from heating data + temperature
