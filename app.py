@@ -1348,6 +1348,15 @@ if st.button("KÖR SIMULERING", type="primary", use_container_width=True):
             _yrs = num_days / 365.25 if num_days > 0 else 1
             grid_export_yr = result.total_grid_export_kwh / _yrs
 
+            # Track luft-luft flex contribution (from solar surplus)
+            _aa_flex_kwh = 0
+            if st.session_state.get("use_aa", False):
+                for s in result.slots:
+                    month = int(s.date.split("-")[1])
+                    # Luft-luft flex loads are active Mar-May, Jun-Aug, Sep-Oct
+                    if month in (3, 4, 5, 6, 7, 8, 9, 10) and s.flex_consumed_kwh > 0:
+                        _aa_flex_kwh += s.flex_consumed_kwh
+
             all_results.append({
                 "label": label, "capacity": cap, "max_kw": max_kw,
                 "bat_cost": bat_cost, "invest": invest, "total_invest": total_invest,
@@ -1359,6 +1368,8 @@ if st.button("KÖR SIMULERING", type="primary", use_container_width=True):
                 "result": result, "config": cfg, "tariff": tariff,
                 "num_days": num_days,
                 "grid_export_yr": grid_export_yr,
+                "aa_flex_kwh_yr": _aa_flex_kwh / _yrs if st.session_state.get("use_aa") else 0,
+                "total_flex_kwh_yr": result.total_flex_consumed_kwh / _yrs,
             })
 
     st.session_state["all_results"] = all_results
@@ -1436,6 +1447,35 @@ if "all_results" in st.session_state:
             height=400,
         )
         st.plotly_chart(fig_self, use_container_width=True)
+
+    # === LUFT-LUFT CONTRIBUTION (separate from main investment) ===
+    if st.session_state.get("use_aa", False) and best.get("aa_flex_kwh_yr", 0) > 0:
+        with st.expander("Luft-luft bidrag (utanför huvudinvesteringen)", expanded=False):
+            _aa_flex = best["aa_flex_kwh_yr"]
+            _total_flex = best["total_flex_kwh_yr"]
+            _other_flex = _total_flex - _aa_flex
+            _avg_ore = 60  # approximate average price
+            _aa_value_kr = _aa_flex * _avg_ore / 100
+
+            col_aaf1, col_aaf2, col_aaf3 = st.columns(3)
+            with col_aaf1:
+                st.metric("Luft-luft solöverskott", f"{_aa_flex:,.0f} kWh/år",
+                          help="Solöverskott som luft-luft absorberar genom "
+                               "förvärme/förkylning av huset (termisk lagring)")
+            with col_aaf2:
+                st.metric("Undviken export", f"{_aa_value_kr:,.0f} kr/år",
+                          help="Värdet av att använda solöverskottet i huset "
+                               "istället för att exportera till nät (~60 öre/kWh)")
+            with col_aaf3:
+                st.metric("Övriga flex-laster", f"{_other_flex:,.0f} kWh/år",
+                          help="Poolpump, varmvatten etc. — separat från luft-luft")
+
+            st.caption(
+                f"Luft-luft absorberar {_aa_flex:,.0f} kWh/år solöverskott "
+                f"av totalt {_total_flex:,.0f} kWh/år flex-förbrukning. "
+                f"Detta är inte inräknat i huvudinvesteringens lönsamhet ovan — "
+                f"det är en bonus som minskar exportförluster."
+            )
 
     # === PDF REPORT ===
     # Calculate financing for report
