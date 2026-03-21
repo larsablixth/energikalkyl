@@ -364,14 +364,14 @@ with col_sys3:
     available_tariffs = op_info["tariffs"]
     has_effekt = "Effekttariff" in available_tariffs and op_info.get("effekttariff")
     _fuse_fee_yr = op_fuse_fees.get(fuse_amps, 0)
+    _fuse_list = ", ".join(f"{f:.0f}A" for f in fuse_options)
     if has_effekt:
         eff = op_info["effekttariff"]
-        st.info(f"**{grid_operator}** | "
-                f"Effekttariff: {eff['effekt_rate']} kr/kW/mån, {eff['energy_rate']} öre/kWh | "
-                f"Alla tariffer och säkringsstorlekar utvärderas")
+        st.info(f"**{grid_operator}** — simulerar: {', '.join(available_tariffs)} "
+                f"({eff['effekt_rate']} kr/kW/mån) och säkring {_fuse_list}")
     else:
-        st.info(f"**{grid_operator}** | {', '.join(available_tariffs)} | "
-                f"Alla tariffer och säkringsstorlekar utvärderas")
+        st.info(f"**{grid_operator}** — simulerar: {', '.join(available_tariffs)} "
+                f"och säkring {_fuse_list}")
     with st.expander("Tariffdetaljer", expanded=False):
         if "tidstariff" in op_info:
             t = op_info["tidstariff"]
