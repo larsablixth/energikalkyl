@@ -704,7 +704,7 @@ if use_heating_model:
         )
 
         # --- Manual calibration from Tibber Insights ---
-        with st.expander("Kalibrera mot din förbrukning (Tibber-användare)", expanded=False):
+        with st.expander("Kalibrera mot din förbrukning", expanded=True):
             st.caption(
                 "Har du Tibber? I appen under 'Min el' → 'Insikter' ser du en uppdelning av din "
                 "årsförbrukning (uppvärmning, elbil, matlagning, etc.). "
