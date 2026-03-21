@@ -172,6 +172,9 @@ with col_consumption:
         if cons_files:
             try:
                 import tempfile, os
+                # Clear previous data to avoid mixing old + new
+                for _clear_key in ["seasonal_profile", "vattenfall_hourly", "hourly_profile"]:
+                    st.session_state.pop(_clear_key, None)
                 all_vf = []
                 all_csv = []
                 for f in cons_files:
