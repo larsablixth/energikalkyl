@@ -726,7 +726,7 @@ if use_heating_model:
             elif heating_type == "Luftvärmepump":
                 cop_info = "COP 1.5–4.5, sämre vid kyla"
             elif heating_type == "Fjärrvärme":
-                cop_info = "Ingen VP — elkostnad bara för cirkulationspump"
+                cop_info = "Ingen VP — elkostnad för cirkulationspump"
             else:
                 cop_info = "COP = 1.0 (ren eluppvärmning)"
             st.caption(cop_info)
@@ -1684,7 +1684,7 @@ if "all_results" in st.session_state:
                     next_up = upgrades[0]
                     st.info(f"**{fuse_amps:.0f}A ger bäst netto för batteriet.** "
                             f"Uppgradering till {next_up['fuse']:.0f}A kostar "
-                            f"{next_up.get('extra_fee_yr', 0):,.0f} kr/år mer men ger bara "
+                            f"{next_up.get('extra_fee_yr', 0):,.0f} kr/år mer och ger "
                             f"{next_up.get('extra_benefit_yr', 0):,.0f} kr/år extra besparing. "
                             f"Kan ändå vara värt det för marginal och framtida behov.")
 

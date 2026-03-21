@@ -19,6 +19,13 @@ PERSIST_KEYS = {
     "hourly_profile": "dict",
     "tibber_home": "dict",
     "df_prices": "dataframe",
+    # Calibration inputs (Streamlit widget keys)
+    "cal_year": "scalar",
+    "cal_total": "scalar",
+    "cal_heating": "scalar",
+    "cal_ev": "scalar",
+    "cal_active": "scalar",
+    "cal_always": "scalar",
 }
 
 
@@ -35,6 +42,8 @@ def save_state(session_state):
         elif typ == "dict" and isinstance(val, dict):
             # seasonal_profile has int keys — convert to str for JSON
             data[key] = {"_type": "dict", "value": _keys_to_str(val)}
+        elif typ == "scalar":
+            data[key] = {"_type": "scalar", "value": val}
         else:
             data[key] = {"_type": typ, "value": val}
 
@@ -63,6 +72,9 @@ def load_state(session_state):
             restored = True
         elif typ == "dict":
             session_state[key] = _keys_to_int(wrapper["value"])
+            restored = True
+        elif typ == "scalar":
+            session_state[key] = wrapper["value"]
             restored = True
         elif typ == "list":
             session_state[key] = wrapper["value"]
