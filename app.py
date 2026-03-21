@@ -42,16 +42,16 @@ col_consumption, col_prices = st.columns(2)
 # --- Consumption data (FIRST — Tibber auto-fills everything) ---
 with col_consumption:
     st.subheader("Förbrukningsprofil")
-    st.caption("Har du en elapp (Tibber, Greenely)? Hämta data automatiskt. "
-               "Annars: ladda CSV/Excel eller ange manuellt i steg 2.")
-    cons_source = st.radio("Källa", ["Manuell", "Elapp (Tibber)", "CSV/Excel"], key="cons_src",
-                             help="Manuell = ange grundlast och laster i steg 2. Tibber/Vattenfall = importera din faktiska profil.")
+    st.caption("**Bäst resultat:** Hämta från Tibber (ger adress, nätägare, säkring) "
+               "**och** ladda upp Vattenfall Excel (ger 3 års timdata). Båda kan användas samtidigt.")
 
     hourly_load_profile = None
     seasonal_load_profile = None
 
-    if cons_source == "Elapp (Tibber)":
-        st.caption("Kräver Tibber API-nyckel (.tibber_token). Greenely-stöd kommer.")
+    # Tibber section — always visible
+    with st.expander("Hämta från elapp (Tibber)", expanded=not st.session_state.get("tibber_home")):
+        st.caption("Hämtar förbrukningsprofil, adress, nätägare, säkring och husdata. "
+                   "Kräver .tibber_token-fil.")
         if st.button("Hämta data", type="primary"):
             with st.spinner("Hämtar förbrukningsprofil och heminfo från Tibber..."):
                 try:
@@ -123,8 +123,10 @@ with col_consumption:
                 except Exception as e:
                     st.error(f"Tibber-fel: {e}")
 
-    elif cons_source == "CSV/Excel":
-        st.caption("Ladda upp Excel-filer från Vattenfall Mina sidor, eller CSV med timförbrukning.")
+    # File upload section — always visible (works alongside Tibber)
+    with st.expander("Ladda upp förbrukningsdata (Vattenfall/CSV)", expanded=not st.session_state.get("seasonal_profile")):
+        st.caption("Vattenfall Excel-filer ger 3+ års timdata — bästa underlaget för kalibrering. "
+                   "Ladda ner från Vattenfall Mina sidor → Förbrukning → Exportera.")
         cons_files = st.file_uploader("Förbrukningsdata", type=["csv", "txt", "xlsx", "xls"],
                                        accept_multiple_files=True, key="cons_upload")
         if cons_files:
@@ -211,13 +213,13 @@ with col_consumption:
     if "seasonal_profile" in st.session_state:
         seasonal_load_profile = st.session_state["seasonal_profile"]
         all_kw = [kw for m in seasonal_load_profile.values() for kw in m.values()]
-        st.info(f"Förbrukningsprofil: säsongsanpassad, {min(all_kw):.1f}–{max(all_kw):.1f} kW")
+        st.info(f"Förbrukningsprofil laddad: {min(all_kw):.1f}–{max(all_kw):.1f} kW")
     elif "hourly_profile" in st.session_state:
         hourly_load_profile = st.session_state["hourly_profile"]
         avg = sum(hourly_load_profile.values()) / 24
-        st.info(f"Förbrukningsprofil: timvis, medel {avg:.1f} kW")
-    elif cons_source == "Manuell":
-        st.info("Ange grundlast och laster i steg 2 nedan.")
+        st.info(f"Förbrukningsprofil laddad: medel {avg:.1f} kW")
+    else:
+        st.info("Ingen förbrukningsdata laddad — standardvärden används i steg 2.")
 
 # --- Price data (right column) ---
 with col_prices:
