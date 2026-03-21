@@ -26,12 +26,13 @@ class HeatingConfig:
     dhw_kwh_per_day: float = 8.0  # domestic hot water electricity (kWh/day)
     dhw_cop: float = 2.3          # COP for DHW heating (higher supply temp)
     # Air-to-air supplement (luft-luft as complement to primary system)
+    # Defaults: Mitsubishi Electric Hero 2.0 LN25 (SCOP 5.2, A+++)
     aa_enabled: bool = False       # enable air-to-air supplement
-    aa_max_heat_kw: float = 3.5    # max heating output (kW thermal)
-    aa_max_cool_kw: float = 3.5    # max cooling output (kW thermal)
-    aa_cop_heat_base: float = 4.0  # heating COP at 7°C outdoor
+    aa_max_heat_kw: float = 3.2    # nominal heating output (kW thermal)
+    aa_max_cool_kw: float = 2.5    # nominal cooling output (kW thermal)
+    aa_cop_heat_base: float = 4.5  # heating COP at 7°C outdoor (from SCOP 5.2)
     aa_cop_heat_slope: float = 0.1 # COP change per °C outdoor (heating)
-    aa_cop_cool: float = 3.5       # cooling COP (fairly constant)
+    aa_cop_cool: float = 4.2       # cooling COP (from SEER 10.5 → seasonal, ~4.2 at 35°C)
     aa_min_temp: float = 1.0       # min outdoor temp for heating use (°C)
     aa_cool_threshold: float = 24.0  # indoor temp above which cooling activates
 

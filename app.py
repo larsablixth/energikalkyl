@@ -750,29 +750,31 @@ if use_heating_model:
             if use_aa:
                 col_aa1, col_aa2, col_aa3 = st.columns(3)
                 with col_aa1:
-                    aa_heat_kw = st.number_input("Luft-luft värmeeffekt (kW)", value=3.5,
+                    aa_heat_kw = st.number_input("Luft-luft värmeeffekt (kW)", value=3.2,
                                                   min_value=0.5, max_value=10.0, step=0.5,
                                                   key="aa_heat_kw",
-                                                  help="Max värmeeffekt. Typiskt 2-5 kW för en enhet.")
+                                                  help="Nominell värmeeffekt. Mitsubishi Hero 2.0 LN25: 3.2 kW (max 6.3 kW).")
                     aa_min_temp = st.number_input("Min utetemperatur för drift (°C)", value=1.0,
                                                    min_value=-20.0, max_value=10.0, step=1.0,
                                                    key="aa_min_temp",
-                                                   help="Under denna temperatur stängs luft-luft av.")
+                                                   help="Under denna temperatur stängs luft-luft av. "
+                                                        "Hero 2.0 klarar ner till -35°C men COP sjunker.")
                 with col_aa2:
-                    aa_cool_kw = st.number_input("Luft-luft kyleffekt (kW)", value=3.5,
+                    aa_cool_kw = st.number_input("Luft-luft kyleffekt (kW)", value=2.5,
                                                   min_value=0.5, max_value=10.0, step=0.5,
                                                   key="aa_cool_kw",
-                                                  help="Max kyleffekt för AC-drift.")
+                                                  help="Nominell kyleffekt. Hero 2.0 LN25: 2.5 kW (max 3.5 kW).")
                     aa_cool_threshold = st.number_input("Kylning startar vid (°C ute)", value=24.0,
                                                          min_value=18.0, max_value=35.0, step=1.0,
                                                          key="aa_cool_threshold",
                                                          help="Utetemperatur då AC startar.")
                 with col_aa3:
-                    aa_price = st.number_input("Pris luft-luft inkl installation (SEK)", value=25000,
+                    aa_price = st.number_input("Pris luft-luft inkl installation (SEK)", value=30000,
                                                 min_value=0, step=1000, key="aa_price",
-                                                help="Typiskt 15,000-35,000 kr inkl installation.")
+                                                help="Mitsubishi Hero 2.0 LN25: ~24,000 kr + installation ~6,000 kr.")
                     aa_lifetime = st.number_input("Livslängd luft-luft (år)", value=15,
                                                     min_value=5, max_value=25, step=1, key="aa_lifetime")
+                st.caption("Standard: Mitsubishi Electric Hero 2.0 LN25 — SCOP 5.2 (A+++), SEER 10.5, drifttemp -35°C till +31°C")
 
         # Derive defaults: if calibrated from real data, use calibration-consistent values.
         # If not calibrated, estimate from house area.
