@@ -363,14 +363,14 @@ with col_sys3:
                                   help="43.90 öre + 25% moms = 54.88 (2026)")
     available_tariffs = op_info["tariffs"]
     has_effekt = "Effekttariff" in available_tariffs and op_info.get("effekttariff")
+    _fuse_fee_yr = op_fuse_fees.get(fuse_amps, 0)
     if has_effekt:
         eff = op_info["effekttariff"]
-        st.info(f"**{grid_operator}** har effekttariff: "
-                f"{eff['effekt_rate']} kr/kW/mån, "
-                f"{eff['energy_rate']} öre/kWh")
+        st.info(f"**{grid_operator}** | {fuse_amps:.0f}A ({_fuse_fee_yr:,.0f} kr/år) | "
+                f"Effekttariff: {eff['effekt_rate']} kr/kW/mån, {eff['energy_rate']} öre/kWh")
     else:
-        st.info(f"**{grid_operator}**: {', '.join(available_tariffs)} — "
-                f"alla simuleras, bästa väljs")
+        st.info(f"**{grid_operator}** | {fuse_amps:.0f}A ({_fuse_fee_yr:,.0f} kr/år) | "
+                f"{', '.join(available_tariffs)} — alla simuleras, bästa väljs")
     with st.expander("Tariffdetaljer", expanded=False):
         if "tidstariff" in op_info:
             t = op_info["tidstariff"]
