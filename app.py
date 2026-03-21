@@ -650,7 +650,8 @@ if use_heating_model:
                                           min_value=0.01, max_value=1.5, step=0.001, format="%.3f",
                                           help=_hloss_help)
                 if _calibrated:
-                    st.caption(f"Kalibrerat (energiklass gav {h_loss_from_class:.3f})")
+                    st.caption(f"Kalibrerat mot verklig förbrukning. "
+                               f"Energiklass, yta och VP-inställningar nedan påverkar inte simuleringen.")
                 hp_max = st.number_input("VP max värmeeffekt (kW)", value=_hp_max_default, min_value=1.0, step=0.5,
                                           help=f"Uppskattat {_hp_max_default} kW för {house_area} m². "
                                                f"Typiskt 4-8 kW för villa, 8-12 kW för större hus.")
