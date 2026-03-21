@@ -588,6 +588,19 @@ scheduled_loads = [LoadSchedule(l["name"], l["power"], l["start"], l["end"])
 flexible_loads = [FlexibleLoad(f["name"], f["power"], f["daily"], f["sm"], f["em"])
                   for f in st.session_state["flexible_loads"] if f["power"] > 0]
 
+# Add luft-luft as flexible load when enabled (absorbs solar surplus)
+if st.session_state.get("use_aa", False):
+    _aa_kw = st.session_state.get("aa_heat_kw", 3.2)
+    _aa_cool = st.session_state.get("aa_cool_kw", 2.5)
+    # Summer: pre-cool house on solar surplus (thermal storage)
+    flexible_loads.append(FlexibleLoad("Luft-luft AC (solöverskott)", _aa_cool, daily_kwh=8.0,
+                                        start_month=6, end_month=8))
+    # Spring/autumn: pre-heat on solar surplus
+    flexible_loads.append(FlexibleLoad("Luft-luft värme (solöverskott)", _aa_kw, daily_kwh=8.0,
+                                        start_month=3, end_month=5))
+    flexible_loads.append(FlexibleLoad("Luft-luft värme (solöverskott)", _aa_kw, daily_kwh=8.0,
+                                        start_month=9, end_month=10))
+
 # Heating model
 st.subheader("Uppvärmning")
 use_heating_model = st.checkbox("Temperaturanpassad lastmodell", value=True,
