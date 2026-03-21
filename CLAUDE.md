@@ -14,12 +14,23 @@ python elpriser.py batteri --help       # CLI help
 ## Architecture overview
 
 The app follows a 6-step flow:
-1. **Load data** — spot prices from elprisetjustnu.se API or CSV, optional consumption from Tibber/Vattenfall
-2. **Configure setup** — grid operator, fuse, solar, loads, heating model (auto-calibrated from weather + consumption)
+1. **Load data** — Two expanders, both usable simultaneously:
+   - Tibber API: consumption profile + auto-fills address, fuse, grid operator, house size, heating type
+   - Vattenfall/CSV: 3+ years hourly consumption data (Serie sheet cols L-W = hourly per month)
+   - Spot prices: auto-syncs date range with loaded consumption data
+2. **Configure setup** — grid operator (8 presets), fuse (simulated as output), solar, loads, heating model
+   - Heating: calibrated from energy class OR manual Tibber Insights breakdown OR auto-fit from consumption
+   - Calibrated data overrides energy class completely (house size irrelevant when calibrated)
+   - EV default 23-03 (4h, based on Tibber hourly analysis — conservative)
+   - Flex loads: pool (summer) + varmvatten dump (year-round, absorbs remaining solar)
 3. **Investment** — editable battery price table (NKON defaults), installation, solar costs, financing (bolån/kontant)
-4. **Results** — simulates ALL battery sizes × ALL tariffs, recommends optimal. Scenario comparison (normal vs high-price years)
-5. **Detail view** — monthly breakdown for selected battery, "with vs without" cost comparison
-6. **Future outlook** — volatility sensitivity analysis
+4. **Results** — simulates ALL battery sizes × ALL tariffs × fuse comparison, recommends optimal
+   - Annualized cost vs savings (same timescale), cumulative cashflow chart
+   - Scenario comparison by year (normal vs high-price years)
+   - Financing: compared over battery lifetime, not loan term
+   - PDF bank report with methodology and three future scenarios
+5. **Detail view** — monthly breakdown for selected battery
+6. **Future scenarios** — Konservativt (1.5x), Sannolikt (2.5x), Hög volatilitet (4.0x)
 
 ## Key files
 
@@ -47,7 +58,7 @@ The app follows a 6-step flow:
 - `elpriser.py` — CLI + price fetching from elprisetjustnu.se (cached in .price_cache/)
 - `tibber_source.py` — Tibber GraphQL API (hourly/daily/monthly consumption, prices, seasonal profiles)
 - `entsoe_source.py` — ENTSO-E API + EUR/SEK via ECB (frankfurter.app)
-- `import_vattenfall.py` — Parse Vattenfall Eldistribution Excel (Serie sheet, column 6 = Summa/dag)
+- `import_vattenfall.py` — Parse Vattenfall Eldistribution Excel. Daily (col 7 = Summa/dag) AND hourly (cols L-W = 24 values/day/month). `parse_vattenfall_hourly()` extracts 8,760 records/year.
 - `import_consumption.py` — Generic CSV consumption import
 
 ### App & deployment
@@ -152,19 +163,30 @@ The app follows a 6-step flow:
 - Supports parallel connection (up to 16 units)
 
 ## Lessons learned (bugs found and fixed)
-- **Battery must charge before flex loads** — flex loads stole 5,000 kr/yr from battery when given priority
-- **Calibrated h_loss must be computed before widget renders** — Streamlit widgets lock their default on first render
+- **Battery must charge before flex loads** — flex loads stole 5,000 kr/yr from battery when given priority on solar
+- **Calibrated h_loss must override energy class BEFORE widget renders** — Streamlit locks widget defaults on first render
+- **ALL defaults must derive from calibration when available** — 270 m² gave HP=10.8 kW (wrong), calibration gives 5.8 kW (correct)
 - **EV scheduled_loads must be passed with daily_load_override** — total_load_kw now adds them automatically
 - **Financing over battery lifetime, not loan term** — 50yr mortgage makes anything look positive, but battery dies at 15yr
 - **Test the actual integration path** — writing PDF to file works, Streamlit download_button needs bytes not bytearray
+- **House area is irrelevant when calibrated** — h_loss IS the house, area is only a starting guess
+
+## Verified simulation results (2026-03-21)
+With correct parameters (20A fuse, 270 m², calibrated h_loss=0.160, EV 23-03):
+- 2x32 kWh: 16,821 kr/yr, 7.4 year payback, +128,603 kr over 15 years
+- On mortgage (3%, 50yr): +1,003 kr/mån netto
+- Battery alone (no solar): still profitable
+- All tests pass (10 integration tests + full end-to-end)
 
 ## Known issues / future work
 - Solar model is simplified (monthly averages, no weather variation)
 - No degradation modeling for battery capacity over time
-- Tibber hourly data limited to ~30 days via API, monthly goes back ~12 months
+- Tibber hourly data limited to ~30 days via API — use Vattenfall Excel for long history
 - Pool heat pump modeled as constant 3 kW but real heat pumps vary with temperature
-- EV modeled as 11 kW for full scheduled window — actual usage is ~23 kWh/day (2 hours). Conservative.
-- Effekttariff savings estimation is approximate (compares peak with/without, doesn't model real-time peak shaving strategy)
-- Grid operator data is manually maintained — rates may change
+- EV modeled as 11 kW × 23-03 — actual varies (Tibber analysis shows 3-4h charging). Conservative.
+- Effekttariff savings estimation is approximate (no real-time peak shaving strategy)
+- Grid operator data manually maintained — rates may change
+- Vattenfall hourly extraction: some files produce 364 days instead of 365 (Dec 31 missing in some months)
+- **Future project**: real-time battery controller (separate repo) — talks to Tibber API, BMS, EV charger for live optimization
 - Grid operator data is manually maintained — rates may change
 - **Future project**: real-time battery controller (separate repo) that talks to Tibber API, BMS, EV charger (OCPP/Modbus) for live optimization + grid flexibility rewards
