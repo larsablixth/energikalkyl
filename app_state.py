@@ -26,6 +26,12 @@ PERSIST_KEYS = {
     "cal_ev": "scalar",
     "cal_active": "scalar",
     "cal_always": "scalar",
+    # Air-to-air settings
+    "use_aa": "scalar",
+    "aa_heat_kw": "scalar",
+    "aa_cool_kw": "scalar",
+    "aa_min_temp": "scalar",
+    "aa_cool_threshold": "scalar",
 }
 
 

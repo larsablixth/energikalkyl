@@ -733,7 +733,7 @@ if use_heating_model:
                                          help="Hämtas från Tibber om tillgänglig. Påverkar COP-beräkningen.")
 
             if heating_type == "Bergvärme (mark/sjö)":
-                cop_info = "COP 2.3–5.0 beroende på utetemperatur"
+                cop_info = "COP ~3.2–3.5 (nära konstant, brintemp varierar inte med utetemperatur)"
             elif heating_type == "Luftvärmepump":
                 cop_info = "COP 1.5–4.5, sämre vid kyla"
             elif heating_type == "Fjärrvärme":
@@ -741,6 +741,32 @@ if use_heating_model:
             else:
                 cop_info = "COP = 1.0 (ren eluppvärmning)"
             st.caption(cop_info)
+
+            # Air-to-air supplement (works with any primary heating)
+            use_aa = st.checkbox("Luft-luft komplement (AC + uppvärmning)", value=False,
+                                  key="use_aa",
+                                  help="Luft-luft VP som komplement: AC på sommaren, "
+                                       "uppvärmning när utetemperaturen är tillräckligt hög.")
+            if use_aa:
+                col_aa1, col_aa2 = st.columns(2)
+                with col_aa1:
+                    aa_heat_kw = st.number_input("Luft-luft värmeeffekt (kW)", value=3.5,
+                                                  min_value=0.5, max_value=10.0, step=0.5,
+                                                  key="aa_heat_kw",
+                                                  help="Max värmeeffekt. Typiskt 2-5 kW för en enhet.")
+                    aa_min_temp = st.number_input("Min utetemperatur för drift (°C)", value=1.0,
+                                                   min_value=-20.0, max_value=10.0, step=1.0,
+                                                   key="aa_min_temp",
+                                                   help="Under denna temperatur stängs luft-luft av.")
+                with col_aa2:
+                    aa_cool_kw = st.number_input("Luft-luft kyleffekt (kW)", value=3.5,
+                                                  min_value=0.5, max_value=10.0, step=0.5,
+                                                  key="aa_cool_kw",
+                                                  help="Max kyleffekt för AC-drift.")
+                    aa_cool_threshold = st.number_input("Kylning startar vid (°C ute)", value=24.0,
+                                                         min_value=18.0, max_value=35.0, step=1.0,
+                                                         key="aa_cool_threshold",
+                                                         help="Utetemperatur då AC startar.")
 
         # Derive defaults: if calibrated from real data, use calibration-consistent values.
         # If not calibrated, estimate from house area.
@@ -810,10 +836,20 @@ if use_heating_model:
         else:
             cop_base, cop_slope = 3.4, 0.056  # ground source default
 
+        _aa_kwargs = {}
+        if use_aa:
+            _aa_kwargs = dict(
+                aa_enabled=True,
+                aa_max_heat_kw=aa_heat_kw,
+                aa_max_cool_kw=aa_cool_kw,
+                aa_min_temp=aa_min_temp,
+                aa_cool_threshold=aa_cool_threshold,
+            )
         heating_config = HeatingConfig(
             h_loss=h_loss, hp_max_heat_kw=hp_max,
             elpatron_kw=elpatron_kw, dhw_kwh_per_day=dhw_kwh,
             cop_base=cop_base, cop_slope=cop_slope,
+            **_aa_kwargs,
         )
 
         # --- Manual calibration from Tibber Insights ---

@@ -25,6 +25,15 @@ class HeatingConfig:
     elpatron_kw: float = 3.0      # supplementary electric heater capacity
     dhw_kwh_per_day: float = 8.0  # domestic hot water electricity (kWh/day)
     dhw_cop: float = 2.3          # COP for DHW heating (higher supply temp)
+    # Air-to-air supplement (luft-luft as complement to primary system)
+    aa_enabled: bool = False       # enable air-to-air supplement
+    aa_max_heat_kw: float = 3.5    # max heating output (kW thermal)
+    aa_max_cool_kw: float = 3.5    # max cooling output (kW thermal)
+    aa_cop_heat_base: float = 4.0  # heating COP at 7°C outdoor
+    aa_cop_heat_slope: float = 0.1 # COP change per °C outdoor (heating)
+    aa_cop_cool: float = 3.5       # cooling COP (fairly constant)
+    aa_min_temp: float = 1.0       # min outdoor temp for heating use (°C)
+    aa_cool_threshold: float = 24.0  # indoor temp above which cooling activates
 
 
 def cop_ground_source(t_outdoor: float, config: HeatingConfig) -> float:
@@ -39,26 +48,65 @@ def heating_demand_kw(t_outdoor: float, config: HeatingConfig) -> float:
     return config.h_loss * delta_t
 
 
+def cop_air_to_air(t_outdoor: float, config: HeatingConfig) -> float:
+    """COP for air-to-air heat pump (heating mode)."""
+    cop = config.aa_cop_heat_base + config.aa_cop_heat_slope * (t_outdoor - 7.0)
+    return max(1.5, cop)
+
+
 def heating_electricity_kw(t_outdoor: float, config: HeatingConfig) -> float:
-    """Electricity consumed by heat pump + elpatron for space heating.
+    """Electricity consumed by heat pump(s) + elpatron for space heating.
+
+    When aa_enabled: luft-luft handles part of the heating demand above aa_min_temp,
+    bergvärme handles the rest. Below aa_min_temp, bergvärme only.
 
     Returns total electrical power (kW) for space heating at given outdoor temp.
     """
     demand_kw = heating_demand_kw(t_outdoor, config)
     if demand_kw <= 0:
-        return 0.0
+        return cooling_electricity_kw(t_outdoor, config)
 
+    total_elec = 0.0
+    remaining_demand = demand_kw
+
+    # Air-to-air handles part of heating when warm enough
+    if config.aa_enabled and t_outdoor >= config.aa_min_temp:
+        aa_cop = cop_air_to_air(t_outdoor, config)
+        aa_heat = min(remaining_demand, config.aa_max_heat_kw)
+        total_elec += aa_heat / aa_cop
+        remaining_demand -= aa_heat
+
+    if remaining_demand <= 0:
+        return total_elec
+
+    # Primary heat pump (bergvärme/other) covers remaining demand
     cop = cop_ground_source(t_outdoor, config)
-
-    # Heat pump covers up to its max thermal output
-    hp_heat = min(demand_kw, config.hp_max_heat_kw)
-    hp_elec = hp_heat / cop
+    hp_heat = min(remaining_demand, config.hp_max_heat_kw)
+    total_elec += hp_heat / cop
+    remaining_demand -= hp_heat
 
     # Elpatron covers the rest (COP = 1.0)
-    shortfall = demand_kw - hp_heat
-    elpatron_elec = min(shortfall, config.elpatron_kw) if shortfall > 0 else 0
+    if remaining_demand > 0:
+        total_elec += min(remaining_demand, config.elpatron_kw)
 
-    return hp_elec + elpatron_elec
+    return total_elec
+
+
+def cooling_electricity_kw(t_outdoor: float, config: HeatingConfig) -> float:
+    """Electricity consumed by air-to-air for cooling.
+
+    Simple model: cooling demand proportional to (T_outdoor - threshold).
+    Returns kW electricity for cooling.
+    """
+    if not config.aa_enabled:
+        return 0.0
+    if t_outdoor <= config.aa_cool_threshold:
+        return 0.0
+
+    # Cooling demand: roughly proportional to delta above threshold
+    # Simplified: solar gain + internal gains create ~0.1 kW/°C cooling need
+    cooling_demand_kw = min(config.aa_max_cool_kw, 0.1 * (t_outdoor - config.aa_cool_threshold))
+    return cooling_demand_kw / config.aa_cop_cool
 
 
 def base_load_from_total(total_daily_kwh: float, heating_daily_kwh: float,
