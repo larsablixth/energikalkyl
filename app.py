@@ -248,9 +248,22 @@ with col_prices:
     else:
         zone = st.selectbox("Elområde", ZONES, index=_default_zone_idx,
                             format_func=lambda z: f"{z} — {ZONE_NAMES[z]}")
+        # Auto-detect date range from loaded consumption data
+        _vf_hourly = st.session_state.get("vattenfall_hourly", [])
+        _seasonal = st.session_state.get("seasonal_profile")
+        if _vf_hourly:
+            _vf_dates = sorted(set(h["date"] for h in _vf_hourly))
+            _default_start = date.fromisoformat(_vf_dates[0])
+            _default_end = date.fromisoformat(_vf_dates[-1])
+        else:
+            _default_start = date.today() - timedelta(days=3*365)
+            _default_end = date.today() - timedelta(days=1)
+
         col_d1, col_d2 = st.columns(2)
-        start_date = col_d1.date_input("Från", value=date.today() - timedelta(days=3*365))
-        end_date = col_d2.date_input("Till", value=date.today() - timedelta(days=1))
+        start_date = col_d1.date_input("Från", value=_default_start)
+        end_date = col_d2.date_input("Till", value=_default_end)
+        if _vf_hourly:
+            st.caption(f"Datumintervall anpassat till Vattenfall-data ({_vf_dates[0]} — {_vf_dates[-1]})")
         if st.button("Hämta priser", type="primary"):
             with st.spinner("Hämtar spotpriser..."):
                 rows = fetch_range(start_date, end_date, zone)
@@ -278,7 +291,21 @@ if df_prices is None or len(df_prices) == 0:
 else:
     has_consumption = "seasonal_profile" in st.session_state or "hourly_profile" in st.session_state
     if has_consumption:
-        st.success("**Data laddad.** Konfigurera din anläggning nedan och kör simuleringen.")
+        # Check date overlap
+        _price_min = df_prices["date"].min()
+        _price_max = df_prices["date"].max()
+        _vf_h = st.session_state.get("vattenfall_hourly", [])
+        if _vf_h:
+            _cons_min = min(h["date"] for h in _vf_h)
+            _cons_max = max(h["date"] for h in _vf_h)
+            if _price_min > _cons_min or _price_max < _cons_max:
+                st.warning(f"Prisdata ({_price_min} — {_price_max}) täcker inte hela "
+                           f"förbrukningsperioden ({_cons_min} — {_cons_max}). "
+                           f"Hämta priser för samma period för bästa resultat.")
+            else:
+                st.success("**Data laddad och synkroniserad.** Konfigurera din anläggning nedan.")
+        else:
+            st.success("**Data laddad.** Konfigurera din anläggning nedan och kör simuleringen.")
     else:
         st.info("**Prisdata laddad.** Förbrukningsprofil saknas — standardvärden används. "
                 "Konfigurera din anläggning nedan.")
