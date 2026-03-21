@@ -375,23 +375,36 @@ with col_sys3:
     with st.expander("Tariffdetaljer", expanded=False):
         if "tidstariff" in op_info:
             t = op_info["tidstariff"]
-            peak_rate = st.number_input("Tidstariff höglast (öre/kWh)", value=t["peak"], step=0.5)
-            offpeak_rate = st.number_input("Tidstariff övrig (öre/kWh)", value=t["offpeak"], step=0.5)
+            st.markdown("**Tidstariff**")
+            st.caption("Höglast: jan-mar + nov-dec, vardagar 06-22 (ej helgdagar). Övrig tid: alla andra timmar.")
+            peak_rate = st.number_input("Höglast (öre/kWh)", value=t["peak"], step=0.5)
+            offpeak_rate = st.number_input("Övrig tid (öre/kWh)", value=t["offpeak"], step=0.5)
         else:
             peak_rate = 76.5
             offpeak_rate = 30.5
         if "enkeltariff" in op_info:
             t = op_info["enkeltariff"]
-            flat_rate = st.number_input("Enkeltariff (öre/kWh)", value=t["flat_rate"], step=0.5)
+            st.markdown("**Enkeltariff**")
+            st.caption("Samma avgift alla timmar, alla dagar.")
+            flat_rate = st.number_input("Överföring (öre/kWh)", value=t["flat_rate"], step=0.5)
         else:
             flat_rate = 44.5
         if has_effekt:
             eff = op_info["effekttariff"]
+            st.markdown("**Effekttariff**")
+            _peak_desc = "alla timmar" if not eff.get("peak_months") else (
+                f"vardagar {eff.get('peak_hour_start', 0):02d}-{eff.get('peak_hour_end', 24):02d}, "
+                f"nov-mar" if eff.get("peak_weekday_only") else "alla dagar")
+            _night_desc = f", natt (22-06) räknas till {eff.get('night_discount', 1)*100:.0f}%" if eff.get("night_discount", 1) < 1 else ""
+            st.caption(f"Effektmätning: medel av {eff['top_n_peaks']} högsta toppar från olika dagar. "
+                       f"Mätperiod: {_peak_desc}{_night_desc}.")
             effekt_rate = st.number_input("Effektavgift (kr/kW/mån)", value=eff["effekt_rate"], step=1.0)
-            effekt_energy = st.number_input("Effekt energiavgift (öre/kWh)", value=eff["energy_rate"], step=0.5)
+            effekt_energy = st.number_input("Energiavgift (öre/kWh)", value=eff["energy_rate"], step=0.5)
             effekt_top_n = st.number_input("Antal toppar", value=eff["top_n_peaks"], min_value=1, max_value=10)
+        st.markdown("---")
         monthly_fee = op_fuse_fees.get(fuse_amps, 0) / 12
-        st.caption(f"Abonnemang: {monthly_fee:,.0f} kr/mån ({op_fuse_fees.get(fuse_amps, 0):,.0f} kr/år)")
+        st.caption(f"Energiskatt: {energy_tax} öre/kWh | "
+                   f"Abonnemang {fuse_amps:.0f}A: {monthly_fee:,.0f} kr/mån ({op_fuse_fees.get(fuse_amps, 0):,.0f} kr/år)")
 
 # Loads
 st.subheader("Elanvändare")
