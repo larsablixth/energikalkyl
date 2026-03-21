@@ -1,6 +1,7 @@
 # API keys
 .entsoe_key
 .tibber_token
+.eon_credentials
 
 # Cache
 .price_cache/

@@ -123,7 +123,38 @@ with col_consumption:
                 except Exception as e:
                     st.error(f"Tibber-fel: {e}")
 
-    # File upload section — always visible (works alongside Tibber)
+    # E.ON section
+    with st.expander("Hämta från E.ON Energidata", expanded=False):
+        st.caption("För E.ON-kunder. Kräver API-nyckel (.eon_credentials). "
+                   "Kontakta E.ON för att skapa API-konto.")
+        col_eon1, col_eon2 = st.columns(2)
+        eon_install_id = col_eon1.text_input("Installations-ID", key="eon_install",
+                                              help="Ditt E.ON installations-ID (finns på fakturan)")
+        eon_years = col_eon2.number_input("Antal år", value=3, min_value=1, max_value=5, key="eon_years")
+        if st.button("Hämta från E.ON", type="primary", key="eon_fetch"):
+            if not eon_install_id:
+                st.error("Ange installations-ID")
+            else:
+                with st.spinner("Hämtar förbrukningsdata från E.ON..."):
+                    try:
+                        from eon_source import fetch_consumption as eon_fetch, eon_to_seasonal_profile
+                        from datetime import timedelta
+                        end = date.today() - timedelta(days=1)
+                        start = date(end.year - eon_years, end.month, end.day)
+                        eon_data = eon_fetch(eon_install_id, start, end, resolution="hour")
+                        if eon_data:
+                            seasonal = eon_to_seasonal_profile(eon_data)
+                            st.session_state["seasonal_profile"] = seasonal
+                            days = len(set(h["date"] for h in eon_data))
+                            total = sum(h["kwh"] for h in eon_data)
+                            st.success(f"E.ON data laddad: {len(eon_data):,} timvärden ({days} dagar), "
+                                       f"{total:,.0f} kWh")
+                        else:
+                            st.warning("Inga data returnerades. Kontrollera installations-ID.")
+                    except Exception as e:
+                        st.error(f"E.ON-fel: {e}")
+
+    # File upload section — always visible (works alongside Tibber/E.ON)
     with st.expander("Ladda upp förbrukningsdata (Vattenfall/CSV)", expanded=not st.session_state.get("seasonal_profile")):
         st.caption("Vattenfall Excel-filer ger 3+ års timdata — bästa underlaget för kalibrering. "
                    "Ladda ner från Vattenfall Mina sidor → Förbrukning → Exportera.")
