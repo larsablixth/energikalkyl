@@ -32,6 +32,8 @@ PERSIST_KEYS = {
     "aa_cool_kw": "scalar",
     "aa_min_temp": "scalar",
     "aa_cool_threshold": "scalar",
+    "aa_price": "scalar",
+    "aa_lifetime": "scalar",
 }
 
 

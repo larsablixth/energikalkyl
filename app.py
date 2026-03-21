@@ -748,7 +748,7 @@ if use_heating_model:
                                   help="Luft-luft VP som komplement: AC på sommaren, "
                                        "uppvärmning när utetemperaturen är tillräckligt hög.")
             if use_aa:
-                col_aa1, col_aa2 = st.columns(2)
+                col_aa1, col_aa2, col_aa3 = st.columns(3)
                 with col_aa1:
                     aa_heat_kw = st.number_input("Luft-luft värmeeffekt (kW)", value=3.5,
                                                   min_value=0.5, max_value=10.0, step=0.5,
@@ -767,6 +767,12 @@ if use_heating_model:
                                                          min_value=18.0, max_value=35.0, step=1.0,
                                                          key="aa_cool_threshold",
                                                          help="Utetemperatur då AC startar.")
+                with col_aa3:
+                    aa_price = st.number_input("Pris luft-luft inkl installation (SEK)", value=25000,
+                                                min_value=0, step=1000, key="aa_price",
+                                                help="Typiskt 15,000-35,000 kr inkl installation.")
+                    aa_lifetime = st.number_input("Livslängd luft-luft (år)", value=15,
+                                                    min_value=5, max_value=25, step=1, key="aa_lifetime")
 
         # Derive defaults: if calibrated from real data, use calibration-consistent values.
         # If not calibrated, estimate from house area.
@@ -851,6 +857,59 @@ if use_heating_model:
             cop_base=cop_base, cop_slope=cop_slope,
             **_aa_kwargs,
         )
+
+        # Luft-luft ROI estimate (compare electricity with vs without)
+        if use_aa and temps_data:
+            cfg_without = HeatingConfig(
+                h_loss=h_loss, hp_max_heat_kw=hp_max,
+                elpatron_kw=elpatron_kw, dhw_kwh_per_day=dhw_kwh,
+                cop_base=cop_base, cop_slope=cop_slope,
+            )
+            _aa_kwh_with = 0
+            _aa_kwh_without = 0
+            for _d, _hourly in temps_data.items():
+                for _hr, _t in _hourly:
+                    _aa_kwh_with += heating_electricity_kw(_t, heating_config)
+                    _aa_kwh_without += heating_electricity_kw(_t, cfg_without)
+            _aa_years = len(temps_data) / 365.25
+            _aa_saving_kwh = (_aa_kwh_without - _aa_kwh_with) / _aa_years
+            _aa_cooling_kwh = 0
+            for _d, _hourly in temps_data.items():
+                for _hr, _t in _hourly:
+                    from heating import cooling_electricity_kw
+                    _aa_cooling_kwh += cooling_electricity_kw(_t, heating_config)
+            _aa_cooling_kwh_yr = _aa_cooling_kwh / _aa_years
+            # Estimate value: heating savings × avg spot price, cooling is added cost
+            _avg_ore = 60  # rough average spot + grid fee
+            _aa_saving_kr = _aa_saving_kwh * _avg_ore / 100
+            _aa_cooling_kr = _aa_cooling_kwh_yr * _avg_ore / 100
+            _aa_net_kr = _aa_saving_kr - _aa_cooling_kr
+            _aa_payback = aa_price / _aa_net_kr if _aa_net_kr > 0 else 999
+            _aa_profit = _aa_net_kr * aa_lifetime - aa_price
+
+            with st.expander("Luft-luft investering", expanded=False):
+                col_roi1, col_roi2 = st.columns(2)
+                with col_roi1:
+                    st.metric("Värmebesparing", f"{_aa_saving_kwh:,.0f} kWh/år",
+                              help="Minskad elförbrukning för uppvärmning tack vare luft-luft")
+                    st.metric("AC-förbrukning", f"{_aa_cooling_kwh_yr:,.0f} kWh/år",
+                              help="Tillkommande elförbrukning för kylning")
+                with col_roi2:
+                    st.metric("Nettobesparing", f"{_aa_net_kr:,.0f} kr/år",
+                              help="Värmebesparing minus AC-kostnad (vid ~60 öre/kWh snitt)")
+                    if _aa_net_kr > 0:
+                        st.metric("Återbetalningstid", f"{_aa_payback:.1f} år")
+                    else:
+                        st.metric("Återbetalningstid", "—",
+                                  help="AC-kostnaden överstiger värmebesparingen. "
+                                       "Investeringen motiveras av komfort, inte besparing.")
+                if _aa_net_kr > 0:
+                    st.info(f"Investering {aa_price:,} kr → netto **{_aa_profit:+,.0f} kr** "
+                            f"under {aa_lifetime} år ({_aa_net_kr/12:,.0f} kr/mån)")
+                else:
+                    st.info(f"Luft-luft sparar {_aa_saving_kwh:,.0f} kWh/år på uppvärmning "
+                            f"men AC-driften kostar {_aa_cooling_kwh_yr:,.0f} kWh/år. "
+                            f"Investeringen motiveras av komfort (AC), inte elbesparing.")
 
         # --- Manual calibration from Tibber Insights ---
         with st.expander("Kalibrera mot din förbrukning", expanded=True):
