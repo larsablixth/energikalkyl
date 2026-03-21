@@ -6,6 +6,7 @@
 # Cache
 .price_cache/
 .fx_cache.json
+.app_state/
 
 # Python
 __pycache__/
