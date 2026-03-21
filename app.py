@@ -613,18 +613,30 @@ if use_heating_model:
                 cop_info = "COP = 1.0 (ren eluppvärmning)"
             st.caption(cop_info)
 
-        # Derive sensible defaults from house area
-        # HP size: roughly 1 kW thermal per 25 m² for well-insulated house
-        _hp_max_default = round(max(4.0, min(12.0, house_area / 25)), 1)
-        # Base load scales with house area: ~0.4 kW for small, ~1.0 for large
-        _base_default = round(max(0.3, min(1.2, 0.3 + house_area / 300)), 2)
-        # DHW: ~4-8 kWh/day depending on household (proxy: house size)
-        # DHW: ~2 kWh electricity/person/day via heat pump, or estimate from house area
+        # Derive defaults: if calibrated from real data, use calibration-consistent values.
+        # If not calibrated, estimate from house area.
         _tibber_residents = st.session_state.get("tibber_home", {}).get("residents", 0)
-        if _tibber_residents > 0:
-            _dhw_default = round(max(3.0, min(12.0, _tibber_residents * 2.0)), 1)
+
+        if _calibrated:
+            # We know h_loss from real data. Derive HP size from peak demand at design temp (-15°C)
+            _peak_demand = h_loss_default * (21 - (-15))  # kW thermal
+            _hp_max_default = round(max(4.0, min(12.0, _peak_demand)), 1)
+            # Base and DHW: use Tibber Insights if available, otherwise conservative defaults
+            _cal_data = st.session_state.get("tibber_home", {})
+            if _tibber_residents > 0:
+                _dhw_default = round(max(3.0, min(12.0, _tibber_residents * 2.0)), 1)
+                _base_default = round(max(0.3, min(1.2, 0.3 + _tibber_residents * 0.1)), 2)
+            else:
+                _dhw_default = 6.0
+                _base_default = 0.68
         else:
-            _dhw_default = round(max(3.0, min(10.0, 3.0 + house_area / 50)), 1)
+            # No calibration — estimate from house area
+            _hp_max_default = round(max(4.0, min(12.0, house_area / 25)), 1)
+            _base_default = round(max(0.3, min(1.2, 0.3 + house_area / 300)), 2)
+            if _tibber_residents > 0:
+                _dhw_default = round(max(3.0, min(12.0, _tibber_residents * 2.0)), 1)
+            else:
+                _dhw_default = round(max(3.0, min(10.0, 3.0 + house_area / 50)), 1)
 
         # Detailed settings in expander
         with st.expander("Detaljerade VP-inställningar", expanded=False):
