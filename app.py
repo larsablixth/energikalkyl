@@ -42,17 +42,17 @@ col_consumption, col_prices = st.columns(2)
 # --- Consumption data (FIRST — Tibber auto-fills everything) ---
 with col_consumption:
     st.subheader("Förbrukningsprofil")
-    st.caption("Tibber-kunder: klicka Hämta — resten fylls i automatiskt. "
-               "Annars: ladda data eller ange manuellt i steg 2.")
-    cons_source = st.radio("Källa", ["Manuell", "Tibber API", "Vattenfall/CSV/Excel"], key="cons_src",
+    st.caption("Har du en elapp (Tibber, Greenely)? Hämta data automatiskt. "
+               "Annars: ladda CSV/Excel eller ange manuellt i steg 2.")
+    cons_source = st.radio("Källa", ["Manuell", "Elapp (Tibber)", "CSV/Excel"], key="cons_src",
                              help="Manuell = ange grundlast och laster i steg 2. Tibber/Vattenfall = importera din faktiska profil.")
 
     hourly_load_profile = None
     seasonal_load_profile = None
 
-    if cons_source == "Tibber API":
-        st.caption("Kräver .tibber_token-fil med din Tibber API-nyckel.")
-        if st.button("Hämta från Tibber", type="primary"):
+    if cons_source == "Elapp (Tibber)":
+        st.caption("Kräver Tibber API-nyckel (.tibber_token). Greenely-stöd kommer.")
+        if st.button("Hämta data", type="primary"):
             with st.spinner("Hämtar förbrukningsprofil och heminfo från Tibber..."):
                 try:
                     from tibber_source import (
@@ -123,7 +123,7 @@ with col_consumption:
                 except Exception as e:
                     st.error(f"Tibber-fel: {e}")
 
-    elif cons_source == "Vattenfall/CSV/Excel":
+    elif cons_source == "CSV/Excel":
         st.caption("Ladda upp Excel-filer från Vattenfall Mina sidor, eller CSV med timförbrukning.")
         cons_files = st.file_uploader("Förbrukningsdata", type=["csv", "txt", "xlsx", "xls"],
                                        accept_multiple_files=True, key="cons_upload")
