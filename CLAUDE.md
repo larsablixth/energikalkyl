@@ -185,8 +185,8 @@ With correct parameters (20A fuse, 270 m², calibrated h_loss=0.160, EV 23-03):
 - Pool heat pump modeled as constant 3 kW but real heat pumps vary with temperature
 - EV modeled as 11 kW × 23-03 — actual varies (Tibber analysis shows 3-4h charging). Conservative.
 - Effekttariff savings estimation is approximate (no real-time peak shaving strategy)
-- Grid operator data manually maintained — rates may change
-- Vattenfall hourly extraction: some files produce 364 days instead of 365 (Dec 31 missing in some months)
-- **Future project**: real-time battery controller (separate repo) — talks to Tibber API, BMS, EV charger for live optimization
-- Grid operator data is manually maintained — rates may change
-- **Future project**: real-time battery controller (separate repo) that talks to Tibber API, BMS, EV charger (OCPP/Modbus) for live optimization + grid flexibility rewards
+- Grid operator tariff data manually maintained in GRID_OPERATORS dict — rates may change
+- Vattenfall hourly extraction: some files produce 364 days instead of 365 (Dec 31 missing)
+- **RISE Eltariff-API**: open free API for grid tariffs, goal ALL 155 operators by 2027. Should replace hardcoded GRID_OPERATORS. GitHub: RI-SE/Eltariff-API, endpoints at api.goteborgenergi.cloud and api.tekniskaverken.net. Currently: Göteborg Energi, Tekniska verken, E.ON, Vattenfall, Halmstad, Kraftringen.
+- **Metry API**: aggregates consumption from 150k+ meters across operators. OAuth2, REST, hourly data. Could replace per-operator integrations. energimolnetapi11.docs.apiary.io
+- **Future project**: real-time battery controller (separate repo) — Tibber API + BMS + EV charger (OCPP/Modbus) for live optimization + grid flexibility rewards
