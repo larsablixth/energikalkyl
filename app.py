@@ -419,7 +419,7 @@ with col_l1:
         base_load = 1.5  # overridden by profile or heating model
 
     if "scheduled_loads" not in st.session_state:
-        st.session_state["scheduled_loads"] = [{"name": "Elbil", "power": 11.0, "start": 23, "end": 6}]
+        st.session_state["scheduled_loads"] = [{"name": "Elbil", "power": 11.0, "start": 23, "end": 3}]
 
     st.markdown("**Tidsstyrda laster**")
     st.caption("Laster med fast schema. Elbil: modelleras som nattladdning 23-06. "
