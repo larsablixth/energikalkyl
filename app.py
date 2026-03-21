@@ -1105,10 +1105,10 @@ else:
         {"Namn": "10 kWh",      "Kapacitet_kWh": 10.24,  "Max_kW": 7.5,  "Pris_SEK": round(1177 * EUR_SEK)},
         {"Namn": "16 kWh",      "Kapacitet_kWh": 16.10,  "Max_kW": 11.0, "Pris_SEK": round(1512 * EUR_SEK)},
         {"Namn": "32 kWh",      "Kapacitet_kWh": 32.15,  "Max_kW": 15.0, "Pris_SEK": round(2857 * EUR_SEK)},
-        {"Namn": "32+16 kWh",   "Kapacitet_kWh": 48.25,  "Max_kW": 15.0, "Pris_SEK": round((2857+1512) * EUR_SEK)},
-        {"Namn": "2x32 kWh",    "Kapacitet_kWh": 64.30,  "Max_kW": 15.0, "Pris_SEK": round(2857 * 2 * EUR_SEK)},
-        {"Namn": "2x32+16 kWh", "Kapacitet_kWh": 80.40,  "Max_kW": 15.0, "Pris_SEK": round((2857*2+1512) * EUR_SEK)},
-        {"Namn": "3x32 kWh",    "Kapacitet_kWh": 96.45,  "Max_kW": 15.0, "Pris_SEK": round(2857 * 3 * EUR_SEK)},
+        {"Namn": "32+16 kWh",   "Kapacitet_kWh": 48.25,  "Max_kW": 26.0, "Pris_SEK": round((2857+1512) * EUR_SEK)},
+        {"Namn": "2x32 kWh",    "Kapacitet_kWh": 64.30,  "Max_kW": 30.0, "Pris_SEK": round(2857 * 2 * EUR_SEK)},
+        {"Namn": "2x32+16 kWh", "Kapacitet_kWh": 80.40,  "Max_kW": 41.0, "Pris_SEK": round((2857*2+1512) * EUR_SEK)},
+        {"Namn": "3x32 kWh",    "Kapacitet_kWh": 96.45,  "Max_kW": 45.0, "Pris_SEK": round(2857 * 3 * EUR_SEK)},
     ])
 
     battery_table = st.data_editor(
