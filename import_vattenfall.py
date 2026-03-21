@@ -2,17 +2,14 @@
 Import consumption data from Vattenfall Eldistribution Excel files.
 
 Vattenfall format (Serie sheet):
-- Row 0: year
-- Row 1: headers with month names in columns 11-22 (Jan-Dec)
-- Row 2: column labels
-- Row 3+: one row per day of month
-  - Col 0: month name (jan., feb., ...)
-  - Col 2: day of month (1-31)
-  - Cols 11-22: daily kWh per month (only the column matching current month has data)
-
-Since the Tim sheets use cross-sheet formulas that openpyxl can't evaluate,
-we extract daily data from the Serie sheet and combine with Tibber hourly
-shape for the simulation.
+- Row 1: year
+- Row 2: headers with month names in columns 12-23 (Jan-Dec)
+- Row 3: column labels (col 7 = Summa/dag)
+- Row 4+: one row per day
+  - Col 1: month name, Col 3: day of month, Col 7: daily total kWh
+  - Cols 12-23: HOURLY data (24 values per day, one column per month)
+    Col 12 (L) = January, Col 13 (M) = February, ..., Col 23 (W) = December
+    Each column has 24 consecutive values per day (hour 00-23)
 """
 
 import openpyxl
@@ -100,6 +97,77 @@ def parse_vattenfall_excel(path: str) -> list[dict]:
     return results
 
 
+def parse_vattenfall_hourly(path: str) -> list[dict]:
+    """
+    Extract hourly consumption from Vattenfall Excel (Serie sheet columns L-W).
+
+    Returns list of dicts with date, hour (0-23), kwh.
+    """
+    wb = openpyxl.load_workbook(path, data_only=True)
+    if "Serie" not in wb.sheetnames:
+        wb.close()
+        return []
+
+    ws = wb["Serie"]
+
+    # Get year from row 1
+    year = None
+    for cell in ws.iter_rows(min_row=1, max_row=1, values_only=True):
+        for v in cell:
+            if isinstance(v, (int, float)) and 2000 <= v <= 2100:
+                year = int(v)
+                break
+
+    if year is None:
+        wb.close()
+        return []
+
+    # Columns 12-23 (L-W) = Jan-Dec hourly data
+    # Each column: row 3 = first value (header/hour 0 of day 1)
+    # Then 24 values per day
+    import calendar
+    hourly = []
+    for month_offset, col in enumerate(range(12, 24)):
+        month = month_offset + 1
+        days_in_month = calendar.monthrange(year, month)[1]
+
+        # Read all values in this column
+        vals = []
+        for r in range(3, ws.max_row + 1):
+            v = ws.cell(r, col).value
+            if v is not None and isinstance(v, (int, float)):
+                vals.append(float(v))
+
+        if not vals:
+            continue
+
+        # First value might be a monthly average — skip if count matches days*24 + 1
+        if len(vals) == days_in_month * 24 + 1:
+            vals = vals[1:]
+        elif len(vals) < days_in_month * 24:
+            # Partial month or different format — take what we have
+            pass
+
+        # Extract 24 values per day
+        for day_idx in range(min(days_in_month, len(vals) // 24)):
+            try:
+                d = date(year, month, day_idx + 1)
+            except ValueError:
+                continue
+            for hour in range(24):
+                idx = day_idx * 24 + hour
+                if idx < len(vals):
+                    hourly.append({
+                        "date": d.isoformat(),
+                        "hour": hour,
+                        "kwh": round(vals[idx], 3),
+                    })
+
+    wb.close()
+    print(f"  År: {year}, {len(hourly)} timvärden ({len(hourly)//24} dagar)")
+    return hourly
+
+
 def load_vattenfall_files(*paths: str) -> list[dict]:
     """Load and merge multiple Vattenfall Excel files."""
     all_data = []
@@ -125,6 +193,58 @@ def load_vattenfall_files(*paths: str) -> list[dict]:
         print(f"  Snitt: {total_kwh/num_days:.0f} kWh/dag | {total_kwh/num_days*365.25:,.0f} kWh/år")
 
     return unique
+
+
+def load_vattenfall_hourly(*paths: str) -> list[dict]:
+    """Load and merge hourly data from multiple Vattenfall Excel files."""
+    all_hourly = []
+    for path in paths:
+        print(f"  Läser timdata från {Path(path).name}...")
+        all_hourly.extend(parse_vattenfall_hourly(path))
+
+    # Sort and deduplicate by (date, hour)
+    all_hourly.sort(key=lambda r: (r["date"], r["hour"]))
+    seen = set()
+    unique = []
+    for r in all_hourly:
+        key = (r["date"], r["hour"])
+        if key not in seen:
+            seen.add(key)
+            unique.append(r)
+
+    if unique:
+        total = sum(r["kwh"] for r in unique)
+        days = len(set(r["date"] for r in unique))
+        print(f"  Totalt: {len(unique)} timvärden, {days} dagar, {total:,.0f} kWh")
+
+    return unique
+
+
+def vattenfall_hourly_to_seasonal_profile(hourly_data: list[dict]) -> dict[int, dict[int, float]]:
+    """Build seasonal hourly profile directly from Vattenfall hourly data.
+
+    Returns dict: month -> hour -> average kW
+    """
+    from collections import defaultdict
+    sums = defaultdict(lambda: defaultdict(float))
+    counts = defaultdict(lambda: defaultdict(int))
+
+    for r in hourly_data:
+        m = int(r["date"].split("-")[1])
+        h = r["hour"]
+        sums[m][h] += r["kwh"]  # kWh per hour ≈ kW average
+        counts[m][h] += 1
+
+    profile = {}
+    for m in range(1, 13):
+        profile[m] = {}
+        for h in range(24):
+            if counts[m][h] > 0:
+                profile[m][h] = round(sums[m][h] / counts[m][h], 3)
+            else:
+                profile[m][h] = 0.0
+
+    return profile
 
 
 def vattenfall_to_monthly_profile(data: list[dict]) -> dict[int, float]:

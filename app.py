@@ -153,16 +153,46 @@ with col_consumption:
                                 continue
 
                 if all_vf:
-                    from import_vattenfall import vattenfall_to_seasonal_profile
-                    seen = set()
-                    unique = sorted([r for r in all_vf if r["date"] not in seen and not seen.add(r["date"])],
-                                    key=lambda x: x["date"])
-                    hourly_shape = st.session_state.get("hourly_profile")
-                    seasonal = vattenfall_to_seasonal_profile(unique, hourly_shape)
-                    st.session_state["seasonal_profile"] = seasonal
-                    total = sum(r["consumption_kwh"] for r in unique)
-                    avg = total / len(unique)
-                    st.success(f"Förbrukning laddad: **{len(unique)} dagar** | Snitt: {avg:.0f} kWh/dag | ~{avg*365:,.0f} kWh/år")
+                    from import_vattenfall import (
+                        vattenfall_to_seasonal_profile, parse_vattenfall_hourly,
+                        vattenfall_hourly_to_seasonal_profile,
+                    )
+                    # Try hourly extraction first (much better)
+                    all_hourly = []
+                    for f2 in cons_files:
+                        if f2.name.lower().endswith((".xlsx", ".xls")):
+                            with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp2:
+                                tmp2.write(f2.getvalue())
+                                tmp2_path = tmp2.name
+                            try:
+                                all_hourly.extend(parse_vattenfall_hourly(tmp2_path))
+                            except Exception:
+                                pass
+                            finally:
+                                os.unlink(tmp2_path)
+
+                    if all_hourly:
+                        # Use real hourly data — best quality
+                        seasonal = vattenfall_hourly_to_seasonal_profile(all_hourly)
+                        st.session_state["seasonal_profile"] = seasonal
+                        st.session_state["vattenfall_hourly"] = all_hourly
+                        days = len(set(h["date"] for h in all_hourly))
+                        total = sum(h["kwh"] for h in all_hourly)
+                        avg = total / days if days > 0 else 0
+                        st.success(f"Timdata laddad: **{len(all_hourly):,} timvärden** ({days} dagar) | "
+                                   f"Snitt: {avg:.0f} kWh/dag | ~{avg*365:,.0f} kWh/år")
+                    else:
+                        # Fallback to daily totals
+                        seen = set()
+                        unique = sorted([r for r in all_vf if r["date"] not in seen and not seen.add(r["date"])],
+                                        key=lambda x: x["date"])
+                        hourly_shape = st.session_state.get("hourly_profile")
+                        seasonal = vattenfall_to_seasonal_profile(unique, hourly_shape)
+                        st.session_state["seasonal_profile"] = seasonal
+                        total = sum(r["consumption_kwh"] for r in unique)
+                        avg = total / len(unique)
+                        st.success(f"Daglig data laddad: **{len(unique)} dagar** | "
+                                   f"Snitt: {avg:.0f} kWh/dag | ~{avg*365:,.0f} kWh/år")
                 elif all_csv:
                     from import_consumption import consumption_to_hourly_profile, consumption_to_monthly_daily
                     profile = consumption_to_hourly_profile(all_csv)
