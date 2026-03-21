@@ -1,30 +1,87 @@
 """
 Standard consumption data format for Energikalkyl.
 
-All provider-specific converters produce this JSON format. The app reads only this format.
-Converters handle the messy provider-specific parsing separately.
+All provider-specific converters produce this JSON format. The app reads only
+this format. Converters handle the messy provider-specific parsing separately.
 
-Format:
+If your grid operator is not supported by the included converters, you can
+write your own. The only requirement is that the output matches the JSON
+schema below.
+
+
+JSON Schema
+===========
+
 {
-    "version": 1,
-    "source": "vattenfall",          # provider name
-    "metering_point": "735999...",   # optional, for reference
-    "unit": "kWh",
-    "resolution": "hourly",
-    "period": {
-        "start": "2023-01-01",
-        "end": "2025-12-31"
+    "version": 1,                        # REQUIRED. Always 1.
+    "source": "vattenfall",              # REQUIRED. Provider name (free text).
+    "metering_point": "735999...",       # Optional. Swedish metering point ID
+                                         #   (anläggnings-id), 18 digits.
+    "unit": "kWh",                       # REQUIRED. Always "kWh".
+    "resolution": "hourly",              # REQUIRED. Always "hourly".
+    "period": {                          # REQUIRED. Date range of the data.
+        "start": "2023-01-01",           #   ISO 8601 date (YYYY-MM-DD).
+        "end": "2025-12-31"              #   Inclusive.
     },
-    "summary": {
-        "total_kwh": 66000,
-        "days": 1095,
-        "avg_kwh_per_day": 60.3
+    "summary": {                         # REQUIRED. Pre-computed statistics.
+        "total_kwh": 66000,              #   Sum of all kwh values.
+        "days": 1095,                    #   Number of unique dates.
+        "avg_kwh_per_day": 60.3          #   total_kwh / days.
     },
-    "data": [
-        {"date": "2023-01-01", "hour": 0, "kwh": 2.31},
+    "data": [                            # REQUIRED. One entry per hour.
+        {
+            "date": "2023-01-01",        #   ISO 8601 date (YYYY-MM-DD).
+            "hour": 0,                   #   Hour of day, 0-23 (integer).
+            "kwh": 2.31                  #   Consumption in kWh (float, >= 0).
+        },
         ...
     ]
 }
+
+
+Field details
+-------------
+
+- **version**: Must be 1. Future format changes will increment this.
+- **source**: Free-text provider name. Used for display only. Examples:
+  "vattenfall", "eon", "ellevio", "tibber", "greenely".
+- **metering_point**: Optional. The 18-digit Swedish anläggnings-ID
+  (starts with 735999). Useful for matching data to a specific meter.
+- **data**: Must contain hourly records sorted by (date, hour). A complete
+  year has 8,760 records (8,784 in leap years). Missing hours are allowed
+  but reduce calibration accuracy. Aim for at least 1 full year of data;
+  3+ years is ideal.
+- **kwh**: Energy consumed during that hour. Must be >= 0. Typical range
+  for a Swedish villa: 0.5-15 kWh/h (higher during winter with heat pump).
+
+
+Writing your own converter
+--------------------------
+
+Your converter needs to:
+
+1. Read the provider's native format (Excel, CSV, API response, etc.)
+2. Extract hourly consumption as (date, hour, kwh) tuples
+3. Call consumption_format.save() or write the JSON directly
+
+Minimal example:
+
+    from consumption_format import save
+
+    records = []
+    for row in my_provider_data:
+        records.append({
+            "date": row.date.strftime("%Y-%m-%d"),
+            "hour": row.date.hour,
+            "kwh": float(row.consumption),
+        })
+
+    save("consumption_myprovider.json", records, source="myprovider")
+
+Or write the JSON directly without importing this module — just match the
+schema above. The app validates on load and will report any errors.
+
+See convert_vattenfall.py, convert_eon.py, and convert_csv.py for examples.
 """
 
 import json
