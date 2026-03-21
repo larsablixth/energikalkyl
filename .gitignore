@@ -16,6 +16,7 @@ venv/
 priser.csv
 tibber_daglig.csv
 tibber_historik.csv
+consumption_*.json
 
 # Keep these for deployment:
 # historik_SE3_3ar.csv

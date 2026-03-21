@@ -155,18 +155,30 @@ with col_consumption:
                         st.error(f"E.ON-fel: {e}")
 
     # File upload section — always visible (works alongside Tibber/E.ON)
-    with st.expander("Ladda upp förbrukningsdata (Vattenfall/CSV)", expanded=not st.session_state.get("seasonal_profile")):
-        st.caption("Vattenfall Excel-filer ger 3+ års timdata — bästa underlaget för kalibrering. "
-                   "Ladda ner från Vattenfall Mina sidor → Förbrukning → Exportera.")
-        cons_files = st.file_uploader("Förbrukningsdata", type=["csv", "txt", "xlsx", "xls"],
+    with st.expander("Ladda upp förbrukningsdata (JSON/Vattenfall/CSV)", expanded=not st.session_state.get("seasonal_profile")):
+        st.caption("Förbered data med konverteringsverktyg: "
+                   "`python convert_vattenfall.py *.xlsx`, `python convert_eon.py`, eller `python convert_csv.py`. "
+                   "Du kan även ladda upp Vattenfall Excel eller CSV direkt.")
+        cons_files = st.file_uploader("Förbrukningsdata", type=["json", "csv", "txt", "xlsx", "xls"],
                                        accept_multiple_files=True, key="cons_upload")
         if cons_files:
             try:
                 import tempfile, os
                 all_vf = []
                 all_csv = []
+                all_json = []
                 for f in cons_files:
-                    if f.name.lower().endswith((".xlsx", ".xls")):
+                    if f.name.lower().endswith(".json"):
+                        import json as _json
+                        from consumption_format import validate, to_seasonal_profile
+                        raw = f.getvalue().decode("utf-8")
+                        data = _json.loads(raw)
+                        errors = validate(data)
+                        if errors:
+                            st.error(f"Ogiltigt JSON-format i {f.name}: {'; '.join(errors)}")
+                        else:
+                            all_json.extend(data["data"])
+                    elif f.name.lower().endswith((".xlsx", ".xls")):
                         from import_vattenfall import parse_vattenfall_excel
                         with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
                             tmp.write(f.getvalue())
@@ -185,7 +197,18 @@ with col_consumption:
                             except (UnicodeDecodeError, ValueError):
                                 continue
 
-                if all_vf:
+                if all_json:
+                    # Standard JSON format — best path, already hourly
+                    from consumption_format import to_seasonal_profile
+                    seasonal = to_seasonal_profile(all_json)
+                    st.session_state["seasonal_profile"] = seasonal
+                    st.session_state["vattenfall_hourly"] = all_json  # same format
+                    days = len(set(r["date"] for r in all_json))
+                    total = sum(r["kwh"] for r in all_json)
+                    avg = total / days if days > 0 else 0
+                    st.success(f"JSON laddad: **{len(all_json):,} timvärden** ({days} dagar) | "
+                               f"Snitt: {avg:.0f} kWh/dag | ~{avg*365:,.0f} kWh/år")
+                elif all_vf:
                     from import_vattenfall import (
                         vattenfall_to_seasonal_profile, parse_vattenfall_hourly,
                         vattenfall_hourly_to_seasonal_profile,
