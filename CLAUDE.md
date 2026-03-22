@@ -16,17 +16,23 @@ python elpriser.py batteri --help       # CLI help
 The app follows a 6-step flow:
 1. **Load data** — Two expanders, both usable simultaneously:
    - Tibber API: consumption profile + auto-fills address, fuse, grid operator, house size, heating type
-   - Vattenfall/CSV: 3+ years hourly consumption data (Serie sheet cols L-W = hourly per month)
+   - Vattenfall/CSV/JSON: 3+ years hourly consumption data. JSON is standard format (see `consumption_format.py`)
    - Spot prices: auto-syncs date range with loaded consumption data
+   - **Session persistence**: loaded data survives page refreshes (stored in `.app_state/`)
 2. **Configure setup** — grid operator (8 presets), fuse (simulated as output), solar, loads, heating model
    - Heating: calibrated from energy class OR manual Tibber Insights breakdown OR auto-fit from consumption
    - Calibrated data overrides energy class completely (house size irrelevant when calibrated)
    - EV default 23-03 (4h, based on Tibber hourly analysis — conservative)
    - Flex loads: pool (summer) + varmvatten dump (year-round, absorbs remaining solar)
-3. **Investment** — editable battery price table (NKON defaults), installation, solar costs, financing (bolån/kontant)
+   - **Luft-luft komplement**: optional air-to-air HP (heating above min temp + AC cooling). Model preset: Mitsubishi Hero 2.0 LN25. Auto-registers as flex load to absorb solar surplus.
+3. **Investment** — two pricing modes:
+   - Specificerade batterier: editable price table (NKON defaults 5-96 kWh), user can add/remove
+   - SEK per kWh: enter price/kWh, auto-generates 5-100 kWh sizes, finds optimal for self-consumption
 4. **Results** — simulates ALL battery sizes × ALL tariffs × fuse comparison, recommends optimal
    - Annualized cost vs savings (same timescale), cumulative cashflow chart
    - Scenario comparison by year (normal vs high-price years)
+   - Self-consumption optimization: finds smallest battery for near-zero grid export
+   - Luft-luft contribution shown separately (not part of main ROI)
    - Financing: compared over battery lifetime, not loan term
    - PDF bank report with methodology and three future scenarios
 5. **Detail view** — monthly breakdown for selected battery
@@ -50,7 +56,7 @@ The app follows a 6-step flow:
   - Anpassad (fully editable)
 
 ### Heating & weather
-- `heating.py` — Temperature-dependent heating model. `HeatingConfig` with h_loss, COP model, elpatron threshold. Supports bergvärme, luftvärmepump, fjärrvärme, direktel. `fit_heating_model()` auto-calibrates against actual consumption data.
+- `heating.py` — Temperature-dependent heating model. `HeatingConfig` with h_loss, COP model, elpatron threshold. Supports bergvärme, luftvärmepump, fjärrvärme, direktel. Optional luft-luft supplement (air-to-air for heating above configurable min temp + AC cooling). `fit_heating_model()` auto-calibrates against actual consumption data.
 - `weather.py` — SMHI weather data integration. 230 active stations across Sweden. Auto-selects nearest station to user's city. Fetches and caches hourly temperature data. `load_temperatures()`, `find_nearest_station()`.
 - `smhi_stations.py` — Auto-generated lookup: station ID → (name, lat, lon)
 
@@ -60,11 +66,17 @@ The app follows a 6-step flow:
 - `entsoe_source.py` — ENTSO-E API + EUR/SEK via ECB (frankfurter.app)
 - `import_vattenfall.py` — Parse Vattenfall Eldistribution Excel. Daily (col 7 = Summa/dag) AND hourly (cols L-W = 24 values/day/month). `parse_vattenfall_hourly()` extracts 8,760 records/year.
 - `import_consumption.py` — Generic CSV consumption import
+- `consumption_format.py` — Standard JSON consumption format: validate/load/save + `to_seasonal_profile()`. All providers convert to this format.
+- `convert_vattenfall.py` — CLI: Vattenfall Excel → standard JSON
+- `convert_eon.py` — CLI: E.ON API → standard JSON
+- `convert_csv.py` — CLI: generic Swedish CSV → standard JSON
 
 ### App & deployment
-- `app.py` — Streamlit web GUI (main user interface, ~1500 lines)
+- `app.py` — Streamlit web GUI (main user interface, ~2000 lines)
+- `app_state.py` — Session persistence across page refreshes (SQLite-free, JSON in `.app_state/`)
 - `Dockerfile` + `docker-compose.yml` — Container deployment
 - `.weather_cache/` — Cached SMHI temperature data per station
+- `.app_state/` — Persisted session data (consumption, prices, calibration)
 - `historik_SE3_3ar.csv` — 3 years of SE3 spot prices (2023-2026)
 
 ## Critical implementation details
@@ -88,8 +100,8 @@ The app follows a 6-step flow:
 - For SEOM/Ellevio customers: this is often the LARGEST savings component (400-900 kr/mån)
 
 ### Heating model (heating.py)
-- COP model for ground-source: COP = 3.4 + 0.056 × T_outdoor (bergvärme)
-- COP model for air-source: COP = 2.8 + 0.08 × T_outdoor (luftvärmepump)
+- COP model for ground-source: COP = 3.4 + 0.056 × T_outdoor (bergvärme — near-constant, brine temp stable year-round)
+- COP model for air-source: COP = 2.8 + 0.08 × T_outdoor (luftvärmepump — drops significantly in cold)
 - Fjärrvärme: COP = 99 (essentially no electrical heating cost)
 - Direktel: COP = 1.0
 - House heat loss: P_heat = h_loss × max(0, 21 − T_outdoor)
@@ -98,6 +110,18 @@ The app follows a 6-step flow:
 - Auto-calibration: `fit_heating_model()` uses least-squares fit of actual consumption vs temperature
 - Calibrated values (from Tibber 2024+2025 data for reference user):
   - h_loss = 0.160 kW/°C, HP max = 6 kW, DHW = 6 kWh/day, base = 0.68 kW
+
+### Air-to-air supplement (heating.py)
+- Optional luft-luft VP as complement to primary heating system
+- Heating mode: active above configurable min temp (default 1°C), offloads primary system
+- Cooling mode (AC): activates above threshold (default 24°C), 0.1 kW/°C cooling demand
+- Default model: Mitsubishi Electric Hero 2.0 LN25 (SCOP 5.2, SEER 10.5, A+++)
+  - Nominal: 3.2 kW heat, 2.5 kW cool, COP ~4.5 heating / ~4.2 cooling
+  - Price: ~30,000 kr inkl installation (23,990 + ~6,000)
+  - Drifttemp: -35°C till +31°C
+- Auto-registers as flexible load: pre-cool (summer) / pre-heat (spring/autumn) on solar surplus
+- ROI shown separately from main battery/solar investment
+- Multi-unit batteries charged sequentially (one at a time), max power = single unit limit (15 kW for 32 kWh)
 
 ### Weather data (weather.py)
 - SMHI Open Data API, parameter 1 (hourly air temperature), no API key needed
@@ -136,7 +160,9 @@ The app follows a 6-step flow:
 - **Solar self-consumption value** only counted when solar is part of investment
 - **The battery doesn't save kWh** — it shifts WHEN you buy (cheap night → expensive peak)
 - **EV is tidsstyrd last** (car at work during day), pool + varmvatten are flexibla laster (solar surplus)
-- **Zero-export strategy**: varmvatten element (3 kW, no daily cap) absorbs surplus after battery. Near-zero grid export. No need for export-capable inverter or microproducer registration.
+- **Zero-export strategy**: varmvatten element (3 kW, no daily cap) + luft-luft (pre-heat/cool) absorb surplus after battery. Near-zero grid export. No need for export-capable inverter or microproducer registration.
+- **Session persistence**: consumption data, prices, calibration inputs survive page refreshes (`.app_state/session.json`)
+- **Luft-luft is optional and separate**: shown outside main investment ROI, contribution reported as bonus
 - **Tibber auto-fill**: one click fetches address, city, grid operator, fuse size, house area, residents, heating type, price area — all auto-configured
 - **Tibber Insights calibration**: manual input of annual breakdown (heating/EV/active/always-on) for per-house h_loss fitting
 - **Calibrated h_loss overrides energy class**: if consumption data is loaded, calibration runs BEFORE widget renders
@@ -158,9 +184,11 @@ The app follows a 6-step flow:
 
 ## NKON ESS Pro prices (EUR excl. VAT, ~Q1 2025)
 - 5.12 kWh: €600, 10.24 kWh: €1177, 16.1 kWh: €1512, 32.15 kWh: €2857
-- Max charge/discharge: 15 kW (32 kWh), 11 kW (16 kWh)
+- Max charge/discharge: 15 kW (32 kWh), 11 kW (16 kWh) — per unit
 - LiFePO4, 8000 cycles, Seplos 300A BMS
-- Supports parallel connection (up to 16 units)
+- Supports parallel connection (up to 16 units), but charged sequentially in this setup
+- Default presets: 5, 10, 16, 32, 32+16, 2x32, 2x32+16, 3x32 kWh
+- Alternative pricing: SEK/kWh mode auto-generates 5-100 kWh sizes for self-consumption optimization
 
 ## Lessons learned (bugs found and fixed)
 - **Battery must charge before flex loads** — flex loads stole 5,000 kr/yr from battery when given priority on solar
