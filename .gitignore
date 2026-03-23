@@ -5,6 +5,7 @@
 
 # Cache
 .price_cache/
+.pvgis_cache/
 .fx_cache.json
 .app_state/
 

@@ -26,6 +26,9 @@ PERSIST_KEYS = {
     "cal_ev": "scalar",
     "cal_active": "scalar",
     "cal_always": "scalar",
+    # Solar production data (Tibber)
+    "tibber_solar_hourly": "dict",
+    "tibber_solar_monthly": "dict",
     # Air-to-air settings
     "use_aa": "scalar",
     "aa_heat_kw": "scalar",

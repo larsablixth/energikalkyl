@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 from datetime import date, timedelta
 from elpriser import fetch_range, load_csv, ZONES, ZONE_NAMES
 from batteri import BatteryConfig, LoadSchedule, FlexibleLoad, simulate
-from solar import SolarConfig, estimate_yearly_production, estimate_lifetime_production
+from solar import SolarConfig, estimate_yearly_production, estimate_lifetime_production, MONTHLY_KWH_PER_KWP
 from tariff import (
     Tidstariff, FastTariff, EffektTariff,
     FUSE_YEARLY_FEE, get_fuse_fee_monthly, get_fuse_fee_yearly,
@@ -67,7 +67,8 @@ with col_consumption:
                     from tibber_source import (
                         fetch_consumption, consumption_to_load_profile,
                         fetch_monthly_consumption, build_seasonal_hourly_profile,
-                        get_homes,
+                        get_homes, fetch_production, fetch_daily_production,
+                        production_to_hourly_dict, production_to_monthly_kwh,
                     )
                     # Fetch home info (address, grid company, fuse, house size, heating)
                     homes = get_homes()
@@ -111,6 +112,18 @@ with col_consumption:
                         seasonal = build_seasonal_hourly_profile(nodes, monthly)
                         st.session_state["seasonal_profile"] = seasonal
 
+                    # Fetch solar production data if available
+                    try:
+                        prod_hourly = fetch_production(hours=24*30)
+                        prod_daily = fetch_daily_production(days=365*3) if prod_hourly else []
+                        if prod_hourly:
+                            st.session_state["tibber_solar_hourly"] = production_to_hourly_dict(prod_hourly)
+                            # Use daily data for monthly averages (longer history)
+                            prod_for_monthly = prod_daily if prod_daily else prod_hourly
+                            st.session_state["tibber_solar_monthly"] = production_to_monthly_kwh(prod_for_monthly)
+                    except Exception:
+                        pass  # No solar panels on this Tibber account
+
                     home_info = st.session_state.get("tibber_home", {})
                     addr_str = f"{home_info.get('address', '')} {home_info.get('city', '')}".strip()
                     parts = ["Tibber-data laddad"]
@@ -128,6 +141,10 @@ with col_consumption:
                                     "ELECTRIC": "Direktel", "OTHER": "Övrigt"}
                         parts.append(_hs_map.get(home_info["heating_source"],
                                                   home_info["heating_source"]))
+                    if st.session_state.get("tibber_solar_monthly"):
+                        monthly_kwh = st.session_state["tibber_solar_monthly"]
+                        yearly = sum(monthly_kwh.values())
+                        parts.append(f"Sol: {yearly:,.0f} kWh/år")
                     st.success(" | ".join(parts))
                 except Exception as e:
                     st.error(f"Tibber-fel: {e}")
@@ -438,7 +455,87 @@ with col_sys2:
                                         help="1.0 = du får hela spotpriset. 0 = ingen försäljning till nät.")
         export_fee = st.number_input("Försäljningsavgift (öre/kWh)", value=5.0, min_value=0.0, step=1.0,
                                       help="Tibber tar ~5 öre/kWh vid försäljning till nät.")
-        solar_config = SolarConfig(capacity_kwp=solar_kwp) if solar_kwp > 0 else None
+        # --- Solar production data sources ---
+        _solar_source = st.radio("Soldata", ["Modell (cos³)", "PVGIS (satellit)", "CSV (växelriktare)"],
+                                  index=1 if not st.session_state.get("tibber_solar_monthly") else 0,
+                                  horizontal=True, key="solar_source",
+                                  help="PVGIS ger platsspecifik produktion baserad på satellitdata (2005-2023). "
+                                       "CSV för egen data från växelriktare.")
+
+        if _solar_source == "PVGIS (satellit)":
+            from weather import SWEDISH_CITIES
+            _th = st.session_state.get("tibber_home", {})
+            _pvgis_lat = _th.get("latitude", 0)
+            _pvgis_lon = _th.get("longitude", 0)
+            if not (_pvgis_lat and _pvgis_lon):
+                _pvgis_city = st.selectbox("Plats för soldata", list(SWEDISH_CITIES.keys()),
+                                            index=0, key="pvgis_city")
+                _pvgis_lat, _pvgis_lon = SWEDISH_CITIES[_pvgis_city]
+            _c1, _c2 = st.columns(2)
+            _pvgis_tilt = _c1.number_input("Lutning (°)", value=35, min_value=0, max_value=90, step=5,
+                                            key="pvgis_tilt", help="0=horisontellt, 35=typiskt tak, 90=fasad")
+            _pvgis_aspect = _c2.number_input("Riktning (°)", value=0, min_value=-180, max_value=180, step=15,
+                                              key="pvgis_aspect", help="0=söder, -90=öster, 90=väster")
+            if st.button("Hämta PVGIS-data", key="pvgis_fetch"):
+                with st.spinner("Hämtar satellitbaserad soldata från PVGIS..."):
+                    try:
+                        from pvgis_source import fetch_pvgis, pvgis_to_hourly_dict, pvgis_to_monthly_kwh
+                        records = fetch_pvgis(lat=_pvgis_lat, lon=_pvgis_lon, peakpower=solar_kwp,
+                                              loss=14, angle=_pvgis_tilt, aspect=_pvgis_aspect,
+                                              startyear=2020, endyear=2023)
+                        if records:
+                            st.session_state["tibber_solar_hourly"] = pvgis_to_hourly_dict(records)
+                            st.session_state["tibber_solar_monthly"] = pvgis_to_monthly_kwh(records)
+                            yearly = sum(pvgis_to_monthly_kwh(records).values())
+                            years = len(set(r["date"][:4] for r in records))
+                            st.success(f"PVGIS: {len(records):,} timvärden ({years} år), "
+                                       f"~{yearly:,.0f} kWh/år")
+                        else:
+                            st.warning("Inga data från PVGIS. Kontrollera koordinater.")
+                    except Exception as e:
+                        st.error(f"PVGIS-fel: {e}")
+
+        elif _solar_source == "CSV (växelriktare)":
+            solar_csv = st.file_uploader("Solproduktion (CSV)", type=["csv", "txt"],
+                                          key="solar_csv_upload",
+                                          help="Timvis produktion från växelriktare (Huawei, SMA, Fronius, Enphase m.fl.)")
+            if solar_csv:
+                try:
+                    from import_solar import parse_solar_csv, solar_to_hourly_dict, solar_to_monthly_kwh
+                    raw = solar_csv.getvalue()
+                    records = None
+                    for enc in ["utf-8", "utf-8-sig", "iso-8859-1", "cp1252"]:
+                        try:
+                            records = parse_solar_csv(raw.decode(enc), solar_csv.name)
+                            break
+                        except (UnicodeDecodeError, ValueError):
+                            continue
+                    if records:
+                        st.session_state["tibber_solar_hourly"] = solar_to_hourly_dict(records)
+                        st.session_state["tibber_solar_monthly"] = solar_to_monthly_kwh(records)
+                        days = len(set(r["date"] for r in records))
+                        total = sum(r["production_kwh"] for r in records)
+                        st.success(f"Soldata laddad: {len(records):,} timvärden ({days} dagar), {total:,.0f} kWh totalt")
+                    else:
+                        st.warning("Kunde inte tolka soldata-CSV. Kontrollera format.")
+                except Exception as e:
+                    st.error(f"Importfel soldata: {e}")
+
+        _has_real_solar = bool(st.session_state.get("tibber_solar_monthly"))
+        _use_real_solar = _has_real_solar and _solar_source != "Modell (cos³)"
+        if solar_kwp > 0:
+            solar_config = SolarConfig(capacity_kwp=solar_kwp)
+            if _use_real_solar:
+                solar_config.real_production = st.session_state.get("tibber_solar_hourly")
+                solar_config.real_monthly_kwh = st.session_state.get("tibber_solar_monthly")
+                monthly_kwh = solar_config.real_monthly_kwh
+                yearly = sum(monthly_kwh.values())
+                _src_label = {"PVGIS (satellit)": "PVGIS", "CSV (växelriktare)": "CSV"}.get(
+                    _solar_source, "Tibber")
+                st.caption(f"{_src_label}: {yearly:,.0f} kWh/år "
+                           f"(cos³-modell: {sum(MONTHLY_KWH_PER_KWP.values()) * solar_kwp * 0.85:,.0f} kWh/år)")
+        else:
+            solar_config = None
     else:
         solar_config = None
         solar_kwp = 0

@@ -62,6 +62,9 @@ class SolarConfig:
     installation_cost: float = 0.0     # installation cost (SEK)
     lifetime_years: int = 25           # expected panel lifetime
     degradation_per_year: float = 0.005  # annual production loss (0.5%/year typical)
+    # Real production data (overrides model when available)
+    real_production: dict = None       # "YYYY-MM-DD HH:00" -> kW lookup
+    real_monthly_kwh: dict = None      # month (1-12) -> avg kWh/month (for model scaling)
 
 
 def hourly_production_factors(month: int) -> dict[int, float]:
@@ -118,10 +121,45 @@ def get_solar_production(month: int, hour: int, config: SolarConfig) -> float:
 def get_solar_for_slot(date_str: str, hour_str: str, config: SolarConfig) -> float:
     """
     Get solar production in kW for a specific date and hour slot.
+
+    Uses real production data from Tibber when available.
+    Falls back to model (optionally scaled to real monthly totals).
     """
-    month = int(date_str.split("-")[1])
     hour = int(hour_str.split(":")[0])
+    month = int(date_str.split("-")[1])
+
+    # Try real hourly data first
+    if config.real_production:
+        key = f"{date_str} {hour:02d}:00"
+        if key in config.real_production:
+            return config.real_production[key]
+
+    # Fall back to model, scaled by real monthly data if available
+    if config.real_monthly_kwh:
+        return _get_solar_scaled(month, hour, config)
+
     return get_solar_production(month, hour, config)
+
+
+def _get_solar_scaled(month: int, hour: int, config: SolarConfig) -> float:
+    """
+    Model-based production scaled to match real monthly totals.
+
+    Uses the cos³ hourly shape but scales so monthly total matches
+    actual measured production. This gives realistic hour-by-hour
+    distribution even for dates without direct measurements.
+    """
+    real_monthly = config.real_monthly_kwh.get(month, 0)
+    if real_monthly <= 0:
+        return get_solar_production(month, hour, config)
+
+    # Model monthly total for comparison
+    model_monthly = MONTHLY_KWH_PER_KWP[month] * config.capacity_kwp * config.performance_ratio
+    if model_monthly <= 0:
+        return 0.0
+
+    scale = real_monthly / model_monthly
+    return get_solar_production(month, hour, config) * scale
 
 
 def estimate_yearly_production(config: SolarConfig) -> float:

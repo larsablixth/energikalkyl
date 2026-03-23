@@ -133,6 +133,152 @@ def fetch_consumption(hours: int = 24 * 30, home_id: str = None, token: str = No
     return all_nodes
 
 
+def fetch_production(hours: int = 24 * 30, home_id: str = None, token: str = None) -> list[dict]:
+    """
+    Fetch hourly solar production data from Tibber.
+
+    Works for homes with solar panels registered in Tibber (e.g., via Pulse).
+    Same structure as consumption: nodes with from, to, production, profit, unitPrice.
+
+    Returns list of nodes, or empty list if no production data available.
+    """
+    token = token or _get_token()
+
+    if home_id is None:
+        homes = get_homes(token)
+        if not homes:
+            raise RuntimeError("Inga hem hittades på Tibber-kontot")
+        home_id = homes[0]["id"]
+
+    all_nodes = []
+    remaining = hours
+    batch_size = 2000
+
+    while remaining > 0:
+        fetch_count = min(remaining, batch_size)
+        query = """
+        {
+          viewer {
+            home(id: "%s") {
+              production(resolution: HOURLY, last: %d) {
+                nodes {
+                  from
+                  to
+                  production
+                  profit
+                  unitPrice
+                  currency
+                }
+              }
+            }
+          }
+        }
+        """ % (home_id, fetch_count)
+
+        data = _query(query, token)
+        nodes = data["data"]["viewer"]["home"]["production"]["nodes"]
+        nodes = [n for n in nodes if n.get("production") is not None]
+        all_nodes.extend(nodes)
+
+        if len(nodes) < fetch_count:
+            break
+        remaining -= fetch_count
+
+    if all_nodes:
+        print(f"  Hämtade {len(all_nodes)} timmar med solproduktionsdata")
+    return all_nodes
+
+
+def fetch_daily_production(days: int = 365 * 3, home_id: str = None, token: str = None) -> list[dict]:
+    """
+    Fetch daily solar production data from Tibber.
+    Daily resolution available for longer periods than hourly.
+    """
+    token = token or _get_token()
+
+    if home_id is None:
+        homes = get_homes(token)
+        if not homes:
+            raise RuntimeError("Inga hem hittades på Tibber-kontot")
+        home_id = homes[0]["id"]
+
+    all_nodes = []
+    remaining = days
+    batch_size = 2000
+
+    while remaining > 0:
+        fetch_count = min(remaining, batch_size)
+        query = """
+        {
+          viewer {
+            home(id: "%s") {
+              production(resolution: DAILY, last: %d) {
+                nodes {
+                  from
+                  to
+                  production
+                  profit
+                  unitPrice
+                  currency
+                }
+              }
+            }
+          }
+        }
+        """ % (home_id, fetch_count)
+
+        data = _query(query, token)
+        nodes = data["data"]["viewer"]["home"]["production"]["nodes"]
+        nodes = [n for n in nodes if n.get("production") is not None]
+        all_nodes.extend(nodes)
+
+        if len(nodes) < fetch_count:
+            break
+        remaining -= fetch_count
+
+    if all_nodes:
+        print(f"  Hämtade {len(all_nodes)} dagar med solproduktionsdata")
+    return all_nodes
+
+
+def production_to_hourly_dict(nodes: list[dict]) -> dict[str, float]:
+    """
+    Convert Tibber production nodes to a lookup dict: "YYYY-MM-DD HH:00" -> kW.
+
+    Since each node is 1 hour, production in kWh ≈ average kW for that hour.
+    """
+    result = {}
+    for node in nodes:
+        if node.get("production") is None:
+            continue
+        ts = datetime.fromisoformat(node["from"])
+        key = ts.strftime("%Y-%m-%d %H:00")
+        result[key] = node["production"]
+    return result
+
+
+def production_to_monthly_kwh(nodes: list[dict]) -> dict[int, float]:
+    """
+    Aggregate production nodes (hourly or daily) to monthly totals in kWh.
+    Returns dict mapping month (1-12) to total kWh across all years.
+    """
+    monthly: dict[int, list[float]] = {m: [] for m in range(1, 13)}
+    # Group by year-month
+    ym_totals: dict[tuple[int, int], float] = {}
+    for node in nodes:
+        if node.get("production") is None:
+            continue
+        ts = datetime.fromisoformat(node["from"])
+        key = (ts.year, ts.month)
+        ym_totals[key] = ym_totals.get(key, 0) + node["production"]
+
+    for (y, m), total in ym_totals.items():
+        monthly[m].append(total)
+
+    # Average across years
+    return {m: (sum(vals) / len(vals) if vals else 0.0) for m, vals in monthly.items()}
+
+
 def fetch_prices_tibber(home_id: str = None, token: str = None) -> list[dict]:
     """
     Fetch today's and tomorrow's prices from Tibber.
