@@ -74,7 +74,6 @@ The app follows a 6-step flow:
 - `entsoe_source.py` — ENTSO-E API + EUR/SEK via ECB (frankfurter.app)
 - `import_vattenfall.py` — Parse Vattenfall Eldistribution Excel. Daily (col 7 = Summa/dag) AND hourly (cols L-W = 24 values/day/month). `parse_vattenfall_hourly()` extracts 8,760 records/year.
 - `import_consumption.py` — Generic CSV consumption import
-- `consumption_format.py` — Standard JSON consumption format: validate/load/save + `to_seasonal_profile()`. All providers convert to this format.
 - `convert_vattenfall.py` — CLI: Vattenfall Excel → standard JSON
 - `convert_eon.py` — CLI: E.ON API → standard JSON
 - `convert_csv.py` — CLI: generic Swedish CSV → standard JSON
