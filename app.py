@@ -121,7 +121,13 @@ with col_consumption:
     # Tibber section — always visible
     with st.expander("Hämta från elapp (Tibber)", expanded=not st.session_state.get("tibber_home")):
         st.caption("Hämtar förbrukningsprofil, adress, nätägare, säkring och husdata. "
-                   "Kräver .tibber_token-fil.")
+                   "Hämta din token på [developer.tibber.com](https://developer.tibber.com/).")
+        _tibber_token_input = st.text_input("Tibber API-token", type="password", key="tibber_token_input",
+                                             help="Klistra in din personliga Tibber-token. "
+                                                  "Hittas på developer.tibber.com → ditt konto.")
+        if _tibber_token_input:
+            import os
+            os.environ["TIBBER_TOKEN"] = _tibber_token_input
         if st.button("Hämta data", type="primary"):
             with st.spinner("Hämtar förbrukningsprofil och heminfo från Tibber..."):
                 try:
@@ -414,8 +420,11 @@ with col_prices:
         st.warning("Ladda spotpriser för att köra simuleringen.")
 
 # --- Data status summary ---
-# Persist loaded data so it survives page refresh
-save_state(st.session_state)
+# Persist loaded data so it survives page refresh (may fail on cloud deployments)
+try:
+    save_state(st.session_state)
+except (OSError, IOError):
+    pass  # Read-only filesystem (e.g., Streamlit Cloud) — state lives in session only
 
 if df_prices is None or len(df_prices) == 0:
     st.error("**Steg 1 ej klart** — ladda spotpriser ovan för att fortsätta.")
