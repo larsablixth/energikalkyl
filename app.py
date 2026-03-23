@@ -73,8 +73,20 @@ from weather import (
 )
 from report import generate_report
 from app_state import save_state, load_state
+from translations import t, set_language, get_language
 
 st.set_page_config(page_title="Energikalkyl", page_icon="⚡", layout="wide")
+
+# Language selector — placed before everything else so all text respects the choice.
+# Stored in session_state so it survives Streamlit reruns.
+_lang_options = {"Svenska": "sv", "English": "en"}
+_lang_display = list(_lang_options.keys())
+_saved_lang = st.session_state.get("app_language", "sv")
+_lang_default = 0 if _saved_lang == "sv" else 1
+_selected_lang = st.selectbox(t("language"), _lang_display, index=_lang_default,
+                               key="lang_select", label_visibility="collapsed")
+st.session_state["app_language"] = _lang_options[_selected_lang]
+set_language(st.session_state["app_language"])
 
 # Restore persisted state on first load.
 # This means your consumption data, prices, and settings survive page refreshes.
@@ -85,8 +97,8 @@ if "_state_restored" not in st.session_state:
     else:
         st.session_state["_state_restored"] = "empty"
 
-st.title("Energikalkyl — El, Sol & Batteri")
-st.caption("Simulera lönsamheten i hembatteri och solceller baserat på verkliga elpriser och din förbrukning.")
+st.title(t("app_title"))
+st.caption(t("app_subtitle"))
 
 # ================================================================
 # STEP 1: LOAD DATA
@@ -104,33 +116,30 @@ st.caption("Simulera lönsamheten i hembatteri och solceller baserat på verklig
 # The spot prices tell it WHEN electricity is cheap vs expensive.
 # Together, they determine how much a battery can save you.
 # ================================================================
-st.header("1. Ladda data")
-st.caption("Börja med Tibber om du har det — då fylls förbrukning, plats och nätägare i automatiskt.")
+st.header(t("step1_header"))
+st.caption(t("step1_caption"))
 
 col_consumption, col_prices = st.columns(2)
 
 # --- Consumption data (FIRST — Tibber auto-fills everything) ---
 with col_consumption:
-    st.subheader("Förbrukningsprofil")
-    st.caption("**Bäst resultat:** Hämta från Tibber (ger adress, nätägare, säkring) "
-               "**och** ladda upp timdata från din nätägare (Vattenfall, E.ON eller CSV). Båda kan användas samtidigt.")
+    st.subheader(t("consumption_header"))
+    st.caption(t("consumption_best"))
 
     hourly_load_profile = None
     seasonal_load_profile = None
 
     # Tibber section — always visible
-    with st.expander("Hämta från elapp (Tibber)", expanded=not st.session_state.get("tibber_home")):
-        st.caption("Hämtar förbrukningsprofil, adress, nätägare, säkring och husdata. "
-                   "Hämta din token på [developer.tibber.com](https://developer.tibber.com/).")
-        _tibber_token_input = st.text_input("Tibber API-token", key="tibber_token_input",
-                                             placeholder="Klistra in din token här",
-                                             help="Klistra in din personliga Tibber-token. "
-                                                  "Hittas på developer.tibber.com → ditt konto.")
+    with st.expander(t("tibber_expander"), expanded=not st.session_state.get("tibber_home")):
+        st.caption(t("tibber_caption"))
+        _tibber_token_input = st.text_input(t("tibber_token_label"), key="tibber_token_input",
+                                             placeholder=t("tibber_token_placeholder"),
+                                             help=t("tibber_token_help"))
         if _tibber_token_input:
             import os
             os.environ["TIBBER_TOKEN"] = _tibber_token_input
-        if st.button("Hämta data", type="primary"):
-            with st.spinner("Hämtar förbrukningsprofil och heminfo från Tibber..."):
+        if st.button(t("fetch_data"), type="primary"):
+            with st.spinner(t("fetching_tibber")):
                 try:
                     from tibber_source import (
                         fetch_consumption, consumption_to_load_profile,
@@ -194,7 +203,7 @@ with col_consumption:
 
                     home_info = st.session_state.get("tibber_home", {})
                     addr_str = f"{home_info.get('address', '')} {home_info.get('city', '')}".strip()
-                    parts = ["Tibber-data laddad"]
+                    parts = [t("tibber_loaded")]
                     if addr_str:
                         parts.append(addr_str)
                     if home_info.get("grid_company"):
@@ -215,17 +224,16 @@ with col_consumption:
                         parts.append(f"Sol: {yearly:,.0f} kWh/år")
                     st.success(" | ".join(parts))
                 except Exception as e:
-                    st.error(f"Tibber-fel: {e}")
+                    st.error(f"{t('tibber_error')}: {e}")
 
     # E.ON section
-    with st.expander("Hämta från E.ON Energidata", expanded=False):
-        st.caption("För E.ON-kunder. Kräver API-nyckel (.eon_credentials). "
-                   "Kontakta E.ON för att skapa API-konto.")
+    with st.expander(t("eon_expander"), expanded=False):
+        st.caption(t("eon_caption"))
         col_eon1, col_eon2 = st.columns(2)
-        eon_install_id = col_eon1.text_input("Installations-ID", key="eon_install",
+        eon_install_id = col_eon1.text_input(t("installation_id"), key="eon_install",
                                               help="Ditt E.ON installations-ID (finns på fakturan)")
-        eon_years = col_eon2.number_input("Antal år", value=3, min_value=1, max_value=5, key="eon_years")
-        if st.button("Hämta från E.ON", type="primary", key="eon_fetch"):
+        eon_years = col_eon2.number_input(t("years_count"), value=3, min_value=1, max_value=5, key="eon_years")
+        if st.button(t("fetch_eon"), type="primary", key="eon_fetch"):
             if not eon_install_id:
                 st.error("Ange installations-ID")
             else:
@@ -249,13 +257,9 @@ with col_consumption:
                         st.error(f"E.ON-fel: {e}")
 
     # File upload section — always visible (works alongside Tibber/E.ON)
-    with st.expander("Ladda upp förbrukningsdata (Excel/CSV)", expanded=not st.session_state.get("seasonal_profile")):
-        st.caption("**Vattenfall:** Logga in på [mina.vattenfall.se](https://mina.vattenfall.se) → "
-                   "Elavtal → Elförbrukning → Exportera till Excel. Ladda upp Excel-filen direkt — "
-                   "det komplicerade formatet hanteras automatiskt.  \n"
-                   "**Övriga nätägare:** CSV med kolumner för datum, tid och förbrukning (kWh). "
-                   "Formatet detekteras automatiskt (semikolon/komma, svensk/engelsk header).")
-        cons_files = st.file_uploader("Förbrukningsdata", type=["csv", "txt", "xlsx", "xls"],
+    with st.expander(t("upload_expander"), expanded=not st.session_state.get("seasonal_profile")):
+        st.caption(t("upload_caption"))
+        cons_files = st.file_uploader(t("consumption_data"), type=["csv", "txt", "xlsx", "xls"],
                                        accept_multiple_files=True, key="cons_upload")
         if cons_files:
             try:
@@ -358,12 +362,12 @@ with col_consumption:
         avg = sum(hourly_load_profile.values()) / 24
         st.info(f"Förbrukningsprofil laddad: medel {avg:.1f} kW")
     else:
-        st.info("Ingen förbrukningsdata laddad — standardvärden används i steg 2.")
+        st.info(t("no_consumption"))
 
 # --- Price data (right column) ---
 with col_prices:
-    st.subheader("Elpriser (spotpris)")
-    st.caption("Historiska spotpriser behövs för simuleringen. Ju mer data, desto bättre resultat.")
+    st.subheader(t("prices_header"))
+    st.caption(t("prices_caption"))
 
     # Auto-detect zone from Tibber city if available
     _tibber_city = st.session_state.get("tibber_home", {}).get("city", "")
@@ -373,10 +377,10 @@ with col_prices:
     if _tibber_city.lower() in _se4_cities:
         _default_zone_idx = 3  # SE4
 
-    price_source = st.radio("Källa", ["Hämta från API", "Ladda CSV"], key="price_src",
+    price_source = st.radio(t("source"), [t("fetch_api"), t("load_csv")], key="price_src",
                              help="API hämtar från elprisetjustnu.se. CSV om du har en egen fil.")
 
-    if price_source == "Ladda CSV":
+    if price_source == t("load_csv"):
         price_file = st.file_uploader("Pris-CSV", type=["csv"], key="price_csv",
                                        help="CSV med kolumner: date, hour, sek_per_kwh")
         if price_file:
@@ -385,7 +389,7 @@ with col_prices:
         else:
             df_prices = st.session_state.get("df_prices")
     else:
-        zone = st.selectbox("Elområde", ZONES, index=_default_zone_idx,
+        zone = st.selectbox(t("price_zone"), ZONES, index=_default_zone_idx,
                             format_func=lambda z: f"{z} — {ZONE_NAMES[z]}")
         # Auto-detect date range from loaded consumption data
         _vf_hourly = st.session_state.get("vattenfall_hourly", [])
@@ -399,12 +403,12 @@ with col_prices:
             _default_end = date.today() - timedelta(days=1)
 
         col_d1, col_d2 = st.columns(2)
-        start_date = col_d1.date_input("Från", value=_default_start)
-        end_date = col_d2.date_input("Till", value=_default_end)
+        start_date = col_d1.date_input(t("from_date"), value=_default_start)
+        end_date = col_d2.date_input(t("to_date"), value=_default_end)
         if _vf_hourly:
             st.caption(f"Datumintervall anpassat till Vattenfall-data ({_vf_dates[0]} — {_vf_dates[-1]})")
-        if st.button("Hämta priser", type="primary"):
-            with st.spinner("Hämtar spotpriser..."):
+        if st.button(t("fetch_prices"), type="primary"):
+            with st.spinner(t("fetching_prices")):
                 rows = fetch_range(start_date, end_date, zone)
                 if rows:
                     df_prices = pd.DataFrame(rows)
@@ -421,7 +425,7 @@ with col_prices:
         n_days = df_prices["date"].nunique()
         st.success(f"Prisdata laddad: **{n_days} dagar** ({df_prices['date'].min()} → {df_prices['date'].max()})")
     else:
-        st.warning("Ladda spotpriser för att köra simuleringen.")
+        st.warning(t("load_prices_warning"))
 
 # --- Data status summary ---
 # Persist loaded data so it survives page refresh (may fail on cloud deployments)
@@ -431,7 +435,7 @@ except (OSError, IOError):
     pass  # Read-only filesystem (e.g., Streamlit Cloud) — state lives in session only
 
 if df_prices is None or len(df_prices) == 0:
-    st.error("**Steg 1 ej klart** — ladda spotpriser ovan för att fortsätta.")
+    st.error(t("step1_incomplete"))
     st.stop()
 else:
     has_consumption = "seasonal_profile" in st.session_state or "hourly_profile" in st.session_state
@@ -448,9 +452,9 @@ else:
                            f"förbrukningsperioden ({_cons_min} — {_cons_max}). "
                            f"Hämta priser för samma period för bästa resultat.")
             else:
-                st.success("**Data laddad och synkroniserad.** Konfigurera din anläggning nedan.")
+                st.success(t("data_synced"))
         else:
-            st.success("**Data laddad.** Konfigurera din anläggning nedan och kör simuleringen.")
+            st.success(t("data_loaded"))
     else:
         st.info("**Prisdata laddad.** Förbrukningsprofil saknas — standardvärden används. "
                 "Konfigurera din anläggning nedan.")
@@ -488,16 +492,15 @@ _median_range = df_spread["range"].median()
 _pct80_range = df_spread["range"].quantile(0.8)
 with st.expander(f"Prisspridning — lägsta till högsta: typiskt {_median_range:.0f} öre, bra dagar {_pct80_range:.0f} öre", expanded=False):
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Billigaste timmen", f"{df_spread['min'].mean():.0f} öre/kWh",
+    col1.metric(t("cheapest_hour"), f"{df_spread['min'].mean():.0f} öre/kWh",
                 help="Genomsnittlig lägsta timpris per dag")
-    col2.metric("Dyraste timmen", f"{df_spread['max'].mean():.0f} öre/kWh",
+    col2.metric(t("most_expensive_hour"), f"{df_spread['max'].mean():.0f} öre/kWh",
                 help="Genomsnittlig högsta timpris per dag")
-    col3.metric("Typisk dagsskillnad", f"{_median_range:.0f} öre/kWh",
+    col3.metric(t("typical_spread"), f"{_median_range:.0f} öre/kWh",
                 help="Median skillnad mellan billigaste och dyraste timmen")
-    col4.metric("Bra dagar (topp 20%)", f"{_pct80_range:.0f} öre/kWh",
+    col4.metric(t("good_days"), f"{_pct80_range:.0f} öre/kWh",
                 help="Skillnad på de 20% mest lönsamma dagarna")
-    st.caption("Batteriet laddar under de billigaste 4 timmarna och laddar ur under de dyraste. "
-               "Ju större skillnad, desto mer tjänar batteriet.")
+    st.caption(t("spread_explanation"))
     fig_sp = go.Figure()
     fig_sp.add_trace(go.Scatter(x=df_spread["datetime"], y=df_spread["range"],
                                  mode="lines", name="Daglig skillnad (max-min)",
@@ -535,49 +538,48 @@ with st.expander(f"Prisspridning — lägsta till högsta: typiskt {_median_rang
 #   - Heating model: temperature-dependent electricity usage based on SMHI weather
 #   - Calibration: fine-tune the model against your actual consumption data
 # ================================================================
-st.header("2. Din anläggning")
-st.caption("Beskriv ditt hus, elnät och elanvändare. Uppvärmningsmodellen anpassas automatiskt efter din plats och hustyp.")
+st.header(t("step2_header"))
+st.caption(t("step2_caption"))
 
 col_sys1, col_sys2, col_sys3 = st.columns(3)
 
 with col_sys1:
-    st.subheader("Batteri")
-    efficiency = st.slider("Verkningsgrad (%)", 70, 100, 93, help="Tur-retur-verkningsgrad. Gäller alla batteristorlekar.") / 100
-    cycle_life = st.number_input("Cykellivslängd", value=8000, min_value=100, step=500,
-                                  help="Antal cykler innan batteriet tappar kapacitet. LiFePO4: typiskt 6000-8000.")
+    st.subheader(t("battery"))
+    efficiency = st.slider(t("efficiency"), 70, 100, 93, help=t("efficiency_help")) / 100
+    cycle_life = st.number_input(t("cycle_life"), value=8000, min_value=100, step=500,
+                                  help=t("cycle_life_help"))
 
 with col_sys2:
-    st.subheader("Solceller")
-    use_solar = st.checkbox("Solceller", value=True)
+    st.subheader(t("solar_panels"))
+    use_solar = st.checkbox(t("solar_panels"), value=True)
     if use_solar:
-        solar_kwp = st.number_input("System (kWp)", value=15.0, min_value=0.0, step=0.5)
-        export_factor = st.number_input("Försäljningspris (andel av spot)", value=1.0, min_value=0.0, max_value=1.5, step=0.05,
-                                        help="1.0 = du får hela spotpriset. 0 = ingen försäljning till nät.")
-        export_fee = st.number_input("Försäljningsavgift (öre/kWh)", value=5.0, min_value=0.0, step=1.0,
-                                      help="Tibber tar ~5 öre/kWh vid försäljning till nät.")
+        solar_kwp = st.number_input(t("system_kwp"), value=15.0, min_value=0.0, step=0.5)
+        export_factor = st.number_input(t("export_price"), value=1.0, min_value=0.0, max_value=1.5, step=0.05,
+                                        help=t("export_price_help"))
+        export_fee = st.number_input(t("export_fee"), value=5.0, min_value=0.0, step=1.0,
+                                      help=t("export_fee_help"))
         # --- Solar production data sources ---
-        _solar_source = st.radio("Soldata", ["Modell (cos³)", "PVGIS (satellit)", "CSV (växelriktare)"],
+        _solar_source = st.radio(t("solar_data"), [t("solar_model"), t("solar_pvgis"), t("solar_csv")],
                                   index=1 if not st.session_state.get("tibber_solar_monthly") else 0,
                                   horizontal=True, key="solar_source",
-                                  help="PVGIS ger platsspecifik produktion baserad på satellitdata (2005-2023). "
-                                       "CSV för egen data från växelriktare.")
+                                  help=t("solar_data_help"))
 
-        if _solar_source == "PVGIS (satellit)":
+        if _solar_source == t("solar_pvgis"):
             from weather import SWEDISH_CITIES
             _th = st.session_state.get("tibber_home", {})
             _pvgis_lat = _th.get("latitude", 0)
             _pvgis_lon = _th.get("longitude", 0)
             if not (_pvgis_lat and _pvgis_lon):
-                _pvgis_city = st.selectbox("Plats för soldata", list(SWEDISH_CITIES.keys()),
+                _pvgis_city = st.selectbox(t("solar_location"), list(SWEDISH_CITIES.keys()),
                                             index=0, key="pvgis_city")
                 _pvgis_lat, _pvgis_lon = SWEDISH_CITIES[_pvgis_city]
             _c1, _c2 = st.columns(2)
-            _pvgis_tilt = _c1.number_input("Lutning (°)", value=35, min_value=0, max_value=90, step=5,
-                                            key="pvgis_tilt", help="0=horisontellt, 35=typiskt tak, 90=fasad")
-            _pvgis_aspect = _c2.number_input("Riktning (°)", value=0, min_value=-180, max_value=180, step=15,
-                                              key="pvgis_aspect", help="0=söder, -90=öster, 90=väster")
-            if st.button("Hämta PVGIS-data", key="pvgis_fetch"):
-                with st.spinner("Hämtar satellitbaserad soldata från PVGIS..."):
+            _pvgis_tilt = _c1.number_input(t("tilt"), value=35, min_value=0, max_value=90, step=5,
+                                            key="pvgis_tilt", help=t("tilt_help"))
+            _pvgis_aspect = _c2.number_input(t("direction"), value=0, min_value=-180, max_value=180, step=15,
+                                              key="pvgis_aspect", help=t("direction_help"))
+            if st.button(t("fetch_pvgis"), key="pvgis_fetch"):
+                with st.spinner(t("fetching_pvgis")):
                     try:
                         from pvgis_source import fetch_pvgis, pvgis_to_hourly_dict, pvgis_to_monthly_kwh
                         records = fetch_pvgis(lat=_pvgis_lat, lon=_pvgis_lon, peakpower=solar_kwp,
@@ -595,10 +597,10 @@ with col_sys2:
                     except Exception as e:
                         st.error(f"PVGIS-fel: {e}")
 
-        elif _solar_source == "CSV (växelriktare)":
-            solar_csv = st.file_uploader("Solproduktion (CSV)", type=["csv", "txt"],
+        elif _solar_source == t("solar_csv"):
+            solar_csv = st.file_uploader(t("solar_production_csv"), type=["csv", "txt"],
                                           key="solar_csv_upload",
-                                          help="Timvis produktion från växelriktare (Huawei, SMA, Fronius, Enphase m.fl.)")
+                                          help=t("solar_csv_help"))
             if solar_csv:
                 try:
                     from import_solar import parse_solar_csv, solar_to_hourly_dict, solar_to_monthly_kwh
@@ -622,7 +624,7 @@ with col_sys2:
                     st.error(f"Importfel soldata: {e}")
 
         _has_real_solar = bool(st.session_state.get("tibber_solar_monthly"))
-        _use_real_solar = _has_real_solar and _solar_source != "Modell (cos³)"
+        _use_real_solar = _has_real_solar and _solar_source != t("solar_model")
         if solar_kwp > 0:
             solar_config = SolarConfig(capacity_kwp=solar_kwp)
             if _use_real_solar:
@@ -630,7 +632,7 @@ with col_sys2:
                 solar_config.real_monthly_kwh = st.session_state.get("tibber_solar_monthly")
                 monthly_kwh = solar_config.real_monthly_kwh
                 yearly = sum(monthly_kwh.values())
-                _src_label = {"PVGIS (satellit)": "PVGIS", "CSV (växelriktare)": "CSV"}.get(
+                _src_label = {t("solar_pvgis"): "PVGIS", t("solar_csv"): "CSV"}.get(
                     _solar_source, "Tibber")
                 st.caption(f"{_src_label}: {yearly:,.0f} kWh/år "
                            f"(cos³-modell: {sum(MONTHLY_KWH_PER_KWP.values()) * solar_kwp * 0.85:,.0f} kWh/år)")
@@ -643,7 +645,7 @@ with col_sys2:
         export_fee = 5.0
 
 with col_sys3:
-    st.subheader("Elnät")
+    st.subheader(t("grid"))
     # Auto-detect grid operator from Tibber if available
     _op_names = list(GRID_OPERATORS.keys())
     _op_default = 0
@@ -654,9 +656,8 @@ with col_sys3:
             if name.lower().split()[0] in _gc or _gc.split()[0] in name.lower():
                 _op_default = i
                 break
-    grid_operator = st.selectbox("Nätägare", _op_names, index=_op_default,
-                                  help="Din elnätsägare (står på elnätsfakturan). "
-                                       "Hämtas automatiskt från Tibber om tillgänglig.")
+    grid_operator = st.selectbox(t("grid_operator"), _op_names, index=_op_default,
+                                  help=t("grid_operator_help"))
     op_info = GRID_OPERATORS[grid_operator]
     op_fuse_fees = get_operator_fuse_fees(grid_operator)
     fuse_options = sorted(op_fuse_fees.keys())
@@ -665,12 +666,12 @@ with col_sys3:
     _tibber_fuse = st.session_state.get("tibber_home", {}).get("fuse_size", 0)
     if _tibber_fuse and _tibber_fuse in fuse_options:
         _fuse_default = _tibber_fuse
-    fuse_amps = st.selectbox("Nuvarande säkring (A)", fuse_options,
+    fuse_amps = st.selectbox(t("fuse_size"), fuse_options,
                               index=fuse_options.index(_fuse_default) if _fuse_default in fuse_options else 0,
-                              help="Din nuvarande säkring. Simuleringen utvärderar om du bör uppgradera.")
-    phases = st.selectbox("Faser", [3, 1], index=0)
-    energy_tax = st.number_input("Energiskatt (öre/kWh)", value=54.88, step=0.1,
-                                  help="43.90 öre + 25% moms = 54.88 (2026)")
+                              help=t("fuse_help"))
+    phases = st.selectbox(t("phases"), [3, 1], index=0)
+    energy_tax = st.number_input(t("energy_tax"), value=54.88, step=0.1,
+                                  help=t("energy_tax_help"))
     available_tariffs = op_info["tariffs"]
     has_effekt = "Effekttariff" in available_tariffs and op_info.get("effekttariff")
     _fuse_fee_yr = op_fuse_fees.get(fuse_amps, 0)
@@ -729,24 +730,22 @@ with col_sys3:
 #   The simulation runs these AFTER the battery is charged, using leftover solar.
 #   This means: solar → battery → flex loads → grid export (priority order).
 #   The goal is near-zero grid export — use ALL solar production in the house.
-st.subheader("Elanvändare")
-st.caption("Laster utöver uppvärmning. EV och pool hanteras separat från hushållets grundlast.")
+st.subheader(t("loads_header"))
+st.caption(t("loads_caption"))
 col_l1, col_l2 = st.columns(2)
 
 with col_l1:
     if not (seasonal_load_profile or hourly_load_profile):
-        base_load = st.number_input("Grundlast (kW)", value=1.5, min_value=0.0, step=0.5,
-                                    help="Hushållets ständiga förbrukning. Ignoreras om uppvärmningsmodellen är aktiv.")
+        base_load = st.number_input(t("base_load"), value=1.5, min_value=0.0, step=0.5,
+                                    help=t("base_load_help"))
     else:
         base_load = 1.5  # overridden by profile or heating model
 
     if "scheduled_loads" not in st.session_state:
         st.session_state["scheduled_loads"] = [{"name": "Elbil", "power": 11.0, "start": 23, "end": 3}]
 
-    st.markdown("**Tidsstyrda laster**")
-    st.caption("Laster med fast schema. Elbil: modelleras som nattladdning 23-06. "
-               "I verkligheten laddar elbilen smartare (billigaste timmarna, "
-               "flexibelt på helger) — simuleringen är konservativ.")
+    st.markdown(t("scheduled_loads"))
+    st.caption(t("scheduled_caption"))
     for i, load in enumerate(st.session_state["scheduled_loads"]):
         c = st.columns([3, 2, 2, 2, 1])
         load["name"] = c[0].text_input("", value=load["name"], key=f"ln_{i}", label_visibility="collapsed")
@@ -757,7 +756,7 @@ with col_l1:
             st.session_state["scheduled_loads"].pop(i)
             st.rerun()
 
-    if st.button("+ Last"):
+    if st.button(t("add_load")):
         st.session_state["scheduled_loads"].append({"name": "Ny", "power": 1.0, "start": 0, "end": 6})
         st.rerun()
 
@@ -771,9 +770,8 @@ with col_l2:
     _month_names = ["Jan", "Feb", "Mar", "Apr", "Maj", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dec"]
     _month_opts = list(range(1, 13))
 
-    st.markdown("**Flexibla laster** (solöverskott)")
-    st.caption("Körs på solöverskott istället för att exportera till nät. "
-               "Varmvatten-element tar upp överskott när batteriet är fullt.")
+    st.markdown(t("flexible_loads"))
+    st.caption(t("flexible_caption"))
     for i, fl in enumerate(st.session_state["flexible_loads"]):
         c = st.columns([3, 2, 2, 2, 2, 1])
         fl["name"] = c[0].text_input("", value=fl["name"], key=f"fn_{i}", label_visibility="collapsed")
@@ -788,7 +786,7 @@ with col_l2:
             st.session_state["flexible_loads"].pop(i)
             st.rerun()
 
-    if st.button("+ Flexibel last"):
+    if st.button(t("add_flex_load")):
         st.session_state["flexible_loads"].append({"name": "Ny", "power": 2.0, "daily": 10.0, "sm": 1, "em": 12})
         st.rerun()
 
@@ -1296,27 +1294,27 @@ if use_heating_model:
 # Solar costs are separate (material + installation).
 # Financing: cash, mortgage (bolån), or separate loan — affects monthly cashflow.
 # ================================================================
-st.header("3. Investering")
+st.header(t("step3_header"))
 
 # Battery pricing mode
-st.subheader("Batteripriser")
-_pricing_mode = st.radio("Prismodell", ["Specificerade batterier (NKON)", "SEK per kWh — hitta optimal storlek"],
+st.subheader(t("battery_prices"))
+_pricing_mode = st.radio(t("pricing_mode"), [t("specific_batteries"), t("sek_per_kwh_mode")],
                           key="pricing_mode", horizontal=True)
 
-if _pricing_mode == "SEK per kWh — hitta optimal storlek":
+if _pricing_mode == t("sek_per_kwh_mode"):
     st.caption("Ange pris per kWh och max laddeffekt. Simuleringen testar storlekar "
                "från 5 till 100 kWh och hittar den storlek som maximerar egenförbrukning.")
     col_sek1, col_sek2, col_sek3 = st.columns(3)
     with col_sek1:
-        sek_per_kwh = st.number_input("Batteripris (SEK/kWh)", value=1000, min_value=100, max_value=5000,
+        sek_per_kwh = st.number_input(t("battery_price_kwh"), value=1000, min_value=100, max_value=5000,
                                        step=50, key="sek_per_kwh",
                                        help="Typiskt 800-1500 SEK/kWh för LiFePO4.")
     with col_sek2:
-        max_charge_kw = st.number_input("Max ladd/urladdning (kW)", value=11.0, min_value=1.0, max_value=30.0,
+        max_charge_kw = st.number_input(t("max_charge_kw"), value=11.0, min_value=1.0, max_value=30.0,
                                          step=0.5, key="max_charge_kw_auto",
                                          help="Begränsas av inverter. NKON: 11 kW (16 kWh), 15 kW (32 kWh).")
     with col_sek3:
-        _step_kwh = st.number_input("Steg (kWh)", value=5, min_value=1, max_value=20, step=1,
+        _step_kwh = st.number_input(t("step_kwh"), value=5, min_value=1, max_value=20, step=1,
                                      key="auto_step_kwh",
                                      help="Storlekar testas i detta steg: 5, 10, 15, ... kWh")
 
@@ -1334,7 +1332,7 @@ else:
     st.caption("Redigera tabellen nedan — lägg till/ta bort rader, ändra priser. "
                "NKON ESS Pro (LiFePO4) som standard.")
 
-    EUR_SEK = st.number_input("EUR/SEK växelkurs", value=11.5, min_value=5.0, max_value=20.0, step=0.1,
+    EUR_SEK = st.number_input(t("eur_sek_rate"), value=11.5, min_value=5.0, max_value=20.0, step=0.1,
                                key="eur_sek_rate")
 
     default_batteries = pd.DataFrame([
@@ -1371,26 +1369,26 @@ else:
 # Other costs
 col_i1, col_i2, col_i3 = st.columns(3)
 with col_i1:
-    bat_install = st.number_input("Installation batteri (SEK)", value=10000, min_value=0, step=1000,
+    bat_install = st.number_input(t("battery_install"), value=10000, min_value=0, step=1000,
                                    help="Samma kostnad oavsett batteristorlek")
 with col_i2:
     if use_solar:
-        sol_price = st.number_input("Solceller material (SEK)", value=48000, min_value=0, step=5000,
+        sol_price = st.number_input(t("solar_material"), value=48000, min_value=0, step=5000,
                                     help="Paneler (~28,000 för 35st à 800kr) + inverter (~12,000) + montage/kabel (~8,000). Sätt 0 om redan installerat.")
-        sol_install = st.number_input("Sol-installation arbete (SEK)", value=0, min_value=0, step=5000,
+        sol_install = st.number_input(t("solar_install"), value=0, min_value=0, step=5000,
                                       help="0 om du installerar själv")
     else:
         sol_price = 0
         sol_install = 0
 with col_i3:
-    finance = st.radio("Finansiering", ["Eget kapital", "Bolån", "Annat lån"])
-    if finance == "Bolån":
-        loan_rate = st.number_input("Bolåneränta (%)", value=3.0, min_value=0.0, max_value=10.0, step=0.25)
-        loan_years = st.number_input("Löptid (år)", value=50, min_value=1, max_value=100, step=5)
+    finance = st.radio(t("financing"), [t("own_capital"), t("mortgage"), t("other_loan")])
+    if finance == t("mortgage"):
+        loan_rate = st.number_input(t("mortgage_rate"), value=3.0, min_value=0.0, max_value=10.0, step=0.25)
+        loan_years = st.number_input(t("loan_term"), value=50, min_value=1, max_value=100, step=5)
         st.caption("Investeringen läggs på bolånet")
-    elif finance == "Annat lån":
-        loan_rate = st.number_input("Ränta (%)", value=5.0, min_value=0.0, step=0.5)
-        loan_years = st.number_input("Lånetid (år)", value=10, min_value=1, step=1)
+    elif finance == t("other_loan"):
+        loan_rate = st.number_input(t("interest_rate"), value=5.0, min_value=0.0, step=0.5)
+        loan_years = st.number_input(t("loan_years"), value=10, min_value=1, step=1)
         st.caption("Lånekostnaden visas i kassaflödesdiagrammet")
     else:
         loan_rate = 0
@@ -1423,9 +1421,8 @@ sol_invest_total = sol_price + sol_install
 # and can be viewed in the detail section below.
 # ================================================================
 st.divider()
-st.header("4. Resultat")
-st.caption("Tryck på knappen nedan för att simulera alla batteristorlekar. "
-           "Simuleringen testar alla tariffer och väljer den bästa för varje storlek.")
+st.header(t("step4_header"))
+st.caption(t("step4_caption"))
 
 def _estimate_effekt_savings(result, eff_tariff, cfg, num_days):
     """Estimate annual savings from peak demand reduction with effekttariff.
@@ -1497,7 +1494,7 @@ def _estimate_effekt_savings(result, eff_tariff, cfg, num_days):
     return total_saving / years if years > 0 else 0
 
 
-if st.button("KÖR SIMULERING", type="primary", use_container_width=True):
+if st.button(t("run_simulation"), type="primary", use_container_width=True):
     # Clear old results
     for key in ["all_results", "solar_cfg", "price_rows", "shared_config"]:
         st.session_state.pop(key, None)
@@ -1516,16 +1513,16 @@ if st.button("KÖR SIMULERING", type="primary", use_container_width=True):
     # Build tariffs from grid operator
     all_tariffs = create_tariffs_for_operator(grid_operator, fuse_amps, energy_tax)
     # Override rates if user changed them in expander
-    for t in all_tariffs:
-        if isinstance(t, Tidstariff):
-            t.peak = peak_rate
-            t.offpeak = offpeak_rate
-        elif isinstance(t, FastTariff):
-            t.flat_rate = flat_rate
-        elif isinstance(t, EffektTariff) and has_effekt:
-            t.effekt_rate = effekt_rate
-            t.energy_rate = effekt_energy
-            t.top_n_peaks = effekt_top_n
+    for _tf in all_tariffs:
+        if isinstance(_tf, Tidstariff):
+            _tf.peak = peak_rate
+            _tf.offpeak = offpeak_rate
+        elif isinstance(_tf, FastTariff):
+            _tf.flat_rate = flat_rate
+        elif isinstance(_tf, EffektTariff) and has_effekt:
+            _tf.effekt_rate = effekt_rate
+            _tf.energy_rate = effekt_energy
+            _tf.top_n_peaks = effekt_top_n
     # If operator has no tariffs defined, fall back to Vattenfall defaults
     if not all_tariffs:
         all_tariffs = [
@@ -1670,7 +1667,7 @@ if "all_results" in st.session_state:
     price_rows = st.session_state.get("price_rows", [])
 
     if not all_results:
-        st.warning("Inga resultat att visa.")
+        st.warning(t("no_results"))
         st.stop()
 
     # === RECOMMENDATION ===
@@ -1689,7 +1686,7 @@ if "all_results" in st.session_state:
     st.info(f"Bästa tariff: **{best['best_tariff']}**")
 
     # Self-consumption optimization (when using SEK/kWh mode)
-    if st.session_state.get("pricing_mode", "").startswith("SEK"):
+    if st.session_state.get("pricing_mode", "") == t("sek_per_kwh_mode"):
         # Find smallest battery where grid export is near zero
         _sorted_by_cap = sorted(all_results, key=lambda r: r["capacity"])
         _zero_export = None
@@ -1824,7 +1821,7 @@ if "all_results" in st.session_state:
         future_scenarios=st.session_state.get("scenario_results"),
     )
         st.download_button(
-            "Ladda ner PDF-rapport (bankunderlag)",
+            t("download_pdf"),
             data=bytes(pdf_bytes),
             file_name=f"energikalkyl_{date.today().isoformat()}.pdf",
             mime="application/pdf",
@@ -1879,8 +1876,8 @@ if "all_results" in st.session_state:
         high_years = [y for y in full_years + partial_years if avg_prices.get(y, 0) >= 70]
 
         if normal_years or high_years:
-            st.subheader("Scenariojämförelse")
-            st.caption("Samma simulering — uppdelad per år. Elpriser varierar kraftigt mellan år.")
+            st.subheader(t("scenario_header"))
+            st.caption(t("scenario_caption"))
 
             # Build comparison table
             comp_rows = []
@@ -1937,8 +1934,8 @@ if "all_results" in st.session_state:
 
     # === COMPARISON: annualized cost vs annualized savings ===
     labels = [r["label"] for r in all_results]
-    st.subheader("Jämförelse alla batteristorlekar")
-    st.caption("Investeringen fördelad över batteriets livslängd jämförd med årlig besparing. Samma tidsskala.")
+    st.subheader(t("compare_all_header"))
+    st.caption(t("compare_all_caption"))
 
     fig_annual = go.Figure()
     fig_annual.add_trace(go.Bar(
@@ -2006,10 +2003,10 @@ if "all_results" in st.session_state:
 
     # === FINANCING PERSPECTIVE ===
     st.divider()
-    st.subheader("Finansiering — netto per månad")
+    st.subheader(t("financing_header"))
 
-    if finance in ("Bolån", "Annat lån") and loan_rate > 0 and loan_years > 0:
-        loan_label = "Bolån" if finance == "Bolån" else "Lån"
+    if finance in (t("mortgage"), t("other_loan")) and loan_rate > 0 and loan_years > 0:
+        loan_label = t("mortgage") if finance == t("mortgage") else "Lån"
         st.caption(f"Investeringen finansieras via {loan_label.lower()} ({loan_rate}%, {loan_years} år). "
                    f"Besparing minus lånekostnad = pengar kvar i fickan varje månad.")
 
@@ -2122,7 +2119,7 @@ if "all_results" in st.session_state:
     larger_fuses = [f for f in available_fuses if f > fuse_amps]
     if larger_fuses and best:
         st.divider()
-        st.subheader("Lönar sig en större säkring?")
+        st.subheader(t("fuse_header"))
         current_fee_yr = op_fees.get(fuse_amps, 0)
         st.caption(f"Större säkring ger mer laddkapacitet för batteriet. "
                    f"Din nuvarande: {fuse_amps:.0f}A ({current_fee_yr:,.0f} kr/år). "
@@ -2251,11 +2248,11 @@ if "all_results" in st.session_state:
     #   - Black line: net savings per month
     # Summer months typically show more solar income, winter more arbitrage.
     st.divider()
-    st.header("5. Detaljvy")
+    st.header(t("step5_header"))
 
     detail_labels = [r["label"] for r in all_results]
     default_idx = best_idx if best_idx < len(detail_labels) else 0
-    selected_label = st.selectbox("Visa detaljer för:", detail_labels, index=default_idx)
+    selected_label = st.selectbox(t("show_details_for"), detail_labels, index=default_idx)
     sel = next(r for r in all_results if r["label"] == selected_label)
 
     result = sel["result"]
@@ -2265,10 +2262,10 @@ if "all_results" in st.session_state:
     per_year = sel["total_benefit_yr"]
 
     col_d1, col_d2, col_d3, col_d4 = st.columns(4)
-    col_d1.metric("Lägre elkostnad", f"{per_year/12:,.0f} kr/mån")
-    col_d2.metric("Per år", f"{per_year:,.0f} kr/år")
-    col_d3.metric("Payback", f"{sel['payback']:.1f} år")
-    col_d4.metric("Cykler/år", f"{sel['cycles_yr']:.0f}")
+    col_d1.metric(t("lower_cost"), f"{per_year/12:,.0f} kr/mån")
+    col_d2.metric(t("per_year"), f"{per_year:,.0f} kr/år")
+    col_d3.metric(t("payback"), f"{sel['payback']:.1f} år")
+    col_d4.metric(t("cycles_yr"), f"{sel['cycles_yr']:.0f}")
 
     with st.expander("Detaljer"):
         st.text(f"Batteri:                 {sel['label']} ({sel['capacity']:.1f} kWh)")
@@ -2285,7 +2282,7 @@ if "all_results" in st.session_state:
         st.text(f"Tariff:                  {sel['best_tariff']}")
 
     # Monthly cashflow breakdown
-    st.subheader("Typiskt år — skillnad i elkostnad per månad")
+    st.subheader(t("typical_year"))
 
     slot_data = []
     for s in result.slots:
@@ -2384,12 +2381,8 @@ if "all_results" in st.session_state:
     # over 10 years (year 1 = current, year 10 = target level).
     # ================================================================
     st.divider()
-    st.header("6. Framtidsprognos")
-    st.caption(
-        "Tre scenarier baserat på hur elprisernas volatilitet utvecklas. "
-        "Mer förnybart i elnätet ger större prisskillnader mellan timmar — "
-        "det är vad batteriet tjänar på."
-    )
+    st.header(t("step6_header"))
+    st.caption(t("step6_caption"))
 
     def scale_vol(rows, factor):
         """Scale price volatility while keeping the daily average unchanged.
@@ -2417,9 +2410,9 @@ if "all_results" in st.session_state:
 
     # Three scenarios for the recommended battery
     scenarios = [
-        ("Konservativt", 1.5, "Prissvängningarna ökar 50% på 10 år. Måttlig utbyggnad av förnybart."),
-        ("Sannolikt", 2.5, "Prissvängningarna 2-3x på 10 år. Fortsatt utbyggnad av vind/sol, fler elbilar, elektrifiering av industri. De flesta energianalytiker förväntar sig detta."),
-        ("Hög volatilitet", 4.0, "Prissvängningarna 4x. Massiv utbyggnad av förnybart, kärnkraft fasas ut, ökad europeisk sammankoppling."),
+        (t("conservative"), 1.5, t("conservative_desc")),
+        (t("likely"), 2.5, t("likely_desc")),
+        (t("high_volatility"), 4.0, t("high_volatility_desc")),
     ]
     vol_levels = [1.0, 1.5, 2.5]
 
@@ -2466,7 +2459,7 @@ if "all_results" in st.session_state:
                "Volatiliteten ökar linjärt till målnivå under de första 10 åren.")
 
     fig_15 = go.Figure()
-    scenario_colors = {"Konservativt": "#3498db", "Sannolikt": "#2ecc71", "Hög volatilitet": "#e74c3c"}
+    scenario_colors = {t("conservative"): "#3498db", t("likely"): "#2ecc71", t("high_volatility"): "#e74c3c"}
 
     # Also compute results at intermediate levels for smooth interpolation
     all_vol_levels = [1.0, 1.5, 2.0, 2.5, 3.0, 4.0]
@@ -2506,8 +2499,8 @@ if "all_results" in st.session_state:
             above = [v for v in all_vol_levels if v > vol]
             if below and above:
                 b, a = below[-1], above[0]
-                t = (vol - b) / (a - b)
-                yr_profit = vol_arb[b] * (1-t) + vol_arb[a] * t
+                _frac = (vol - b) / (a - b)
+                yr_profit = vol_arb[b] * (1-_frac) + vol_arb[a] * _frac
             elif below:
                 yr_profit = vol_arb[below[-1]]
             else:
