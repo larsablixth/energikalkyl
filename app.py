@@ -490,7 +490,7 @@ df_spread["month"] = pd.to_datetime(df_spread["date"]).dt.to_period("M").astype(
 
 _median_range = df_spread["range"].median()
 _pct80_range = df_spread["range"].quantile(0.8)
-with st.expander(f"Prisspridning — lägsta till högsta: typiskt {_median_range:.0f} öre, bra dagar {_pct80_range:.0f} öre", expanded=False):
+with st.expander(t("spread_expander").format(median=f"{_median_range:.0f}", p80=f"{_pct80_range:.0f}"), expanded=False):
     col1, col2, col3, col4 = st.columns(4)
     col1.metric(t("cheapest_hour"), f"{df_spread['min'].mean():.0f} öre/kWh",
                 help="Genomsnittlig lägsta timpris per dag")

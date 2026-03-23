@@ -640,6 +640,12 @@ STRINGS = {
         "en": "No results to display.",
     },
 
+    # ---- Spread expander ----
+    "spread_expander": {
+        "sv": "Prisspridning — lägsta till högsta: typiskt {median} öre, bra dagar {p80} öre",
+        "en": "Price spread — lowest to highest: typically {median} öre, good days {p80} öre",
+    },
+
     # ---- Fuse comparison ----
     "fuse_header": {
         "sv": "Lönar sig en större säkring?",
