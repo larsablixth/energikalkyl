@@ -3,8 +3,54 @@ Energikalkyl — El, Sol & Batteri (Web GUI)
 
 Analysverktyg för att bedöma lönsamhet i hembatteri och solceller.
 Start with:  streamlit run app.py
+
+HOW THIS APP WORKS (for non-coders):
+=====================================
+The app has 6 steps that run top-to-bottom:
+
+  1. LOAD DATA — Fetch your electricity consumption (from Tibber, E.ON, or CSV files)
+     and historical spot prices. This is the raw input the simulation needs.
+
+  2. CONFIGURE YOUR SYSTEM — Describe your house: battery settings, solar panels,
+     grid operator, fuse size, heating system, EV charging, and flexible loads.
+     The app auto-fills as much as possible from Tibber.
+
+  3. INVESTMENT — Set battery prices (NKON defaults or custom SEK/kWh) and
+     financing (cash, mortgage, or loan).
+
+  4. RESULTS — The core simulation runs here. It tests EVERY battery size against
+     EVERY tariff type and picks the best combination. Shows recommendation,
+     yearly/monthly breakdown, cashflow charts, and financing analysis.
+
+  5. DETAIL VIEW — Deep-dive into a specific battery: monthly cost/savings breakdown,
+     solar charging, and export revenue.
+
+  6. FUTURE SCENARIOS — "What if electricity price swings increase?" Three scenarios
+     (conservative, likely, high volatility) show how the investment performs
+     as the energy market evolves.
+
+KEY CONCEPTS:
+- "Arbitrage" = buy cheap electricity at night, use it during expensive peak hours
+- "Effekttariff" = you pay for your highest power peak each month (kW), not just energy (kWh)
+- "Flex loads" = pool pumps, hot water tanks, heat pumps that can shift to use free solar
+- "Self-consumption" = using your own solar power instead of exporting it to the grid
+- "Spread" = difference between cheapest and most expensive hour — this is what the battery earns
+
+STREAMLIT BASICS (for non-coders):
+- st.header() / st.subheader() / st.caption() = display text headings
+- st.number_input() / st.selectbox() / st.checkbox() = user input widgets
+- st.session_state = a dictionary that remembers values between page refreshes
+- st.columns() = side-by-side layout
+- st.expander() = collapsible section
+- st.metric() = big number with optional delta (green/red arrow)
+- st.plotly_chart() = interactive chart
+- st.dataframe() = data table
+- st.success/info/warning/error() = colored message boxes
 """
 
+# ============================================================
+# IMPORTS — load all the modules this app depends on
+# ============================================================
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -30,7 +76,9 @@ from app_state import save_state, load_state
 
 st.set_page_config(page_title="Energikalkyl", page_icon="⚡", layout="wide")
 
-# Restore persisted state on first load
+# Restore persisted state on first load.
+# This means your consumption data, prices, and settings survive page refreshes.
+# Data is saved as JSON files in the .app_state/ directory.
 if "_state_restored" not in st.session_state:
     if load_state(st.session_state):
         st.session_state["_state_restored"] = "loaded"
@@ -42,6 +90,19 @@ st.caption("Simulera lönsamheten i hembatteri och solceller baserat på verklig
 
 # ================================================================
 # STEP 1: LOAD DATA
+# ================================================================
+# This section fetches two types of input data:
+#   LEFT COLUMN: Your electricity consumption (how much you use, hour by hour)
+#     - Tibber: fetches ~30 days hourly + 3 years monthly. Also auto-fills house info.
+#     - E.ON: fetches from E.ON's API (needs credentials)
+#     - File upload: Vattenfall Excel or generic CSV files
+#   RIGHT COLUMN: Historical spot prices (what electricity costs each hour)
+#     - API: fetches from elprisetjustnu.se for your price zone
+#     - CSV: upload your own price file
+#
+# The consumption profile tells the simulation HOW you use electricity.
+# The spot prices tell it WHEN electricity is cheap vs expensive.
+# Together, they determine how much a battery can save you.
 # ================================================================
 st.header("1. Ladda data")
 st.caption("Börja med Tibber om du har det — då fylls förbrukning, plats och nätägare i automatiskt.")
@@ -384,6 +445,11 @@ else:
 # ================================================================
 # SPREAD ANALYSIS (always shown, informational)
 # ================================================================
+# "Spread" = the difference between the cheapest and most expensive hour each day.
+# This is the battery's earning potential: buy low, sell high.
+# A spread of 50 öre/kWh means a 32 kWh battery can earn ~16 kr/day.
+# If the spread is consistently under 20 öre, the battery barely breaks even.
+# This chart helps the user understand WHY the battery is (or isn't) profitable.
 df_plot = df_prices.copy()
 df_plot["datetime"] = pd.to_datetime(df_plot["date"] + " " + df_plot["hour"])
 spread_data = []
@@ -434,6 +500,27 @@ with st.expander(f"Prisspridning — lägsta till högsta: typiskt {_median_rang
 
 # ================================================================
 # STEP 2: YOUR SYSTEM
+# ================================================================
+# This is the biggest configuration section, split into three columns:
+#
+# COLUMN 1 — BATTERY: efficiency (93% = 7% lost per charge/discharge cycle),
+#   cycle life (8000 = how many cycles before the battery degrades).
+#
+# COLUMN 2 — SOLAR PANELS: system size (kWp), export price, and solar data source.
+#   Three options for solar production data:
+#     - PVGIS: satellite-based hourly data from EU (recommended, most accurate)
+#     - CSV: upload from your inverter portal (Huawei, SMA, Fronius, etc.)
+#     - Model: simplified cos³ curve (least accurate, used as fallback)
+#   When real solar data is loaded, the simulation uses actual production
+#   instead of estimates — much more accurate for your specific roof/location.
+#
+# COLUMN 3 — GRID: your grid operator (determines tariff rates), fuse size
+#   (limits how fast the battery can charge), and energy tax.
+#
+# BELOW THE COLUMNS:
+#   - Loads: EV charging schedule, flexible loads (pool, hot water)
+#   - Heating model: temperature-dependent electricity usage based on SMHI weather
+#   - Calibration: fine-tune the model against your actual consumption data
 # ================================================================
 st.header("2. Din anläggning")
 st.caption("Beskriv ditt hus, elnät och elanvändare. Uppvärmningsmodellen anpassas automatiskt efter din plats och hustyp.")
@@ -616,7 +703,19 @@ with col_sys3:
         st.caption(f"Energiskatt: {energy_tax} öre/kWh | "
                    f"Abonnemang {fuse_amps:.0f}A: {monthly_fee:,.0f} kr/mån ({op_fuse_fees.get(fuse_amps, 0):,.0f} kr/år)")
 
-# Loads
+# ---- LOADS ----
+# Two types of electricity loads beyond basic household use:
+#
+# SCHEDULED LOADS (left column):
+#   Fixed-schedule loads like EV charging. Example: "Elbil 11 kW, 23:00-03:00"
+#   These always run at their scheduled time regardless of price.
+#   The battery can't shift these, but it can discharge to cover part of them.
+#
+# FLEXIBLE LOADS (right column):
+#   Loads that can shift to when solar surplus is available. Example: pool pump, hot water.
+#   The simulation runs these AFTER the battery is charged, using leftover solar.
+#   This means: solar → battery → flex loads → grid export (priority order).
+#   The goal is near-zero grid export — use ALL solar production in the house.
 st.subheader("Elanvändare")
 st.caption("Laster utöver uppvärmning. EV och pool hanteras separat från hushållets grundlast.")
 col_l1, col_l2 = st.columns(2)
@@ -698,7 +797,25 @@ if st.session_state.get("use_aa", False):
     flexible_loads.append(FlexibleLoad("Luft-luft värme (solöverskott)", _aa_kw, daily_kwh=8.0,
                                         start_month=9, end_month=10))
 
-# Heating model
+# ---- HEATING MODEL ----
+# This is the most complex part of the configuration. It calculates how much
+# electricity your heating system uses each hour, based on outdoor temperature.
+#
+# WHY IT MATTERS: In winter, heating can be 60-70% of your electricity bill.
+# A cold hour means high demand, which means the battery has more to work with.
+# Without this model, the simulation would assume constant load all year —
+# missing the fact that winter has both highest prices AND highest consumption.
+#
+# HOW IT WORKS:
+#   1. Fetch hourly temperatures from SMHI (nearest weather station)
+#   2. Calculate heat loss: P_heat = h_loss × (21°C - outdoor_temp)
+#   3. Divide by heat pump COP (efficiency) to get electricity needed
+#   4. Add hot water (DHW) and base load (fridge, lights, etc.)
+#   5. Result: a full year of hourly electricity profiles per date
+#
+# CALIBRATION: If you have real consumption data (Tibber/Vattenfall), the model
+# auto-calibrates h_loss (heat loss coefficient) to match your actual usage.
+# This is much more accurate than estimating from energy class + house area.
 st.subheader("Uppvärmning")
 use_heating_model = st.checkbox("Temperaturanpassad lastmodell", value=True,
                                  help="Modellerar värmepumpens elförbrukning baserat på väderdata och husets egenskaper")
@@ -1156,6 +1273,16 @@ if use_heating_model:
 # ================================================================
 # STEP 3: INVESTMENT — Battery price table + costs
 # ================================================================
+# Two pricing modes:
+#   1. "Specificerade batterier (NKON)" — an editable table with real NKON ESS Pro
+#      prices. User can add/remove rows. Multi-unit configs (2x32 kWh) supported.
+#   2. "SEK per kWh" — enter a single price per kWh, and the app generates
+#      sizes from 5-100 kWh to find the optimal one (self-consumption mode).
+#
+# The installation cost is shared across all sizes (same electrician work).
+# Solar costs are separate (material + installation).
+# Financing: cash, mortgage (bolån), or separate loan — affects monthly cashflow.
+# ================================================================
 st.header("3. Investering")
 
 # Battery pricing mode
@@ -1261,6 +1388,27 @@ sol_invest_total = sol_price + sol_install
 # ================================================================
 # STEP 4: SIMULATE ALL SIZES — find optimal battery
 # ================================================================
+# THE CORE OF THE APP. When the user clicks "KÖR SIMULERING":
+#
+# For EACH battery size in the price table:
+#   For EACH tariff type the grid operator offers:
+#     → Run the full simulation (batteri.py simulate())
+#     → This goes day by day through all the price data:
+#       1. Look at today's 24 hourly prices
+#       2. Find the cheapest hours → charge the battery
+#       3. Find the most expensive hours → discharge the battery
+#       4. Solar charges the battery for free (priority over grid)
+#       5. Flex loads absorb remaining solar surplus
+#       6. Calculate cost savings vs grid-only scenario
+#     → Also estimate effekttariff savings (peak shaving)
+#   Pick the tariff that gives the highest annual profit.
+#
+# Result: a ranked list of all battery sizes with their ROI, payback time,
+# and lifetime profit. The best one becomes the recommendation.
+#
+# The results are stored in st.session_state so they survive page refreshes
+# and can be viewed in the detail section below.
+# ================================================================
 st.divider()
 st.header("4. Resultat")
 st.caption("Tryck på knappen nedan för att simulera alla batteristorlekar. "
@@ -1271,6 +1419,16 @@ def _estimate_effekt_savings(result, eff_tariff, cfg, num_days):
 
     Compares peak demand WITH battery (discharge reduces grid draw)
     vs WITHOUT battery (raw household load).
+
+    WHAT IS EFFEKTTARIFF?
+    Some grid operators (Ellevio, SEOM, Göteborg Energi) charge you based on
+    your PEAK power demand each month — not just total kWh. If your house
+    draws 15 kW for one hour (e.g., EV + heating + cooking), you pay for
+    that peak all month. A battery can discharge during high-demand hours
+    to reduce the peak the grid sees. This can save 400-900 kr/month.
+
+    The measurement varies by operator: Ellevio uses top-3 peaks from
+    different days, SEOM uses a single peak, etc.
     """
     from collections import defaultdict
 
@@ -1480,6 +1638,19 @@ if st.button("KÖR SIMULERING", type="primary", use_container_width=True):
 # ================================================================
 # RESULTS — show comparison and recommendation
 # ================================================================
+# Everything below here displays the simulation results.
+# The sections are:
+#   - RECOMMENDATION: the single best battery + tariff combo
+#   - SELF-CONSUMPTION (SEK/kWh mode): smallest battery for zero grid export
+#   - LUFT-LUFT CONTRIBUTION: air-to-air HP solar surplus absorption (bonus, not in main ROI)
+#   - PDF REPORT: downloadable bank-grade report with methodology
+#   - SCENARIO SPLIT: results broken down by year (normal vs high-price years)
+#   - COMPARISON: annualized cost vs savings bar chart for all sizes
+#   - CUMULATIVE CASHFLOW: 15-year investment curve
+#   - FINANCING: monthly cashflow if financed via mortgage/loan
+#   - FUSE COMPARISON: "should I upgrade my fuse?"
+#   - DETAIL VIEW: monthly breakdown for selected battery
+#   - FUTURE SCENARIOS: what happens if price volatility increases?
 if "all_results" in st.session_state:
     all_results = st.session_state["all_results"]
     solar_cfg = st.session_state.get("solar_cfg")
@@ -1924,6 +2095,13 @@ if "all_results" in st.session_state:
     # ================================================================
     # FUSE SIZE COMPARISON
     # ================================================================
+    # Your fuse size limits how fast the battery can charge from the grid.
+    # A 20A fuse = ~14 kW max total. If your house uses 5 kW, only 9 kW
+    # is left for battery charging. A larger fuse means faster charging,
+    # which means the battery can capture more cheap hours.
+    # But larger fuses cost more per year (subscription fee).
+    # This section re-simulates the recommended battery at larger fuse
+    # sizes and shows whether the extra savings justify the extra cost.
     op_fees = get_operator_fuse_fees(grid_operator)
     available_fuses = sorted(op_fees.keys())
     current_fuse_idx = available_fuses.index(fuse_amps) if fuse_amps in available_fuses else 0
@@ -2053,6 +2231,12 @@ if "all_results" in st.session_state:
     # ================================================================
     # STEP 5: DEEP-DIVE — detail view for selected battery
     # ================================================================
+    # Shows a monthly breakdown of the selected battery's performance:
+    #   - Green bars: money saved by discharging (avoided expensive grid purchases)
+    #   - Blue bars: revenue from selling surplus solar to the grid
+    #   - Red bars: cost of charging from the grid (bought at cheap hours)
+    #   - Black line: net savings per month
+    # Summer months typically show more solar income, winter more arbitrage.
     st.divider()
     st.header("5. Detaljvy")
 
@@ -2173,6 +2357,19 @@ if "all_results" in st.session_state:
     # ================================================================
     # STEP 6: FUTURE SCENARIOS
     # ================================================================
+    # The battery's profitability depends on price VOLATILITY (how much prices
+    # swing between cheap and expensive hours), not on the average price level.
+    # More wind/solar in the grid → more volatility → better for batteries.
+    #
+    # This section scales the historical price data to simulate three futures:
+    #   - Conservative (1.5x): modest increase in price swings
+    #   - Likely (2.5x): what most energy analysts expect in 10 years
+    #   - High volatility (4.0x): aggressive renewable buildout scenario
+    #
+    # The scaling preserves the daily average price but amplifies the spread
+    # between cheap and expensive hours. The volatility increases linearly
+    # over 10 years (year 1 = current, year 10 = target level).
+    # ================================================================
     st.divider()
     st.header("6. Framtidsprognos")
     st.caption(
@@ -2182,6 +2379,16 @@ if "all_results" in st.session_state:
     )
 
     def scale_vol(rows, factor):
+        """Scale price volatility while keeping the daily average unchanged.
+
+        Example with factor=2.0 and daily average 1.00 kr:
+          Hour at 0.50 kr → 1.00 + (0.50 - 1.00) × 2.0 = 0.00 → clamped to 0.001
+          Hour at 1.50 kr → 1.00 + (1.50 - 1.00) × 2.0 = 2.00
+
+        The spread doubled (from 1.00 to 2.00), but the average stayed ~1.00.
+        This is what happens when more wind/solar enters the grid:
+        sunny/windy hours get cheaper, calm/dark hours get more expensive.
+        """
         days_map = {}
         for r in rows:
             days_map.setdefault(r["date"], []).append(r)
