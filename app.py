@@ -250,8 +250,10 @@ with col_consumption:
 
     # File upload section — always visible (works alongside Tibber/E.ON)
     with st.expander("Ladda upp förbrukningsdata (Excel/CSV)", expanded=not st.session_state.get("seasonal_profile")):
-        st.caption("Vattenfall Excel-filer ger 3+ års timdata — bästa underlaget. "
-                   "CSV med kolumner för datum, tid och förbrukning (kWh) fungerar också. "
+        st.caption("**Vattenfall:** Logga in på [mina.vattenfall.se](https://mina.vattenfall.se) → "
+                   "Elavtal → Elförbrukning → Exportera till Excel. Ladda upp Excel-filen direkt — "
+                   "det komplicerade formatet hanteras automatiskt.  \n"
+                   "**Övriga nätägare:** CSV med kolumner för datum, tid och förbrukning (kWh). "
                    "Formatet detekteras automatiskt (semikolon/komma, svensk/engelsk header).")
         cons_files = st.file_uploader("Förbrukningsdata", type=["csv", "txt", "xlsx", "xls"],
                                        accept_multiple_files=True, key="cons_upload")
