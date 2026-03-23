@@ -113,7 +113,7 @@ col_consumption, col_prices = st.columns(2)
 with col_consumption:
     st.subheader("Förbrukningsprofil")
     st.caption("**Bäst resultat:** Hämta från Tibber (ger adress, nätägare, säkring) "
-               "**och** ladda upp Vattenfall/E.ON-data (ger 3 års timdata). Båda kan användas samtidigt.")
+               "**och** ladda upp timdata från din nätägare (Vattenfall, E.ON eller CSV). Båda kan användas samtidigt.")
 
     hourly_load_profile = None
     seasonal_load_profile = None
