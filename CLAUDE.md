@@ -6,10 +6,15 @@ Swedish electricity investment analysis tool. Answers: "Should I buy a home batt
 
 ## How to run
 ```bash
-streamlit run app.py                    # Web GUI on port 8501
+bash setup.sh                           # First time: installs deps, prompts for Tibber token, starts app
+streamlit run app.py                    # Web GUI on port 8501 (after setup)
 docker compose up                       # Docker (no Python needed)
 python elpriser.py batteri --help       # CLI help
 ```
+
+### WSL2 / bare Python environment
+No system pip/venv: `setup.sh` uses `get-pip.py` + `--user --break-system-packages`.
+Deps: `requirements.txt` (streamlit, plotly, requests, fpdf2, openpyxl, entsoe-py, pandas).
 
 ## Architecture overview
 
