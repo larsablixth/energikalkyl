@@ -20,6 +20,7 @@ The app follows a 6-step flow:
    - Spot prices: auto-syncs date range with loaded consumption data
    - **Session persistence**: loaded data survives page refreshes (stored in `.app_state/`)
 2. **Configure setup** — grid operator (8 presets), fuse (simulated as output), solar, loads, heating model
+   - **Solar data**: radio selector — PVGIS satellite (default, location-specific), CSV from inverter, or cos³ model. Tibber production auto-fetched if available.
    - Heating: calibrated from energy class OR manual Tibber Insights breakdown OR auto-fit from consumption
    - Calibrated data overrides energy class completely (house size irrelevant when calibrated)
    - EV default 23-03 (4h, based on Tibber hourly analysis — conservative)
@@ -42,7 +43,7 @@ The app follows a 6-step flow:
 
 ### Core simulation
 - `batteri.py` — Battery simulation engine. `BatteryConfig` dataclass, `simulate()` function. Multi-cycle scheduling, solar-aware, fuse headroom-limited. Supports `daily_load_override` for temperature-dependent load profiles.
-- `solar.py` — Solar production model (cos³ curve, configurable kWp, Stockholm south-facing 35° tilt, monthly averages)
+- `solar.py` — Solar production model. Three-tier: real hourly data → model scaled to real monthly totals → cos³ curve fallback. `SolarConfig` with `real_production` (hourly dict) and `real_monthly_kwh` (monthly scaling). `get_solar_for_slot()` transparently picks best available source.
 
 ### Tariffs & grid operators
 - `tariff.py` — Grid tariff models: `Tidstariff`, `FastTariff`, `EffektTariff`. `GRID_OPERATORS` dict with presets for:
@@ -62,7 +63,9 @@ The app follows a 6-step flow:
 
 ### Data sources
 - `elpriser.py` — CLI + price fetching from elprisetjustnu.se (cached in .price_cache/)
-- `tibber_source.py` — Tibber GraphQL API (hourly/daily/monthly consumption, prices, seasonal profiles)
+- `tibber_source.py` — Tibber GraphQL API (hourly/daily/monthly consumption + production, prices, seasonal profiles). `fetch_production()` for solar panel owners.
+- `pvgis_source.py` — EU JRC PVGIS API integration. Satellite-based hourly PV production for any location (2005-2023). No API key. Cached in `.pvgis_cache/`. ~32% more accurate than cos³ model for Stockholm.
+- `import_solar.py` — CSV parser for solar production data from inverter portals (Huawei FusionSolar, SMA, Fronius, Enphase, generic Swedish CSV). Auto-detects delimiter, decimal separator, column names.
 - `entsoe_source.py` — ENTSO-E API + EUR/SEK via ECB (frankfurter.app)
 - `import_vattenfall.py` — Parse Vattenfall Eldistribution Excel. Daily (col 7 = Summa/dag) AND hourly (cols L-W = 24 values/day/month). `parse_vattenfall_hourly()` extracts 8,760 records/year.
 - `import_consumption.py` — Generic CSV consumption import
@@ -76,7 +79,8 @@ The app follows a 6-step flow:
 - `app_state.py` — Session persistence across page refreshes (SQLite-free, JSON in `.app_state/`)
 - `Dockerfile` + `docker-compose.yml` — Container deployment
 - `.weather_cache/` — Cached SMHI temperature data per station
-- `.app_state/` — Persisted session data (consumption, prices, calibration)
+- `.pvgis_cache/` — Cached PVGIS satellite solar data per location/config
+- `.app_state/` — Persisted session data (consumption, prices, calibration, solar production)
 - `historik_SE3_3ar.csv` — 3 years of SE3 spot prices (2023-2026)
 
 ## Critical implementation details
@@ -91,6 +95,17 @@ The app follows a 6-step flow:
 - Charging power limited by fuse headroom (fuse capacity − household load at that hour)
 - `daily_load_override`: when set, provides date+hour specific load (from heating model), overriding seasonal/hourly profiles
 - All tariff types simulated automatically — best picked per battery size
+
+### Solar production data (solar.py, pvgis_source.py)
+- Three-tier fallback per simulation hour: real hourly → model scaled to real monthly → pure cos³
+- **PVGIS**: EU JRC satellite irradiance (SARAH3), hourly W per location/tilt/orientation, 2005-2023
+  - API: `re.jrc.ec.europa.eu/api/v5_3/seriescalc`, no key needed, cached in `.pvgis_cache/`
+  - Stockholm 10 kWp: ~10,278 kWh/yr (vs cos³ model 7,760 kWh/yr — model is 32% low)
+  - Especially conservative in winter/spring: March model 638 kWh vs PVGIS 1,352 kWh (tilted panels)
+- **Tibber**: `fetch_production()` hourly + `fetch_daily_production()` for monthly averages
+- **CSV import**: `import_solar.py` handles Swedish semicolon/comma + English formats
+- Monthly scaling: `_get_solar_scaled()` uses cos³ hourly shape × (real_monthly / model_monthly) ratio
+- `SolarConfig.real_production`: dict "YYYY-MM-DD HH:00" → kW, `real_monthly_kwh`: month → kWh
 
 ### Effekttariff (power demand tariff)
 - `EffektTariff` class: charges based on peak kW demand per month
@@ -207,7 +222,8 @@ With correct parameters (20A fuse, 270 m², calibrated h_loss=0.160, EV 23-03):
 - All tests pass (10 integration tests + full end-to-end)
 
 ## Known issues / future work
-- Solar model is simplified (monthly averages, no weather variation)
+- ~~Solar model is simplified~~ — RESOLVED: PVGIS satellite data + Tibber production + CSV import. cos³ fallback only when no real data.
+- PVGIS data ends ~early 2023 (SARAH3 database). For 2024+ simulation dates, monthly-scaled model used.
 - No degradation modeling for battery capacity over time
 - Tibber hourly data limited to ~30 days via API — use Vattenfall Excel for long history
 - Pool heat pump modeled as constant 3 kW but real heat pumps vary with temperature
