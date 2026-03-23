@@ -122,7 +122,8 @@ with col_consumption:
     with st.expander("Hämta från elapp (Tibber)", expanded=not st.session_state.get("tibber_home")):
         st.caption("Hämtar förbrukningsprofil, adress, nätägare, säkring och husdata. "
                    "Hämta din token på [developer.tibber.com](https://developer.tibber.com/).")
-        _tibber_token_input = st.text_input("Tibber API-token", type="password", key="tibber_token_input",
+        _tibber_token_input = st.text_input("Tibber API-token", key="tibber_token_input",
+                                             placeholder="Klistra in din token här",
                                              help="Klistra in din personliga Tibber-token. "
                                                   "Hittas på developer.tibber.com → ditt konto.")
         if _tibber_token_input:
