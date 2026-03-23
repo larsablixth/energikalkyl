@@ -249,9 +249,10 @@ with col_consumption:
                         st.error(f"E.ON-fel: {e}")
 
     # File upload section — always visible (works alongside Tibber/E.ON)
-    with st.expander("Ladda upp förbrukningsdata (Vattenfall/CSV)", expanded=not st.session_state.get("seasonal_profile")):
-        st.caption("Vattenfall Excel-filer ger 3+ års timdata — bästa underlaget för kalibrering. "
-                   "Ladda ner från Vattenfall Mina sidor → Förbrukning → Exportera.")
+    with st.expander("Ladda upp förbrukningsdata (Excel/CSV)", expanded=not st.session_state.get("seasonal_profile")):
+        st.caption("Vattenfall Excel-filer ger 3+ års timdata — bästa underlaget. "
+                   "CSV med kolumner för datum, tid och förbrukning (kWh) fungerar också. "
+                   "Formatet detekteras automatiskt (semikolon/komma, svensk/engelsk header).")
         cons_files = st.file_uploader("Förbrukningsdata", type=["csv", "txt", "xlsx", "xls"],
                                        accept_multiple_files=True, key="cons_upload")
         if cons_files:
