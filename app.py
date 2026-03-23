@@ -685,19 +685,19 @@ with col_sys3:
                 f"och säkring {_fuse_list}")
     with st.expander("Tariffdetaljer", expanded=False):
         if "tidstariff" in op_info:
-            t = op_info["tidstariff"]
+            _tid = op_info["tidstariff"]
             st.markdown("**Tidstariff**")
             st.caption("Höglast: jan-mar + nov-dec, vardagar 06-22 (ej helgdagar). Övrig tid: alla andra timmar.")
-            peak_rate = st.number_input("Höglast (öre/kWh)", value=t["peak"], step=0.5)
-            offpeak_rate = st.number_input("Övrig tid (öre/kWh)", value=t["offpeak"], step=0.5)
+            peak_rate = st.number_input("Höglast (öre/kWh)", value=_tid["peak"], step=0.5)
+            offpeak_rate = st.number_input("Övrig tid (öre/kWh)", value=_tid["offpeak"], step=0.5)
         else:
             peak_rate = 76.5
             offpeak_rate = 30.5
         if "enkeltariff" in op_info:
-            t = op_info["enkeltariff"]
+            _enkel = op_info["enkeltariff"]
             st.markdown("**Enkeltariff**")
             st.caption("Samma avgift alla timmar, alla dagar.")
-            flat_rate = st.number_input("Överföring (öre/kWh)", value=t["flat_rate"], step=0.5)
+            flat_rate = st.number_input("Överföring (öre/kWh)", value=_enkel["flat_rate"], step=0.5)
         else:
             flat_rate = 44.5
         if has_effekt:
@@ -1251,15 +1251,15 @@ if use_heating_model:
         # Build daily_load_override: house load per hour per date
         daily_load_override = {}
         for date_str, hourly_temps in temps_data.items():
-            t_by_hour = {h: t for h, t in hourly_temps}
+            t_by_hour = {h: _temp for h, _temp in hourly_temps}
             profile = {}
             for h in range(24):
-                t = t_by_hour.get(h)
-                if t is None:
+                _temp = t_by_hour.get(h)
+                if _temp is None:
                     available = sorted(t_by_hour.keys())
                     nearest = min(available, key=lambda k: abs(k - h))
-                    t = t_by_hour[nearest]
-                heat_kw = heating_electricity_kw(t, heating_config)
+                    _temp = t_by_hour[nearest]
+                heat_kw = heating_electricity_kw(_temp, heating_config)
                 dhw_kw = heating_config.dhw_kwh_per_day / 24
                 profile[h] = non_heat_base + heat_kw + dhw_kw
             daily_load_override[date_str] = profile
@@ -1565,8 +1565,8 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
             num_days = 0
             effekt_saving_yr = 0
 
-            for t in all_tariffs:
-                r = simulate(price_rows, cfg, tariff=t, solar=solar_config)
+            for _tf in all_tariffs:
+                r = simulate(price_rows, cfg, tariff=_tf, solar=solar_config)
                 d = len(set(s.date for s in r.slots))
                 if d == 0:
                     continue
@@ -1574,15 +1574,15 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
 
                 # For effekttariff: estimate demand charge savings from battery
                 eff_save = 0
-                if isinstance(t, EffektTariff):
-                    eff_save = _estimate_effekt_savings(r, t, cfg, d)
+                if isinstance(_tf, EffektTariff):
+                    eff_save = _estimate_effekt_savings(r, _tf, cfg, d)
                     p += eff_save
 
                 if p > best_profit:
                     best_profit = p
                     result = r
-                    tariff = t
-                    best_tariff = t.name
+                    tariff = _tf
+                    best_tariff = _tf.name
                     num_days = d
                     effekt_saving_yr = eff_save
 
