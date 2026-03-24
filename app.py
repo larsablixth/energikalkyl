@@ -1867,7 +1867,11 @@ if "all_results" in st.session_state:
                 f"energiskatt, nätavgift, verkningsgrad ({_eff:.0%}) och exportavgift. "
                 f"Det kräver en daglig prisspridning på ~{_min_spread/100:.1f} kr/kWh — "
                 f"ovanligt med dagens svenska spotpriser, men kan bli vanligare "
-                f"med ökad andel vind/sol och minskad kärnkraft."
+                f"med ökad andel vind/sol och minskad kärnkraft. "
+                f"**OBS:** Exportarbitrage kräver nätägare med låga fasta avgifter och låg energiavgift "
+                f"(t.ex. SEOM effekttariff: 5 öre/kWh). Med tidstariff (t.ex. Vattenfall: 76,5 öre höglast) "
+                f"äter överföringsavgiften upp vinsten — varje laddad kWh kostar fullt, "
+                f"men exporterad kWh ger bara spotpris tillbaka."
             )
 
     # Self-consumption optimization (when using SEK/kWh mode)
