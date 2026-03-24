@@ -1514,11 +1514,15 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
         solar_config.purchase_price = sol_price
         solar_config.installation_cost = sol_install
 
-    # Determine fuse sizes to sweep (one smaller + user's selection + larger)
+    # Determine fuse sizes to sweep (down + user's selection + larger)
+    # Minimum fuse: must handle household peak load (base + all scheduled loads running)
+    _peak_load_kw = base_load + sum(l.power for l in scheduled_loads)
+    _min_fuse_amps = _peak_load_kw / (0.23 * phases) if phases > 0 else 16
     _op_fuse_fees = get_operator_fuse_fees(grid_operator)
     _available_fuses = sorted(_op_fuse_fees.keys())
-    _smaller = [f for f in _available_fuses if f < fuse_amps][-1:]  # one size down
-    _larger = [f for f in _available_fuses if f > fuse_amps][:3]    # up to 3 larger
+    # Only include smaller fuses that can still handle household peak load
+    _smaller = [f for f in _available_fuses if f < fuse_amps and f >= _min_fuse_amps][-1:]
+    _larger = [f for f in _available_fuses if f > fuse_amps][:3]
     _fuses_to_sweep = _smaller + [f for f in _available_fuses if f == fuse_amps] + _larger
     _base_fuse_fee_yr = _op_fuse_fees.get(fuse_amps, 0)
 
