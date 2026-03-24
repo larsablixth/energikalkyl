@@ -555,10 +555,18 @@ with col_sys2:
     use_solar = st.checkbox(t("solar_panels"), value=True)
     if use_solar:
         solar_kwp = st.number_input(t("system_kwp"), value=15.0, min_value=0.0, step=0.5)
-        export_factor = st.number_input(t("export_price"), value=1.0, min_value=0.0, max_value=1.5, step=0.05,
-                                        help=t("export_price_help"))
-        export_fee = st.number_input(t("export_fee"), value=5.0, min_value=0.0, step=1.0,
-                                      help=t("export_fee_help"))
+        _zero_export = st.checkbox("Nollexport (ingen försäljning till nät)", value=True,
+                                    help="Batteriet laddar ur bara för eget bruk. "
+                                         "Kräver ingen mikroproducentregistrering. "
+                                         "Avmarkera för att simulera med nätexport.")
+        if _zero_export:
+            export_factor = 0.0
+            export_fee = 0.0
+        else:
+            export_factor = st.number_input(t("export_price"), value=1.0, min_value=0.0, max_value=1.5, step=0.05,
+                                            help=t("export_price_help"))
+            export_fee = st.number_input(t("export_fee"), value=5.0, min_value=0.0, step=1.0,
+                                          help=t("export_fee_help"))
         # --- Solar production data sources ---
         _solar_source = st.radio(t("solar_data"), [t("solar_model"), t("solar_pvgis"), t("solar_csv")],
                                   index=1 if not st.session_state.get("tibber_solar_monthly") else 0,
@@ -642,8 +650,8 @@ with col_sys2:
     else:
         solar_config = None
         solar_kwp = 0
-        export_factor = 1.0
-        export_fee = 5.0
+        export_factor = 0.0
+        export_fee = 0.0
 
 with col_sys3:
     st.subheader(t("grid"))
@@ -1748,6 +1756,88 @@ if "all_results" in st.session_state:
 
     # Tariff recommendation (from best size)
     st.info(f"Bästa tariff: **{best['best_tariff']}**")
+
+    # === EXPORT COMPARISON ===
+    # Show what happens with vs without export for the recommended battery
+    _current_export = best["config"].export_price_factor
+    _alt_export = 1.0 if _current_export == 0 else 0.0
+    _alt_label = "med nätexport" if _alt_export > 0 else "utan nätexport (nollexport)"
+    _alt_fee = 5.0 if _alt_export > 0 else 0.0
+
+    with st.expander(f"Jämför: {_alt_label}"):
+        with st.spinner("Simulerar alternativ..."):
+            from batteri import BatteryConfig as _BC
+            _alt_cfg = _BC(
+                capacity_kwh=best["config"].capacity_kwh,
+                max_charge_kw=best["config"].max_charge_kw,
+                max_discharge_kw=best["config"].max_discharge_kw,
+                efficiency=best["config"].efficiency,
+                fuse_amps=best["config"].fuse_amps,
+                phases=best["config"].phases,
+                base_load_kw=best["config"].base_load_kw,
+                scheduled_loads=best["config"].scheduled_loads,
+                hourly_load_profile=best["config"].hourly_load_profile,
+                seasonal_load_profile=best["config"].seasonal_load_profile,
+                daily_load_override=best["config"].daily_load_override,
+                flexible_loads=best["config"].flexible_loads,
+                purchase_price=best["config"].purchase_price,
+                installation_cost=best["config"].installation_cost,
+                cycle_life=best["config"].cycle_life,
+                calendar_life_years=best["config"].calendar_life_years,
+                export_price_factor=_alt_export,
+                export_fee_ore=_alt_fee,
+            )
+            _alt_result = simulate(price_rows, _alt_cfg, tariff=best["tariff"],
+                                    solar=solar_cfg)
+            _alt_d = len(set(s.date for s in _alt_result.slots))
+            _alt_yrs = _alt_d / 365.25
+            _alt_arb = _alt_result.net_profit_sek / _alt_d * 365.25 if _alt_d > 0 else 0
+            _alt_export_kwh = _alt_result.total_grid_export_kwh / _alt_yrs if _alt_yrs > 0 else 0
+            _alt_export_rev = _alt_result.total_export_revenue / _alt_yrs if _alt_yrs > 0 else 0
+            _alt_cycles = _alt_result.num_cycles / _alt_yrs if _alt_yrs > 0 else 0
+            _alt_life = min(best["config"].cycle_life / _alt_cycles if _alt_cycles > 0 else 15, 15)
+
+            # Solar self-consumption for alt
+            _alt_solar_self = 0
+            if solar_cfg and _alt_d > 0:
+                _sh = 24 / (len(_alt_result.slots) / _alt_d)
+                _tp = sum(s.solar_kw for s in _alt_result.slots) * _sh
+                _sc = max(0, _tp - _alt_result.total_solar_charge_kwh
+                          - _alt_result.total_flex_consumed_kwh - _alt_result.total_grid_export_kwh)
+                _ao = sum(s.total_cost_ore for s in _alt_result.slots) / len(_alt_result.slots)
+                _alt_solar_self = (_sc * _ao / 100) / _alt_yrs
+
+            _alt_benefit = _alt_arb + (_alt_solar_self if sol_invest_total > 0 or (solar_cfg and solar_cfg.purchase_price == 0) else 0)
+            _alt_profit = _alt_benefit * _alt_life - best["total_invest"]
+
+            _cur_label = "Nollexport" if _current_export == 0 else "Med export"
+            _alt_mode_label = "Med export" if _alt_export > 0 else "Nollexport"
+
+            st.dataframe(pd.DataFrame([
+                {
+                    "Läge": _cur_label + " (valt)",
+                    "Besparing/år": f"{best['net_benefit_yr']:,.0f} kr",
+                    "Cykler/år": f"{best['cycles_yr']:.0f}",
+                    "Livslängd": f"{best['lifetime']:.0f} år",
+                    "Netto": f"{best['profit_life']:+,.0f} kr",
+                },
+                {
+                    "Läge": _alt_mode_label,
+                    "Besparing/år": f"{_alt_benefit:,.0f} kr",
+                    "Cykler/år": f"{_alt_cycles:.0f}",
+                    "Livslängd": f"{_alt_life:.0f} år",
+                    "Netto": f"{_alt_profit:+,.0f} kr",
+                },
+            ]), use_container_width=True, hide_index=True)
+
+            if _alt_export > 0:
+                st.caption(f"Export: {_alt_export_kwh:,.0f} kWh/år → {_alt_export_rev:,.0f} kr/år intäkt. "
+                           f"Kräver mikroproducentregistrering och exportavtal.")
+            _diff = _alt_profit - best["profit_life"]
+            if _diff > 0:
+                st.success(f"**{_alt_mode_label} ger {_diff:+,.0f} kr mer** över livslängden.")
+            else:
+                st.info(f"**{_cur_label} är bättre** — {-_diff:,.0f} kr mer över livslängden.")
 
     # Self-consumption optimization (when using SEK/kWh mode)
     if st.session_state.get("pricing_mode", "") == t("sek_per_kwh_mode"):
