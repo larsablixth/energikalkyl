@@ -877,9 +877,8 @@ if use_heating_model:
 
     col_loc1, col_loc2 = st.columns([2, 3])
     with col_loc1:
-        selected_city = st.selectbox("Stad / ort", city_names, index=_city_default,
-                                      help="Välj den ort som är närmast dig. "
-                                           "Hämtas automatiskt från Tibber om tillgänglig.")
+        selected_city = st.selectbox(t("city_label"), city_names, index=_city_default,
+                                      help=t("city_help"))
 
     # Use exact Tibber coordinates if available, otherwise city center
     if _tibber_lat and _tibber_lon and selected_city.lower() == _tibber_city.lower():
@@ -895,14 +894,14 @@ if use_heating_model:
     station_id, station_name, station_dist = find_nearest_station(city_lat, city_lon, stations)
 
     with col_loc2:
-        _loc_source = "exakta koordinater från Tibber" if (_tibber_lat and _tibber_lon and selected_city.lower() == _tibber_city.lower()) else "stadscentrum"
-        st.caption(f"Närmaste SMHI-station: **{station_name}** ({station_dist:.0f} km, baserat på {_loc_source})")
+        _loc_source = t("loc_source_tibber") if (_tibber_lat and _tibber_lon and selected_city.lower() == _tibber_city.lower()) else t("loc_source_city")
+        st.caption(t("nearest_station").format(name=station_name, dist=station_dist, source=_loc_source))
         # Allow manual override
-        with st.expander("Välj annan station", expanded=False):
+        with st.expander(t("choose_other_station"), expanded=False):
             station_list = sorted(stations.items(), key=lambda x: x[1][0])
             station_options = {f"{name} ({sid})": sid for sid, (name, _, _) in station_list}
             default_key = f"{station_name} ({station_id})"
-            selected_station = st.selectbox("Station", list(station_options.keys()),
+            selected_station = st.selectbox(t("station_label"), list(station_options.keys()),
                                              index=list(station_options.keys()).index(default_key)
                                              if default_key in station_options else 0)
             station_id = station_options[selected_station]
@@ -911,18 +910,17 @@ if use_heating_model:
     # Load or fetch temperature data
     temps_data = load_temperatures(station_id=station_id)
     if not temps_data:
-        with st.spinner(f"Hämtar väderdata från {station_name}..."):
+        with st.spinner(t("fetching_weather").format(name=station_name)):
             try:
                 fetch_station_data(station_id)
                 temps_data = load_temperatures(station_id=station_id)
             except Exception as e:
-                st.warning(f"Kunde inte hämta väderdata: {e}")
+                st.warning(t("weather_fetch_error").format(error=e))
 
     if temps_data:
         # --- House calibration ---
-        st.markdown("**Ditt hus**")
-        st.caption("Välj energiklass och yta för att uppskatta värmeförlust. "
-                   "Har du förbrukningsdata (Tibber/Vattenfall) kalibreras modellen automatiskt.")
+        st.markdown(t("your_house"))
+        st.caption(t("house_calibration_help"))
 
         # Energy class → h_loss lookup (for ground-source heat pump, COP_avg ~3.2)
         # Computed from: h_loss = (energy_class × area - DHW_elec - vent_elec) × COP / degree_hours
@@ -944,14 +942,13 @@ if use_heating_model:
 
         col_house1, col_house2 = st.columns(2)
         with col_house1:
-            energy_class = st.selectbox("Energiklass (energideklaration)",
+            energy_class = st.selectbox(t("energy_class_label"),
                                          list(_ENERGY_CLASSES.keys()), index=2,
-                                         help="Finns i husets energideklaration. Vet du inte? "
-                                              "Klass C-D är vanligast för hus byggda 1990-2020.")
+                                         help=t("energy_class_help"))
             _tibber_size = st.session_state.get("tibber_home", {}).get("house_size", 0)
             _area_default = _tibber_size if _tibber_size > 0 else 150
-            house_area = st.number_input("Boyta (m²)", value=_area_default, min_value=30, max_value=500, step=10,
-                                          help="Hämtas från Tibber om tillgänglig.")
+            house_area = st.number_input(t("house_area_label"), value=_area_default, min_value=30, max_value=500, step=10,
+                                          help=t("house_area_help"))
 
         # Derive h_loss: calibrated data wins over energy class estimate
         kwh_m2 = _ENERGY_CLASSES[energy_class]
@@ -981,29 +978,28 @@ if use_heating_model:
                 _calibrated = True
 
         with col_house2:
-            _heating_options = ["Bergvärme (mark/sjö)", "Luftvärmepump", "Fjärrvärme", "Direktel (element)"]
+            _heating_options = [t("heating_ground"), t("heating_airsource"), t("heating_district"), t("heating_electric")]
             _tibber_heat = st.session_state.get("tibber_home", {}).get("heating_source", "")
             _heat_map = {"GROUND": 0, "AIR2AIR": 1, "AIR2WATER": 1,
                           "DISTRICT": 2, "ELECTRIC": 3}
             _heat_default = _heat_map.get(_tibber_heat, 0)
-            heating_type = st.selectbox("Uppvärmning", _heating_options, index=_heat_default,
-                                         help="Hämtas från Tibber om tillgänglig. Påverkar COP-beräkningen.")
+            heating_type = st.selectbox(t("heating_label"), _heating_options, index=_heat_default,
+                                         help=t("heating_type_help"))
 
-            if heating_type == "Bergvärme (mark/sjö)":
-                cop_info = "COP ~3.2–3.5 (nära konstant, brintemp varierar inte med utetemperatur)"
-            elif heating_type == "Luftvärmepump":
-                cop_info = "COP 1.5–4.5, sämre vid kyla"
-            elif heating_type == "Fjärrvärme":
-                cop_info = "Ingen VP — elkostnad för cirkulationspump"
+            if heating_type == t("heating_ground"):
+                cop_info = t("cop_ground")
+            elif heating_type == t("heating_airsource"):
+                cop_info = t("cop_airsource")
+            elif heating_type == t("heating_district"):
+                cop_info = t("cop_district")
             else:
-                cop_info = "COP = 1.0 (ren eluppvärmning)"
+                cop_info = t("cop_electric")
             st.caption(cop_info)
 
             # Air-to-air supplement (works with any primary heating)
-            use_aa = st.checkbox("Luft-luft komplement (AC + uppvärmning)", value=False,
+            use_aa = st.checkbox(t("aa_checkbox"), value=False,
                                   key="use_aa",
-                                  help="Luft-luft VP som komplement: AC på sommaren, "
-                                       "uppvärmning när utetemperaturen är tillräckligt hög.")
+                                  help=t("aa_help"))
             if use_aa:
                 # Preset models
                 _AA_PRESETS = {
@@ -1082,28 +1078,24 @@ if use_heating_model:
                 _dhw_default = round(max(3.0, min(10.0, 3.0 + house_area / 50)), 1)
 
         # Detailed settings in expander
-        with st.expander("Detaljerade VP-inställningar", expanded=False):
+        with st.expander(t("detailed_hp_settings"), expanded=False):
             col_h1, col_h2, col_h3 = st.columns(3)
             with col_h1:
-                _hloss_help = (f"Kalibrerat {h_loss_default:.3f} kW/°C från din förbrukningsdata."
+                _hloss_help = (t("hloss_calibrated").format(value=h_loss_default)
                                if _calibrated else
-                               f"Uppskattat {h_loss_default:.3f} kW/°C från energiklass + yta. "
-                               f"Ladda förbrukningsdata eller fyll i Tibber Insikter för exakt kalibrering.")
-                h_loss = st.number_input("Värmeförlust (kW/°C)", value=h_loss_default,
+                               t("hloss_estimated").format(value=h_loss_default))
+                h_loss = st.number_input(t("hloss_label"), value=h_loss_default,
                                           min_value=0.01, max_value=1.5, step=0.001, format="%.3f",
                                           help=_hloss_help)
                 if _calibrated:
-                    st.caption(f"Kalibrerat mot verklig förbrukning. "
-                               f"Energiklass, yta och VP-inställningar nedan påverkar inte simuleringen.")
-                hp_max = st.number_input("VP max värmeeffekt (kW)", value=_hp_max_default, min_value=1.0, step=0.5,
-                                          help=f"Uppskattat {_hp_max_default} kW för {house_area} m². "
-                                               f"Typiskt 4-8 kW för villa, 8-12 kW för större hus.")
+                    st.caption(t("calibration_note"))
+                hp_max = st.number_input(t("hp_max_label"), value=_hp_max_default, min_value=1.0, step=0.5,
+                                          help=t("hp_max_help").format(hp_max=_hp_max_default, area=house_area))
             with col_h2:
-                elpatron_kw = st.number_input("Elpatron (kW)", value=3.0, min_value=0.0, step=0.5,
-                                               help="Tillsatsvärme vid extremkyla. 0 om ingen.")
-                dhw_kwh = st.number_input("Varmvatten (kWh el/dag)", value=_dhw_default, min_value=0.0, step=1.0,
-                                           help=f"Uppskattat {_dhw_default} kWh/dag för {house_area} m². "
-                                                f"Beror på antal personer (~2 kWh/person/dag via VP).")
+                elpatron_kw = st.number_input(t("elpatron_label"), value=3.0, min_value=0.0, step=0.5,
+                                               help=t("elpatron_help"))
+                dhw_kwh = st.number_input(t("dhw_label"), value=_dhw_default, min_value=0.0, step=1.0,
+                                           help=t("dhw_help").format(dhw=_dhw_default, area=house_area))
             with col_h3:
                 non_heat_base = st.number_input("Bas utan värme/EV (kW)", value=_base_default, min_value=0.0,
                                                  step=0.01, format="%.2f",
@@ -1115,11 +1107,11 @@ if use_heating_model:
                    f"Väderdata: {len(temps_data)} dagar ({min(temps_data.keys())} — {max(temps_data.keys())})")
 
         # Adjust COP model for heating type
-        if heating_type == "Luftvärmepump":
+        if heating_type == t("heating_airsource"):
             cop_base, cop_slope = 2.8, 0.08  # worse at cold temps
-        elif heating_type == "Fjärrvärme":
+        elif heating_type == t("heating_district"):
             cop_base, cop_slope = 99.0, 0.0  # essentially free heating (no compressor)
-        elif heating_type == "Direktel (element)":
+        elif heating_type == t("heating_electric"):
             cop_base, cop_slope = 1.0, 0.0
         else:
             cop_base, cop_slope = 3.4, 0.056  # ground source default

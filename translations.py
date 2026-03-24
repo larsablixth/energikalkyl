@@ -789,6 +789,158 @@ STRINGS = {
         "sv": "**Plats (för väderdata)**",
         "en": "**Location (for weather data)**",
     },
+    "city_label": {
+        "sv": "Stad / ort",
+        "en": "City / town",
+    },
+    "city_help": {
+        "sv": "Välj den ort som är närmast dig. Hämtas automatiskt från Tibber om tillgänglig.",
+        "en": "Choose the town closest to you. Auto-filled from Tibber if available.",
+    },
+    "loc_source_tibber": {
+        "sv": "exakta koordinater från Tibber",
+        "en": "exact coordinates from Tibber",
+    },
+    "loc_source_city": {
+        "sv": "stadscentrum",
+        "en": "city center",
+    },
+    "nearest_station": {
+        "sv": "Närmaste SMHI-station: **{name}** ({dist:.0f} km, baserat på {source})",
+        "en": "Nearest SMHI station: **{name}** ({dist:.0f} km, based on {source})",
+    },
+    "choose_other_station": {
+        "sv": "Välj annan station",
+        "en": "Choose another station",
+    },
+    "station_label": {
+        "sv": "Station",
+        "en": "Station",
+    },
+    "fetching_weather": {
+        "sv": "Hämtar väderdata från {name}...",
+        "en": "Fetching weather data from {name}...",
+    },
+    "weather_fetch_error": {
+        "sv": "Kunde inte hämta väderdata: {error}",
+        "en": "Could not fetch weather data: {error}",
+    },
+    "your_house": {
+        "sv": "**Ditt hus**",
+        "en": "**Your house**",
+    },
+    "house_calibration_help": {
+        "sv": "Välj energiklass och yta för att uppskatta värmeförlust. Har du förbrukningsdata (Tibber/Vattenfall) kalibreras modellen automatiskt.",
+        "en": "Choose energy class and area to estimate heat loss. If consumption data is loaded (Tibber/Vattenfall), the model auto-calibrates.",
+    },
+    "energy_class_label": {
+        "sv": "Energiklass (energideklaration)",
+        "en": "Energy class (energy declaration)",
+    },
+    "energy_class_help": {
+        "sv": "Finns i husets energideklaration. Vet du inte? Klass C-D är vanligast för hus byggda 1990-2020.",
+        "en": "Found in your home's energy declaration. Not sure? Class C-D is most common for homes built 1990-2020.",
+    },
+    "house_area_label": {
+        "sv": "Boyta (m²)",
+        "en": "Living area (m²)",
+    },
+    "house_area_help": {
+        "sv": "Hämtas från Tibber om tillgänglig.",
+        "en": "Auto-filled from Tibber if available.",
+    },
+    "heating_ground": {
+        "sv": "Bergvärme (mark/sjö)",
+        "en": "Ground source (borehole/lake)",
+    },
+    "heating_airsource": {
+        "sv": "Luftvärmepump",
+        "en": "Air source heat pump",
+    },
+    "heating_district": {
+        "sv": "Fjärrvärme",
+        "en": "District heating",
+    },
+    "heating_electric": {
+        "sv": "Direktel (element)",
+        "en": "Direct electric (radiators)",
+    },
+    "heating_label": {
+        "sv": "Uppvärmning",
+        "en": "Heating",
+    },
+    "heating_type_help": {
+        "sv": "Hämtas från Tibber om tillgänglig. Påverkar COP-beräkningen.",
+        "en": "Auto-filled from Tibber if available. Affects COP calculation.",
+    },
+    "cop_ground": {
+        "sv": "COP ~3.2–3.5 (nära konstant, brintemp varierar inte med utetemperatur)",
+        "en": "COP ~3.2–3.5 (nearly constant, brine temp unaffected by outdoor temperature)",
+    },
+    "cop_airsource": {
+        "sv": "COP 1.5–4.5, sämre vid kyla",
+        "en": "COP 1.5–4.5, worse in cold weather",
+    },
+    "cop_district": {
+        "sv": "Ingen VP — elkostnad för cirkulationspump",
+        "en": "No heat pump — electricity cost for circulation pump only",
+    },
+    "cop_electric": {
+        "sv": "COP = 1.0 (ren eluppvärmning)",
+        "en": "COP = 1.0 (pure electric heating)",
+    },
+    "aa_checkbox": {
+        "sv": "Luft-luft komplement (AC + uppvärmning)",
+        "en": "Air-to-air supplement (AC + heating)",
+    },
+    "aa_help": {
+        "sv": "Luft-luft VP som komplement: AC på sommaren, uppvärmning när utetemperaturen är tillräckligt hög.",
+        "en": "Air-to-air heat pump as supplement: AC in summer, heating when outdoor temperature is high enough.",
+    },
+    "detailed_hp_settings": {
+        "sv": "Detaljerade VP-inställningar",
+        "en": "Detailed heat pump settings",
+    },
+    "hloss_calibrated": {
+        "sv": "Kalibrerat {value:.3f} kW/°C från din förbrukningsdata.",
+        "en": "Calibrated {value:.3f} kW/°C from your consumption data.",
+    },
+    "hloss_estimated": {
+        "sv": "Uppskattat {value:.3f} kW/°C från energiklass + yta. Ladda förbrukningsdata eller fyll i Tibber Insikter för exakt kalibrering.",
+        "en": "Estimated {value:.3f} kW/°C from energy class + area. Load consumption data or enter Tibber Insights for exact calibration.",
+    },
+    "hloss_label": {
+        "sv": "Värmeförlust (kW/°C)",
+        "en": "Heat loss (kW/°C)",
+    },
+    "calibration_note": {
+        "sv": "Kalibrerat mot verklig förbrukning. Energiklass, yta och VP-inställningar nedan påverkar inte simuleringen.",
+        "en": "Calibrated against actual consumption. Energy class, area, and heat pump settings below do not affect the simulation.",
+    },
+    "hp_max_label": {
+        "sv": "VP max värmeeffekt (kW)",
+        "en": "Heat pump max heating power (kW)",
+    },
+    "hp_max_help": {
+        "sv": "Uppskattat {hp_max} kW för {area} m². Typiskt 4-8 kW för villa, 8-12 kW för större hus.",
+        "en": "Estimated {hp_max} kW for {area} m². Typically 4-8 kW for houses, 8-12 kW for larger homes.",
+    },
+    "elpatron_label": {
+        "sv": "Elpatron (kW)",
+        "en": "Backup heater (kW)",
+    },
+    "elpatron_help": {
+        "sv": "Tillsatsvärme vid extremkyla. 0 om ingen.",
+        "en": "Supplemental heating in extreme cold. 0 if none.",
+    },
+    "dhw_label": {
+        "sv": "Varmvatten (kWh el/dag)",
+        "en": "Hot water (kWh elec/day)",
+    },
+    "dhw_help": {
+        "sv": "Uppskattat {dhw} kWh/dag för {area} m². Beror på antal personer (~2 kWh/person/dag via VP).",
+        "en": "Estimated {dhw} kWh/day for {area} m². Depends on number of residents (~2 kWh/person/day via heat pump).",
+    },
     "diy_header": {
         "sv": "Systemdesign — DIY utan export",
         "en": "System Design — DIY Zero Export",
