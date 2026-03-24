@@ -114,6 +114,11 @@ class BatteryConfig:
     # Grid export
     export_price_factor: float = 1.0  # fraction of spot price received for export (1.0 = full spot)
     export_fee_ore: float = 5.0       # provider fee per exported kWh (öre)
+    # Export arbitrage: reserve capacity beyond self-consumption for grid trading.
+    # When > 0, the battery splits into self-consumption (up to this kWh) + export
+    # (remaining capacity). The export portion cycles daily when spreads are profitable.
+    # 0 = no split (default), all capacity used for self-consumption + optional export.
+    export_arbitrage_kwh: float = 0.0
 
     # Phase imbalance: real loads aren't balanced across 3 phases.
     # 0.7 means we assume the most loaded phase carries ~43% of total
@@ -446,7 +451,9 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
 
         total_charge_possible = 0.0
         total_discharge_possible = 0.0
-        max_cycles = 3  # limit to avoid unrealistic cycling
+        # More cycles allowed when export arbitrage is active (idle capacity should trade)
+        _has_arb = config.export_arbitrage_kwh > 0 and config.export_price_factor > 0
+        max_cycles = 5 if _has_arb else 3
 
         # Estimate how much solar surplus will charge the battery today
         # so we don't fill up with grid power and waste free solar
@@ -499,7 +506,8 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
             avg_charge_price = sum(slot_cost_map[i][0] for i in cycle_charge) / len(cycle_charge)
             avg_discharge_value = sum(slot_discharge_value[i] for i in cycle_discharge) / len(cycle_discharge)
             absolute_spread = avg_discharge_value - avg_charge_price
-            min_absolute_spread = 20  # öre/kWh — don't cycle for tiny spreads
+            # Lower spread threshold for export arbitrage (idle capacity has zero opportunity cost)
+            min_absolute_spread = 10 if _has_arb else 20  # öre/kWh
 
             if (avg_discharge_value > avg_charge_price * min_spread_factor
                     and absolute_spread > min_absolute_spread):

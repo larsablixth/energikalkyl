@@ -562,11 +562,17 @@ with col_sys2:
         if _zero_export:
             export_factor = 0.0
             export_fee = 0.0
+            _export_arb_kwh = 0.0
         else:
             export_factor = st.number_input(t("export_price"), value=1.0, min_value=0.0, max_value=1.5, step=0.05,
                                             help=t("export_price_help"))
             export_fee = st.number_input(t("export_fee"), value=5.0, min_value=0.0, step=1.0,
                                           help=t("export_fee_help"))
+            _export_arb_kwh = st.number_input(
+                "Exportarbitrage-kapacitet (kWh)", value=0.0, min_value=0.0, step=10.0,
+                help="Extra batterikapacitet utöver egenförbrukning som används för ren prisarbitrage "
+                     "(köp billigt, sälj dyrt). 0 = ingen extra arbitrage. "
+                     "Sätts automatiskt om batteriet är större än vad huset behöver.")
         # --- Solar production data sources ---
         _solar_source = st.radio(t("solar_data"), [t("solar_model"), t("solar_pvgis"), t("solar_csv")],
                                   index=1 if not st.session_state.get("tibber_solar_monthly") else 0,
@@ -652,6 +658,7 @@ with col_sys2:
         solar_kwp = 0
         export_factor = 0.0
         export_fee = 0.0
+        _export_arb_kwh = 0.0
 
 with col_sys3:
     st.subheader(t("grid"))
@@ -1594,6 +1601,7 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
                 purchase_price=bat_cost, installation_cost=bat_install,
                 cycle_life=cycle_life, calendar_life_years=15,
                 export_price_factor=export_factor, export_fee_ore=export_fee,
+                export_arbitrage_kwh=_export_arb_kwh,
             )
 
             # Simulate all tariffs, pick best
