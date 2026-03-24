@@ -12,9 +12,18 @@ docker compose up                       # Docker (no Python needed)
 python elpriser.py batteri --help       # CLI help
 ```
 
+### Deployed on Streamlit Community Cloud
+- Auto-deploys on push to main
+- Tibber token entered via UI (no .tibber_token file needed)
+- PVGIS solar data works without any API key
+
 ### WSL2 / bare Python environment
 No system pip/venv: `setup.sh` uses `get-pip.py` + `--user --break-system-packages`.
 Deps: `requirements.txt` (streamlit, plotly, requests, fpdf2, openpyxl, entsoe-py, pandas).
+
+### Claude GitHub Actions
+`.github/workflows/claude.yml` — active on all repos. Create issue with `claude` label or comment `@claude`.
+Requires `ANTHROPIC_API_KEY` secret (set on all 9 repos).
 
 ## Architecture overview
 
@@ -79,8 +88,11 @@ The app follows a 6-step flow:
 - `convert_csv.py` — CLI: generic Swedish CSV → standard JSON
 
 ### App & deployment
-- `app.py` — Streamlit web GUI (main user interface, ~2000 lines)
+- `app.py` — Streamlit web GUI (main user interface, ~2500 lines). Bilingual Swedish/English.
+- `translations.py` — i18n module: 150+ strings, `t(key)` lookup, `set_language("en"/"sv")`. **CRITICAL: never use `t` as a variable name in app.py — it shadows the translation function.**
 - `app_state.py` — Session persistence across page refreshes (SQLite-free, JSON in `.app_state/`)
+- `setup.sh` — First-time setup: installs pip + deps, prompts for Tibber token, starts app
+- `.github/workflows/claude.yml` — Claude Code GitHub Action (PR review, @claude, issue implementation)
 - `Dockerfile` + `docker-compose.yml` — Container deployment
 - `.weather_cache/` — Cached SMHI temperature data per station
 - `.pvgis_cache/` — Cached PVGIS satellite solar data per location/config
