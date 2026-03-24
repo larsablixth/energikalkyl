@@ -759,6 +759,14 @@ STRINGS = {
         "sv": "Ladda ner PDF-rapport (bankunderlag)",
         "en": "Download PDF report (bank documentation)",
     },
+    "diy_header": {
+        "sv": "Systemdesign — DIY utan export",
+        "en": "System Design — DIY Zero Export",
+    },
+    "diy_intro": {
+        "sv": "En kostnadseffektiv design som separerar laddning (billig, hög effekt) från urladdning (smart, nollexport). Kräver ingen mikroproducentregistrering.",
+        "en": "A cost-effective design that separates charging (cheap, high power) from discharging (smart, zero export). No microproducer registration needed.",
+    },
 }
 
 

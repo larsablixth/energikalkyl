@@ -2534,3 +2534,67 @@ if "all_results" in st.session_state:
                 "lifetime_profit": scenario_results[label]["arb_yr"] * best["lifetime"] - inv}
         for label, vf, desc in scenarios
     }
+
+    # ================================================================
+    # DIY SYSTEM DESIGN — zero export, split charge/discharge
+    # ================================================================
+    st.divider()
+    st.subheader(t("diy_header"))
+    st.caption(t("diy_intro"))
+
+    _best_cap = best["capacity"]
+    _best_units = max(1, round(_best_cap / 32))
+    _n_flatpacks = max(2, round(best["max_kw"] / 3))
+    _flatpack_kw = _n_flatpacks * 3
+    _best_fuse = best.get("fuse_amps", fuse_amps)
+
+    st.markdown(f"""
+**Principen:** Separera laddning och urladdning i två oberoende vägar till batteriet.
+
+**Laddväg — billig, hög effekt (grid → batteri)**
+- {_n_flatpacks}× Eltek Flatpack2 HE 48V 3 kW = **{_flatpack_kw} kW laddeffekt**
+- Begagnade telekomlikriktare, ~700-1 000 kr/st (Tradera/eBay)
+- Monteras i standard 19" subrack (2U), spänning ställs till 54.5V
+- Styrs av Shelly-relä: på under billiga timmar (t.ex. 23-05), av annars
+- BMS stänger av vid fullt batteri — ingen smart styrning behövs
+- Laddar {_best_cap:.0f} kWh på ~{_best_cap / _flatpack_kw:.0f} timmar
+
+**Urladdväg — smart, nollexport (batteri → hus)**
+- Victron MultiPlus-II 48/5000 (5 kW kontinuerligt)
+- ESS-läge med **grid feed-in: OFF** → nollexport garanterat i hårdvara
+- Matar husets laster under dyra timmar
+- Cerbo GX som hjärna — läser BMS via CAN, fjärrövervakning via VRM
+
+**Batteri**
+- {_best_units}× NKON ESS Pro 32 kWh (48V, LiFePO4, Seplos 300A BMS)
+- Parallellkopplade på gemensam DC-skena
+- 8 000 cykler, 15 års livslängd
+
+**Solpaneler (om monterade)**
+- Befintlig nätansluten solväxelriktare behålls som den är
+- MultiPlus ser solöverskott på AC-sidan och laddar batteriet automatiskt (AC-koppling)
+- Ingen ombyggnad av solcellsanläggningen behövs
+
+**Nollexport — varför?**
+- Ingen mikroproducentregistrering krävs
+- Inget exportavtal med elhandlare behövs
+- Enklare och billigare växelriktare (behöver inte mata nätet)
+- Varmvattenberedare + luft-luft VP absorberar eventuellt överskott
+
+**Ungefärlig materialkostnad**
+
+| Komponent | Pris |
+|-----------|------|
+| {_best_units}× NKON ESS Pro 32 kWh | {best['bat_cost']:,.0f} kr |
+| {_n_flatpacks}× Eltek Flatpack2 + subrack | ~{_n_flatpacks * 800 + 1000:,} kr |
+| Victron MultiPlus-II 48/5000 | ~15 000 kr |
+| Victron Cerbo GX | ~3 000 kr |
+| Shelly Pro relä | ~500 kr |
+| DC-skena, kablage, brytare | ~2 000 kr |
+| **Totalt material** | **~{best['bat_cost'] + _n_flatpacks * 800 + 1000 + 15000 + 3000 + 500 + 2000:,.0f} kr** |
+""")
+
+    st.info(
+        "Detta är en principskiss — inte en installationsguide. "
+        "Kontakta en behörig elektriker för inkoppling till elnätet."
+    )
