@@ -290,8 +290,8 @@ GRID_OPERATORS = {
     },
     "SEOM (Sollentuna)": {
         "tariffs": ["Effekttariff"],
-        # 2026 fasta elnätsavgifter (inkl. moms)
-        "fuse_fees": {16: 2550, 20: 3675, 25: 4725, 35: 7425, 50: 10950, 63: 14025},
+        # 2026 fasta elnätsavgifter (inkl. moms) — 16-25A same tier
+        "fuse_fees": {16: 1780, 20: 1780, 25: 1780, 35: 3175, 50: 4475, 63: 5445},
         "effekttariff": {
             "energy_rate": 5.0,   # 5 öre/kWh inkl. moms
             "effekt_rate": 145.0,  # höglast Nov-Mar
