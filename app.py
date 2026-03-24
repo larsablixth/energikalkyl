@@ -672,7 +672,7 @@ with col_sys3:
                               format_func=lambda a: f"{a:.0f}A — {op_fuse_fees[a]:,.0f} kr/år",
                               help=t("fuse_help"))
     phases = st.selectbox(t("phases"), [3, 1], index=0)
-    energy_tax = st.number_input(t("energy_tax"), value=54.88, step=0.1,
+    energy_tax = st.number_input(t("energy_tax"), value=45.0, step=0.1,
                                   help=t("energy_tax_help"))
     available_tariffs = op_info["tariffs"]
     has_effekt = "Effekttariff" in available_tariffs and op_info.get("effekttariff")

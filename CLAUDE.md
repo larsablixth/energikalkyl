@@ -64,8 +64,8 @@ The app follows a 6-step flow:
   - Vattenfall Eldistribution (tidstariff + enkeltariff, no effekttariff for private yet)
   - Ellevio (effekttariff: 81.25 kr/kW/mån, top-3 peaks, 50% night discount)
   - E.ON Energidistribution (tid + enkel)
-  - Göteborg Energi (effekttariff: 135 kr/kW/mån winter, + enkeltariff)
-  - Mälarenergi (effekttariff: 59.25 kr/kW/mån, single peak)
+  - Göteborg Energi (tidsindelad effekttariff: 135 kr/kW/mån winter, 0 kr summer, flat 205 kr/mån fee + enkeltariff)
+  - Mälarenergi (effekttariff: 59.25 kr/kW/mån, single peak — NOTE: being removed 2026-07-01)
   - Jämtkraft (enkeltariff only, 7.5 öre/kWh)
   - SEOM/Sollentuna (effekttariff: 145 kr/kW/mån winter, 72.5 kr/kW/mån summer, 2026 fuse fees by category)
   - Anpassad (fully editable)
@@ -167,7 +167,7 @@ The app follows a 6-step flow:
 ### Tariffs (tariff.py)
 - Peak hours (höglasttid): Jan-Mar + Nov-Dec, weekdays 06-22, excluding Swedish public holidays
 - Easter calculated with Anonymous Gregorian algorithm
-- Energy tax: 54.88 öre/kWh (43.90 + 25% moms, 2026)
+- Energy tax: 45.0 öre/kWh (36.0 + 25% moms, 2026 — reduced from 54.88)
 - `GRID_OPERATORS` dict: operator → fuse_fees, tariff types, effekttariff params
 - `create_tariffs_for_operator()`: builds tariff objects from operator presets
 

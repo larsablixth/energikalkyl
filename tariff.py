@@ -103,7 +103,7 @@ class Tidstariff:
     peak: float = 76.50       # höglasttid: vinter vardag 06-22
     offpeak: float = 30.50    # övrig tid
     # Energiskatt (öre/kWh, inkl. moms)
-    energy_tax: float = 54.88  # 2026: 43.90 öre × 1.25
+    energy_tax: float = 45.0  # 2026: 36.0 öre × 1.25 moms
     # Abonnemangsavgift
     fuse_amps: float = 25.0
     monthly_fee: float | None = None
@@ -128,7 +128,7 @@ class FastTariff:
     # Överföringsavgift (öre/kWh, inkl. moms)
     flat_rate: float = 44.50
     # Energiskatt (öre/kWh, inkl. moms)
-    energy_tax: float = 54.88
+    energy_tax: float = 45.0
     # Abonnemangsavgift
     fuse_amps: float = 25.0
     monthly_fee: float | None = None
@@ -156,7 +156,7 @@ class EffektTariff:
     # Energy component (öre/kWh, inkl. moms) — much lower than tidstariff
     energy_rate: float = 7.0
     # Energiskatt (öre/kWh, inkl. moms)
-    energy_tax: float = 54.88
+    energy_tax: float = 45.0
     # Effektavgift (kr/kW/månad, inkl. moms)
     effekt_rate: float = 81.25
     # How many top peaks to average
@@ -246,26 +246,34 @@ GRID_OPERATORS = {
         "effekttariff": None,
     },
     "Göteborg Energi": {
+        # Two models: Standard (49 kr/kW year-round) and Tidsindelad (135 kr/kW winter).
+        # We model both. Standard = Effekttariff, Tidsindelad = separate Effekttariff.
+        # Fixed fee: 205 kr/mån flat (no fuse-based fees for villa ≤63A).
         "tariffs": ["Effekttariff", "Enkeltariff"],
-        "fuse_fees": {16: 3900, 20: 5100, 25: 6600, 35: 9000, 50: 13200, 63: 18000},
+        "fuse_fees": {16: 2460, 20: 2460, 25: 2460, 35: 2460, 50: 2460, 63: 2460},  # 205 kr/mån flat
         "effekttariff": {
-            "energy_rate": 6.5,
-            "effekt_rate": 135.0,
+            # Tidsindelad model (optional, better for battery optimization)
+            "energy_rate": 6.5,    # 6.5 öre/kWh överföring
+            "effekt_rate": 135.0,  # höglast Nov-Mar, helgfri vardag 07-20
+            "low_season_rate": 0.0,  # Apr-Okt: no effektavgift
             "top_n_peaks": 3,
-            "night_discount": 1.0,  # no night discount
+            "night_discount": 1.0,  # no night discount — peak hours only 07-20
             "peak_months": (11, 12, 1, 2, 3),
             "peak_weekday_only": True,
             "peak_hour_start": 7,
             "peak_hour_end": 20,
         },
-        "enkeltariff": {"flat_rate": 23.0},
+        "enkeltariff": {"flat_rate": 23.0},  # standard model överföringsavgift
     },
     "Mälarenergi": {
+        # NOTE: Mälarenergi removing effekttariff 2026-07-01, reverting to non-effekt model.
+        # Effekttariff valid Jan-Jun 2026, then only överföringsavgift remains.
         "tariffs": ["Effekttariff"],
-        "fuse_fees": {16: 3600, 20: 4800, 25: 6000, 35: 8400, 50: 12000, 63: 16800},
+        # 2026 fuse fees (kr/month × 12, inkl moms)
+        "fuse_fees": {16: 4215, 20: 4770, 25: 5190, 35: 6570, 50: 8085, 63: 9360},
         "effekttariff": {
-            "energy_rate": 21.5,  # 17.2 × 1.25
-            "effekt_rate": 59.25,  # 47.4 × 1.25
+            "energy_rate": 21.5,  # 17.2 öre × 1.25 moms
+            "effekt_rate": 59.25,  # 47.4 × 1.25, single highest peak
             "top_n_peaks": 1,  # single highest
             "night_discount": 1.0,
             "peak_months": None,
@@ -324,7 +332,7 @@ def get_operator_fuse_fees(operator: str) -> dict[float, float]:
 
 
 def create_tariffs_for_operator(operator: str, fuse_amps: float = 25.0,
-                                 energy_tax: float = 54.88) -> list:
+                                 energy_tax: float = 45.0) -> list:
     """Create tariff objects for a grid operator."""
     op = GRID_OPERATORS.get(operator, GRID_OPERATORS["Anpassad"])
     tariffs = []
