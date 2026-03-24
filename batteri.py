@@ -569,14 +569,17 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
                     flex_consumed_kw += absorbed
                     flex_daily_used[fl.name] += absorbed * slot_duration_h
 
-            # Calculate remaining surplus after battery + flex → export to grid
+            # Calculate remaining surplus after battery + flex → export or curtail
             remaining_surplus_kw = max(0, remaining_after_battery - flex_consumed_kw)
-            grid_export_kwh = max(0, remaining_surplus_kw * slot_duration_h)
             export_revenue = 0.0
-            if grid_export_kwh > 0.001:
-                # Export revenue: spot price × factor - provider fee
+            if config.export_price_factor > 0 and remaining_surplus_kw > 0.001:
+                # Export to grid
+                grid_export_kwh = remaining_surplus_kw * slot_duration_h
                 export_ore = spot_ore * config.export_price_factor - config.export_fee_ore
                 export_revenue = grid_export_kwh * max(0, export_ore) / 100
+            else:
+                # Zero-export: curtail surplus (inverter throttles, energy is lost)
+                grid_export_kwh = 0.0
 
             # --- Step 2: Grid charge during cheap slots (if room left) ---
             if i in charge_indices and total_ore < avg_total:
