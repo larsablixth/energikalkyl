@@ -1839,6 +1839,29 @@ if "all_results" in st.session_state:
             else:
                 st.info(f"**{_cur_label} är bättre** — {-_diff:,.0f} kr mer över livslängden.")
 
+            # Tipping point analysis
+            _eff = best["config"].efficiency
+            _fee = 5.0  # öre export fee
+            _tax_grid = 50.0  # öre (energiskatt + nätavgift, approximate)
+            # Break-even: buy_spot + tax_grid = (sell_spot - fee) × efficiency
+            # buy_spot + tax_grid = sell_spot × eff - fee × eff
+            # For arbitrage export to break even: sell/buy ratio must exceed threshold
+            # buy at (spot_low + tax_grid), sell at (spot_high × factor - fee)
+            # break-even when: (spot_high - fee) × eff > spot_low + tax_grid
+            # minimum spread: spot_high - spot_low > (spot_low + tax_grid) / eff - spot_low + fee
+            _typical_low = 30  # öre, typical night price
+            _min_high = (_typical_low + _tax_grid) / _eff + _fee
+            _min_spread = _min_high - _typical_low
+            st.caption(
+                f"**Tipping point för exportarbitrage:** "
+                f"Vid typiskt nattelpris (~{_typical_low/100:.0f} kr/kWh) behövs ett spotpris på minst "
+                f"~{_min_high/100:.1f} kr/kWh vid försäljning för att täcka "
+                f"energiskatt, nätavgift, verkningsgrad ({_eff:.0%}) och exportavgift. "
+                f"Det kräver en daglig prisspridning på ~{_min_spread/100:.1f} kr/kWh — "
+                f"ovanligt med dagens svenska spotpriser, men kan bli vanligare "
+                f"med ökad andel vind/sol och minskad kärnkraft."
+            )
+
     # Self-consumption optimization (when using SEK/kWh mode)
     if st.session_state.get("pricing_mode", "") == t("sek_per_kwh_mode"):
         # Find smallest battery where grid export is near zero
