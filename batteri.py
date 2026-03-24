@@ -115,10 +115,18 @@ class BatteryConfig:
     export_price_factor: float = 1.0  # fraction of spot price received for export (1.0 = full spot)
     export_fee_ore: float = 5.0       # provider fee per exported kWh (öre)
 
+    # Phase imbalance: real loads aren't balanced across 3 phases.
+    # 0.7 means we assume the most loaded phase carries ~43% of total
+    # (vs 33% if perfectly balanced). Effectively reduces usable capacity by 30%.
+    phase_balance_factor: float = 0.7
+
     @property
     def grid_max_kw(self) -> float:
-        """Max power from grid based on fuse size."""
-        return self.fuse_amps * self.voltage * self.phases / 1000.0
+        """Max power from grid based on fuse size, derated for phase imbalance."""
+        theoretical = self.fuse_amps * self.voltage * self.phases / 1000.0
+        if self.phases == 3:
+            return theoretical * self.phase_balance_factor
+        return theoretical  # single phase: no imbalance
 
     # Per-day smart load schedule: {date: {load_index: set_of_active_hours}}
     _smart_schedule: dict = field(default_factory=dict, repr=False)
