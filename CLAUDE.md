@@ -37,7 +37,7 @@ The app follows a 6-step flow:
    - **Solar data**: radio selector — PVGIS satellite (default, location-specific), CSV from inverter, or cos³ model. Tibber production auto-fetched if available.
    - Heating: calibrated from energy class OR manual Tibber Insights breakdown OR auto-fit from consumption
    - Calibrated data overrides energy class completely (house size irrelevant when calibrated)
-   - EV default 23-03 (4h, based on Tibber hourly analysis — conservative)
+   - EV default: 18-07 window, 30 kWh/day, Smart=True (picks 3 cheapest hours within window)
    - Flex loads: pool (summer) + varmvatten dump (year-round, absorbs remaining solar)
    - **Luft-luft komplement**: optional air-to-air HP (heating above min temp + AC cooling). Model preset: Mitsubishi Hero 2.0 LN25. Auto-registers as flex load to absorb solar surplus.
 3. **Investment** — two pricing modes:
@@ -56,7 +56,7 @@ The app follows a 6-step flow:
 ## Key files
 
 ### Core simulation
-- `batteri.py` — Battery simulation engine. `BatteryConfig` dataclass, `simulate()` function. Multi-cycle scheduling, solar-aware, fuse headroom-limited. Supports `daily_load_override` for temperature-dependent load profiles.
+- `batteri.py` — Battery simulation engine. `BatteryConfig` dataclass, `simulate()` function. Multi-cycle scheduling, solar-aware, fuse headroom-limited. Supports `daily_load_override` for temperature-dependent load profiles. `LoadSchedule` supports smart mode: picks cheapest N hours within availability window, with effekttariff peak penalty.
 - `solar.py` — Solar production model. Three-tier: real hourly data → model scaled to real monthly totals → cos³ curve fallback. `SolarConfig` with `real_production` (hourly dict) and `real_monthly_kwh` (monthly scaling). `get_solar_for_slot()` transparently picks best available source.
 
 ### Tariffs & grid operators
@@ -111,7 +111,8 @@ The app follows a 6-step flow:
 - Charging power limited by fuse headroom (fuse capacity − household load at that hour)
 - `daily_load_override`: when set, provides date+hour specific load (from heating model), overriding seasonal/hourly profiles
 - All tariff types simulated automatically — best picked per battery size
-- **Fuse size optimization**: sweeps user's fuse + up to 3 larger sizes, picks optimal fuse per battery (net of extra subscription cost). Deduplicates to show best fuse per battery label.
+- **Fuse size optimization**: sweeps one size down + user's fuse + up to 3 larger, picks optimal fuse per battery (net of extra subscription cost). Minimum fuse floor based on household peak load (base + all scheduled loads). Deduplicates to show best fuse per battery label.
+- **Smart scheduled loads**: `LoadSchedule(smart=True, daily_kwh=30)` picks cheapest N hours within availability window each day (prices known day-ahead). Avoids effekttariff peak hours (penalty scaled by kw_factor for night discount). Tidstariff peak/off-peak handled via total_cost_ore().
 
 ### Solar production data (solar.py, pvgis_source.py)
 - Three-tier fallback per simulation hour: real hourly → model scaled to real monthly → pure cos³
@@ -178,12 +179,14 @@ The app follows a 6-step flow:
 - Addresses bias from including extreme periods (e.g., Q1 2026 with 2× normal prices)
 
 ### Fuse size optimization (app.py)
-- Main optimization sweeps fuse sizes (user's selection + up to 3 larger) in outer loop
+- Main optimization sweeps fuse sizes (one smaller + user's selection + up to 3 larger) in outer loop
+- Minimum fuse floor: must handle household peak load (base + all scheduled loads running simultaneously)
 - Each battery label keeps only the fuse size with highest `profit_life` (net of fuse cost delta)
 - `net_benefit_yr` = gross savings − extra fuse subscription cost (vs user's selected fuse)
+- Can recommend both upgrades and downgrades (e.g. SEOM 16-25A same price tier)
 - Fuse comparison section shows pre-computed variants for recommended battery (no re-simulation)
-- Fuse dropdown shows yearly fee per size (e.g. "20A — 3 675 kr/år")
-- SEOM 2026 effekttariff customer fuse fees: 16A=2,550, 20A=3,675, 25A=4,725, 35A=7,425 kr/år
+- Fuse dropdown shows yearly fee per size (e.g. "20A — 1 780 kr/år")
+- SEOM 2026 fuse fees: 16-25A=1,780 kr/yr (same tier), 35A=3,175, 50A=4,475, 63A=5,445
 
 ## Key design decisions
 - **Recommendation-first**: app tells you what to buy, not the other way around
@@ -195,7 +198,7 @@ The app follows a 6-step flow:
 - **Battery alone is profitable**: 32 kWh without solar saves ~4,800 kr/yr on Tidstariff arbitrage alone
 - **Solar self-consumption value** only counted when solar is part of investment
 - **The battery doesn't save kWh** — it shifts WHEN you buy (cheap night → expensive peak)
-- **EV is tidsstyrd last** (car at work during day), pool + varmvatten are flexibla laster (solar surplus)
+- **EV is smart-scheduled**: wide availability window (18-07), picks cheapest hours day-ahead. Avoids effekttariff peak hours and tidstariff peak rates automatically. Pool + varmvatten are flexibla laster (solar surplus)
 - **Zero-export strategy**: varmvatten element (3 kW, no daily cap) + luft-luft (pre-heat/cool) absorb surplus after battery. Near-zero grid export. No need for export-capable inverter or microproducer registration.
 - **Session persistence**: consumption data, prices, calibration inputs survive page refreshes (`.app_state/session.json`)
 - **Luft-luft is optional and separate**: shown outside main investment ROI, contribution reported as bonus
@@ -248,9 +251,11 @@ With correct parameters (20A fuse, 270 m², calibrated h_loss=0.160, EV 23-03):
 - No degradation modeling for battery capacity over time
 - Tibber hourly data limited to ~30 days via API — use Vattenfall Excel for long history
 - Pool heat pump modeled as constant 3 kW but real heat pumps vary with temperature
-- EV modeled as 11 kW × 23-03 — actual varies (Tibber analysis shows 3-4h charging). Conservative.
+- ~~EV modeled as 11 kW × 23-03~~ — RESOLVED: smart scheduling picks cheapest hours within configurable window (default 18-07, 30 kWh/day). Avoids effekttariff peak hours and tidstariff peak rates.
 - Effekttariff savings estimation is approximate (no real-time peak shaving strategy)
 - Grid operator tariff data manually maintained in GRID_OPERATORS dict — rates may change
+- **Mälarenergi effekttariff removed 2026-07-01** — government withdrew requirement. Code still has it for Jan-Jun 2026 simulations but will need update.
+- **Göteborg Energi** has two models: standard (49 kr/kW year-round) and tidsindelad (135 kr/kW winter). Code models tidsindelad. Standard model not yet available as option.
 - Vattenfall hourly extraction: some files produce 364 days instead of 365 (Dec 31 missing)
 - **RISE Eltariff-API**: open free API for grid tariffs, goal ALL 155 operators by 2027. Should replace hardcoded GRID_OPERATORS. GitHub: RI-SE/Eltariff-API, endpoints at api.goteborgenergi.cloud and api.tekniskaverken.net. Currently: Göteborg Energi, Tekniska verken, E.ON, Vattenfall, Halmstad, Kraftringen.
 - **Metry API**: aggregates consumption from 150k+ meters across operators. OAuth2, REST, hourly data. Could replace per-operator integrations. energimolnetapi11.docs.apiary.io
