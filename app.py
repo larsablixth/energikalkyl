@@ -1514,10 +1514,12 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
         solar_config.purchase_price = sol_price
         solar_config.installation_cost = sol_install
 
-    # Determine fuse sizes to sweep (user's selection and larger)
+    # Determine fuse sizes to sweep (one smaller + user's selection + larger)
     _op_fuse_fees = get_operator_fuse_fees(grid_operator)
     _available_fuses = sorted(_op_fuse_fees.keys())
-    _fuses_to_sweep = [f for f in _available_fuses if f >= fuse_amps][:4]
+    _smaller = [f for f in _available_fuses if f < fuse_amps][-1:]  # one size down
+    _larger = [f for f in _available_fuses if f > fuse_amps][:3]    # up to 3 larger
+    _fuses_to_sweep = _smaller + [f for f in _available_fuses if f == fuse_amps] + _larger
     _base_fuse_fee_yr = _op_fuse_fees.get(fuse_amps, 0)
 
     def _build_tariffs_for_fuse(f_amps):
@@ -1705,7 +1707,12 @@ if "all_results" in st.session_state:
     best = all_results[best_idx]
 
     _rec_fuse = best.get("fuse_amps", fuse_amps)
-    _rec_fuse_label = f" + uppgradera till {_rec_fuse:.0f}A" if _rec_fuse != fuse_amps else ""
+    if _rec_fuse > fuse_amps:
+        _rec_fuse_label = f" + uppgradera till {_rec_fuse:.0f}A"
+    elif _rec_fuse < fuse_amps:
+        _rec_fuse_label = f" + nedgradera till {_rec_fuse:.0f}A"
+    else:
+        _rec_fuse_label = ""
     _rec_benefit = best["net_benefit_yr"]
     st.success(
         f"**Rekommendation: {best['label']}{_rec_fuse_label}** — "
@@ -1718,9 +1725,10 @@ if "all_results" in st.session_state:
         _fv = st.session_state.get("fuse_variants", {}).get(best["label"], [])
         _current_fuse_result = next((r for r in _fv if r["fuse_amps"] == fuse_amps), None)
         _extra_benefit = best["net_benefit_yr"] - _current_fuse_result["net_benefit_yr"] if _current_fuse_result else best["fuse_fee_delta_yr"]
+        _change_word = "Uppgradering" if _rec_fuse > fuse_amps else "Nedgradering"
         st.info(
-            f"Säkringsuppgradering {fuse_amps:.0f}A → {_rec_fuse:.0f}A: "
-            f"extra abonnemang {best['fuse_fee_delta_yr']:+,.0f} kr/år, "
+            f"Säkring: {_change_word} {fuse_amps:.0f}A → {_rec_fuse:.0f}A: "
+            f"abonnemang {best['fuse_fee_delta_yr']:+,.0f} kr/år, "
             f"netto {_extra_benefit:+,.0f} kr/år bättre än nuvarande säkring"
         )
 
@@ -2159,7 +2167,7 @@ if "all_results" in st.session_state:
         st.divider()
         st.subheader(t("fuse_header"))
         _base_fee = get_operator_fuse_fees(grid_operator).get(fuse_amps, 0)
-        st.caption(f"Större säkring ger mer laddkapacitet för batteriet. "
+        st.caption(f"Säkringsstorleken påverkar laddkapacitet och abonnemangskostnad. "
                    f"Din nuvarande: {fuse_amps:.0f}A ({_base_fee:,.0f} kr/år). "
                    f"Resultat för rekommenderat batteri ({best['label']}).")
 
