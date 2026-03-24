@@ -744,22 +744,29 @@ with col_l1:
         base_load = 1.5  # overridden by profile or heating model
 
     if "scheduled_loads" not in st.session_state:
-        st.session_state["scheduled_loads"] = [{"name": "Elbil", "power": 11.0, "start": 23, "end": 3}]
+        st.session_state["scheduled_loads"] = [{"name": "Elbil", "power": 11.0, "start": 18, "end": 7,
+                                                 "daily_kwh": 30.0, "smart": True}]
 
     st.markdown(t("scheduled_loads"))
     st.caption(t("scheduled_caption"))
     for i, load in enumerate(st.session_state["scheduled_loads"]):
-        c = st.columns([3, 2, 2, 2, 1])
+        c = st.columns([3, 1.5, 1.5, 1.5, 1.5, 1])
         load["name"] = c[0].text_input("", value=load["name"], key=f"ln_{i}", label_visibility="collapsed")
         load["power"] = c[1].number_input("kW", value=load["power"], min_value=0.0, step=0.5, key=f"lp_{i}")
         load["start"] = c[2].number_input("Från", value=load["start"], min_value=0, max_value=23, key=f"ls_{i}")
         load["end"] = c[3].number_input("Till", value=load["end"], min_value=0, max_value=23, key=f"le_{i}")
-        if c[4].button("X", key=f"lx_{i}"):
+        load["daily_kwh"] = c[4].number_input("kWh/dag", value=load.get("daily_kwh", 0.0), min_value=0.0, step=5.0, key=f"lk_{i}",
+                                               help="Energibehov per dag. 0 = kör alla timmar i fönstret.")
+        _smart_default = load.get("smart", False)
+        load["smart"] = c[5].checkbox("Smart", value=_smart_default, key=f"lsm_{i}",
+                                       help="Välj billigaste timmarna inom fönstret (prisoptimerat)")
+        if st.button("Ta bort", key=f"lx_{i}"):
             st.session_state["scheduled_loads"].pop(i)
             st.rerun()
 
     if st.button(t("add_load")):
-        st.session_state["scheduled_loads"].append({"name": "Ny", "power": 1.0, "start": 0, "end": 6})
+        st.session_state["scheduled_loads"].append({"name": "Ny", "power": 1.0, "start": 0, "end": 6,
+                                                     "daily_kwh": 0.0, "smart": False})
         st.rerun()
 
 with col_l2:
@@ -792,7 +799,8 @@ with col_l2:
         st.session_state["flexible_loads"].append({"name": "Ny", "power": 2.0, "daily": 10.0, "sm": 1, "em": 12})
         st.rerun()
 
-scheduled_loads = [LoadSchedule(l["name"], l["power"], l["start"], l["end"])
+scheduled_loads = [LoadSchedule(l["name"], l["power"], l["start"], l["end"],
+                                daily_kwh=l.get("daily_kwh", 0.0), smart=l.get("smart", False))
                    for l in st.session_state["scheduled_loads"] if l["power"] > 0]
 flexible_loads = [FlexibleLoad(f["name"], f["power"], f["daily"], f["sm"], f["em"])
                   for f in st.session_state["flexible_loads"] if f["power"] > 0]

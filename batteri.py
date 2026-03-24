@@ -22,21 +22,42 @@ class LoadSchedule:
     """
     A scheduled load that runs during specific hours.
 
-    Example: EV charging 11 kW from 23:00 to 06:00
-        LoadSchedule(name="Elbil", power_kw=11.0, start_hour=23, end_hour=6)
+    Two modes:
+    - Fixed (smart=False): load runs every hour in the window (legacy behavior)
+    - Smart (smart=True): load runs during the cheapest N hours within the window,
+      where N = ceil(daily_kwh / power_kw). Prices known day-ahead.
+
+    Example: EV charging 11 kW, needs 30 kWh/day, available 18-07:
+        LoadSchedule("Elbil", 11.0, 18, 7, daily_kwh=30.0, smart=True)
+        → picks the 3 cheapest hours within 18:00-07:00 each day
     """
     name: str
     power_kw: float
     start_hour: int   # 0-23
     end_hour: int     # 0-23 (wraps past midnight if end < start)
+    daily_kwh: float = 0.0   # energy needed per day (0 = run all hours in window)
+    smart: bool = False       # if True, pick cheapest hours within window
 
-    def is_active(self, hour: int) -> bool:
-        """Check if this load is active at the given hour."""
+    def is_in_window(self, hour: int) -> bool:
+        """Check if hour falls within the availability window."""
         if self.start_hour <= self.end_hour:
             return self.start_hour <= hour < self.end_hour
         else:
-            # Wraps past midnight, e.g. 23-06
             return hour >= self.start_hour or hour < self.end_hour
+
+    def is_active(self, hour: int) -> bool:
+        """Check if this load is active at the given hour (fixed mode only)."""
+        if self.smart:
+            return False  # smart loads are scheduled per-day, not here
+        return self.is_in_window(hour)
+
+    def hours_needed(self) -> int:
+        """Number of hours needed per day to meet daily_kwh target."""
+        import math
+        if self.daily_kwh <= 0 or self.power_kw <= 0:
+            # No target: run all hours in window
+            return 24
+        return math.ceil(self.daily_kwh / self.power_kw)
 
 
 @dataclass
@@ -99,19 +120,28 @@ class BatteryConfig:
         """Max power from grid based on fuse size."""
         return self.fuse_amps * self.voltage * self.phases / 1000.0
 
+    # Per-day smart load schedule: {date: {load_index: set_of_active_hours}}
+    _smart_schedule: dict = field(default_factory=dict, repr=False)
+
+    def _is_scheduled_active(self, load_idx: int, load: 'LoadSchedule', hour: int, date: str = None) -> bool:
+        """Check if a scheduled load is active, considering smart scheduling."""
+        if load.smart and date and date in self._smart_schedule:
+            return hour in self._smart_schedule[date].get(load_idx, set())
+        return load.is_active(hour)
+
     def total_load_kw(self, hour: int, month: int = None, date: str = None) -> float:
         """Total household load at a given hour (and optionally month/date).
 
         daily_load_override provides the base house load (heating + DHW + appliances).
         Scheduled loads (EV, etc.) are ALWAYS added on top.
+        Smart loads only run during pre-computed cheapest hours.
         """
         if self.daily_load_override is not None and date is not None:
             day_profile = self.daily_load_override.get(date)
             if day_profile is not None:
                 load = day_profile.get(hour, self.base_load_kw)
-                # Always add scheduled loads on top of override
-                for s in self.scheduled_loads:
-                    if s.is_active(hour):
+                for i, s in enumerate(self.scheduled_loads):
+                    if self._is_scheduled_active(i, s, hour, date):
                         load += s.power_kw
                 return load
         if self.seasonal_load_profile is not None and month is not None:
@@ -119,8 +149,8 @@ class BatteryConfig:
         if self.hourly_load_profile is not None:
             return self.hourly_load_profile.get(hour, self.base_load_kw)
         load = self.base_load_kw
-        for s in self.scheduled_loads:
-            if s.is_active(hour):
+        for i, s in enumerate(self.scheduled_loads):
+            if self._is_scheduled_active(i, s, hour, date):
                 load += s.power_kw
         return load
 
@@ -298,6 +328,28 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
     for row in prices:
         d = row["date"]
         days.setdefault(d, []).append(row)
+
+    # Pre-compute smart load schedules for all days
+    _smart_loads = [(i, s) for i, s in enumerate(config.scheduled_loads) if s.smart]
+    if _smart_loads:
+        for day_date in sorted(days.keys()):
+            day_prices = days[day_date]
+            day_schedule = {}
+            for load_idx, load in _smart_loads:
+                # Find hours within the load's availability window
+                window_hours = []
+                for p in day_prices:
+                    h = int(p["hour"].split(":")[0])
+                    if load.is_in_window(h):
+                        spot_ore = float(p["sek_per_kwh"]) * 100
+                        grid_ore = tariff.total_cost_ore(p["date"], p["hour"]) if tariff else 0
+                        window_hours.append((h, spot_ore + grid_ore))
+                # Sort by price, pick cheapest N hours
+                window_hours.sort(key=lambda x: x[1])
+                n_hours = load.hours_needed()
+                active_hours = {h for h, _ in window_hours[:n_hours]}
+                day_schedule[load_idx] = active_hours
+            config._smart_schedule[day_date] = day_schedule
 
     for day_date in sorted(days.keys()):
         day_prices = days[day_date]

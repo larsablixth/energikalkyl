@@ -394,12 +394,12 @@ STRINGS = {
         "en": "**Scheduled loads**",
     },
     "scheduled_caption": {
-        "sv": "Laster med fast schema. Ändra effekt och tider efter ditt behov. "
-              "Standardvärdet för elbil (23-03) är konservativt — "
-              "i verkligheten laddar elbilen smartare (billigaste timmarna).",
-        "en": "Fixed-schedule loads. Adjust power and hours to match your needs. "
-              "The EV default (23-03) is conservative — "
-              "in reality, EVs charge smarter (cheapest hours).",
+        "sv": "Ange ett brett tidsfönster och aktivera Smart för att välja billigaste timmarna "
+              "(spotpriser kända dygnet före). kWh/dag styr hur många timmar som behövs. "
+              "Utan Smart körs lasten alla timmar i fönstret.",
+        "en": "Set a wide time window and enable Smart to pick the cheapest hours "
+              "(spot prices known day-ahead). kWh/day controls how many hours are needed. "
+              "Without Smart, the load runs every hour in the window.",
     },
     "add_load": {
         "sv": "+ Last",
