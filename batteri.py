@@ -330,6 +330,11 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
         days.setdefault(d, []).append(row)
 
     # Pre-compute smart load schedules for all days
+    # For effekttariff: add penalty for peak hours (running high loads during
+    # measurement hours increases monthly effektavgift significantly)
+    from tariff import EffektTariff as _EffektTariff
+    _is_effekt = isinstance(tariff, _EffektTariff)
+
     _smart_loads = [(i, s) for i, s in enumerate(config.scheduled_loads) if s.smart]
     if _smart_loads:
         for day_date in sorted(days.keys()):
@@ -343,8 +348,18 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
                     if load.is_in_window(h):
                         spot_ore = float(p["sek_per_kwh"]) * 100
                         grid_ore = tariff.total_cost_ore(p["date"], p["hour"]) if tariff else 0
-                        window_hours.append((h, spot_ore + grid_ore))
-                # Sort by price, pick cheapest N hours
+                        cost = spot_ore + grid_ore
+                        # Effekttariff penalty: running a high-kW load during peak
+                        # hours risks increasing the monthly top-3 demand measurement.
+                        # Penalty = effekt_rate × load_kw / top_n_peaks, converted to öre
+                        # (amortized over ~22 weekdays per month)
+                        if _is_effekt and tariff.is_peak_hour(p["date"], p["hour"]):
+                            month = int(p["date"].split("-")[1])
+                            rate = tariff.get_effekt_rate(month) if hasattr(tariff, 'get_effekt_rate') else tariff.effekt_rate
+                            peak_penalty_kr = rate * load.power_kw / max(1, tariff.top_n_peaks) / 22
+                            cost += peak_penalty_kr * 100  # kr → öre
+                        window_hours.append((h, cost))
+                # Sort by effective cost, pick cheapest N hours
                 window_hours.sort(key=lambda x: x[1])
                 n_hours = load.hours_needed()
                 active_hours = {h for h, _ in window_hours[:n_hours]}
