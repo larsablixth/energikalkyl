@@ -2555,8 +2555,11 @@ if "all_results" in st.session_state:
 - {_n_flatpacks}× Eltek Flatpack2 HE 48V 3 kW = **{_flatpack_kw} kW laddeffekt**
 - Begagnade telekomlikriktare, ~700-1 000 kr/st (Tradera/eBay)
 - Monteras i standard 19" subrack (2U), spänning ställs till 54.5V
-- Styrs av Shelly-relä: på under billiga timmar (t.ex. 23-05), av annars
-- BMS stänger av vid fullt batteri — ingen smart styrning behövs
+- Styrs av Shelly-relä med prisstyrning (spotpris publiceras kl 13 för nästa dygn)
+- Enkel logik: sortera dygnets 24 timpriser, slå på de {max(2, int(_best_cap / _flatpack_kw) + 1)} billigaste timmarna
+- Kan köras med t.ex. Home Assistant, Node-RED, eller ett Python-script på Raspberry Pi
+- Alternativ: Shellys inbyggda script-motor + elprisetjustnu.se API (ingen extra hårdvara)
+- BMS stänger av vid fullt batteri — ingen komplex laddlogik behövs
 - Laddar {_best_cap:.0f} kWh på ~{_best_cap / _flatpack_kw:.0f} timmar
 
 **Urladdväg — smart, nollexport (batteri → hus)**
