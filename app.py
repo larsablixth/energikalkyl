@@ -1516,7 +1516,7 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
 
     # Determine fuse sizes to sweep (down + user's selection + larger)
     # Minimum fuse: must handle household peak load (base + all scheduled loads running)
-    _peak_load_kw = base_load + sum(l.power for l in scheduled_loads)
+    _peak_load_kw = base_load + sum(l.power_kw for l in scheduled_loads)
     _min_fuse_amps = _peak_load_kw / (0.23 * phases) if phases > 0 else 16
     _op_fuse_fees = get_operator_fuse_fees(grid_operator)
     _available_fuses = sorted(_op_fuse_fees.keys())
