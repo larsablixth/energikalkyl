@@ -409,8 +409,29 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
         n_slots = len(slot_costs)
         slot_cost_map = {idx: (total_ore, spot_ore, grid_ore) for idx, total_ore, spot_ore, grid_ore, _ in slot_costs}
 
-        # Sort all slots by price
+        # For discharge valuation: self-consumption saves total_ore,
+        # but export only earns (spot × factor - fee). Compute blended
+        # discharge value per slot based on how much the house consumes.
+        _can_export = config.export_price_factor > 0
+        slot_discharge_value = {}
+        for idx, total_ore, spot_ore, grid_ore, _ in slot_costs:
+            if _can_export:
+                h = int(day_prices[idx]["hour"].split(":")[0])
+                month = int(day_prices[idx]["date"].split("-")[1])
+                d_str = day_prices[idx]["date"]
+                load = config.total_load_kw(h, month, d_str)
+                discharge_kw = config.max_discharge_kw
+                self_frac = min(1.0, load / discharge_kw) if discharge_kw > 0 else 1.0
+                export_ore = max(0, spot_ore * config.export_price_factor - config.export_fee_ore)
+                # Blended value: self-consumption at total_ore + export at export_ore
+                blended = self_frac * total_ore + (1 - self_frac) * export_ore
+                slot_discharge_value[idx] = blended
+            else:
+                slot_discharge_value[idx] = total_ore
+
+        # Sort by charge cost (cheapest first) and discharge value (most valuable first)
         sorted_by_cost = sorted(slot_costs, key=lambda x: x[1])
+        sorted_by_discharge_value = sorted(slot_costs, key=lambda x: slot_discharge_value[x[0]], reverse=True)
 
         # Calculate break-even spread: need at least (1/efficiency - 1) margin
         min_spread_factor = 1.0 / config.efficiency  # e.g. 1.075 for 93% efficiency
@@ -421,7 +442,7 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
         discharge_indices = set()
 
         cheap_slots = list(sorted_by_cost)  # cheapest first
-        expensive_slots = list(reversed(sorted_by_cost))  # most expensive first
+        expensive_slots = list(sorted_by_discharge_value)  # most valuable first (by blended value)
 
         total_charge_possible = 0.0
         total_discharge_possible = 0.0
@@ -474,13 +495,13 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
                 break
 
             # Check if this cycle is profitable
-            # Need both: efficiency margin AND minimum absolute spread
+            # Use blended discharge value (accounts for self-consumption vs export split)
             avg_charge_price = sum(slot_cost_map[i][0] for i in cycle_charge) / len(cycle_charge)
-            avg_discharge_price = sum(slot_cost_map[i][0] for i in cycle_discharge) / len(cycle_discharge)
-            absolute_spread = avg_discharge_price - avg_charge_price
+            avg_discharge_value = sum(slot_discharge_value[i] for i in cycle_discharge) / len(cycle_discharge)
+            absolute_spread = avg_discharge_value - avg_charge_price
             min_absolute_spread = 20  # öre/kWh — don't cycle for tiny spreads
 
-            if (avg_discharge_price > avg_charge_price * min_spread_factor
+            if (avg_discharge_value > avg_charge_price * min_spread_factor
                     and absolute_spread > min_absolute_spread):
                 charge_indices.update(cycle_charge)
                 discharge_indices.update(cycle_discharge)
@@ -499,7 +520,7 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
                 if idx not in charge_indices:
                     discharge_indices.add(idx)
 
-        avg_total = sum(tc for _, tc, _, _, _ in slot_costs) / len(slot_costs) if slot_costs else 0
+        avg_total = sum(slot_discharge_value[idx] for idx, _, _, _, _ in slot_costs) / len(slot_costs) if slot_costs else 0
 
         # Track daily flexible load energy
         flex_daily_used: dict[str, float] = {fl.name: 0.0 for fl in config.flexible_loads}
@@ -582,7 +603,7 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
                     continue
 
             # --- Step 3: Discharge during expensive slots ---
-            if i in discharge_indices and total_ore > avg_total:
+            if i in discharge_indices and slot_discharge_value.get(i, total_ore) > avg_total:
                 # Limit discharge to house load if export is disabled
                 if config.export_price_factor > 0:
                     max_discharge_kw = config.max_discharge_kw
