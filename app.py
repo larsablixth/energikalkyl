@@ -135,6 +135,7 @@ with col_consumption:
         _tibber_token_input = st.text_input(t("tibber_token_label"), key="tibber_token_input",
                                              placeholder=t("tibber_token_placeholder"),
                                              help=t("tibber_token_help"))
+        st.caption(t("tibber_token_security"))
         if _tibber_token_input:
             import os
             os.environ["TIBBER_TOKEN"] = _tibber_token_input

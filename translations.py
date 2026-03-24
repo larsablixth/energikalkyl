@@ -69,6 +69,14 @@ STRINGS = {
         "sv": "Hämta data",
         "en": "Fetch data",
     },
+    "tibber_token_security": {
+        "sv": "🔒 Din token skickas krypterat (HTTPS) och sparas bara i minnet under din session — "
+              "den lagras aldrig på disk. Token ger enbart läsåtkomst till förbrukningsdata, "
+              "inte kontroll över enheter eller betalningar.",
+        "en": "🔒 Your token is sent encrypted (HTTPS) and only kept in memory during your session — "
+              "it is never saved to disk. The token only grants read access to consumption data, "
+              "not control over devices or payments.",
+    },
     "fetching_tibber": {
         "sv": "Hämtar förbrukningsprofil och heminfo från Tibber...",
         "en": "Fetching consumption profile and home info from Tibber...",
