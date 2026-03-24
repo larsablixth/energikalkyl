@@ -1498,6 +1498,16 @@ def _estimate_effekt_savings(result, eff_tariff, cfg, num_days):
     return total_saving / years if years > 0 else 0
 
 
+# Track input changes — clear stale results when config changes
+_input_hash = hash((grid_operator, fuse_amps, phases, energy_tax, base_load,
+                    tuple((l.power_kw, l.start_hour, l.end_hour) for l in scheduled_loads),
+                    use_solar, solar_kwp if use_solar else 0,
+                    str(heating_config) if heating_config else ""))
+if st.session_state.get("_last_input_hash") != _input_hash:
+    for key in ["all_results", "solar_cfg", "price_rows", "shared_config", "fuse_variants"]:
+        st.session_state.pop(key, None)
+    st.session_state["_last_input_hash"] = _input_hash
+
 if st.button(t("run_simulation"), type="primary", use_container_width=True):
     # Clear old results
     for key in ["all_results", "solar_cfg", "price_rows", "shared_config"]:
