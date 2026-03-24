@@ -351,12 +351,14 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
                         cost = spot_ore + grid_ore
                         # Effekttariff penalty: running a high-kW load during peak
                         # hours risks increasing the monthly top-3 demand measurement.
-                        # Penalty = effekt_rate × load_kw / top_n_peaks, converted to öre
+                        # Penalty = effekt_rate × kw_factor × load_kw / top_n_peaks
                         # (amortized over ~22 weekdays per month)
+                        # kw_factor accounts for night discount (Ellevio: 50% at 22-06)
                         if _is_effekt and tariff.is_peak_hour(p["date"], p["hour"]):
                             month = int(p["date"].split("-")[1])
                             rate = tariff.get_effekt_rate(month) if hasattr(tariff, 'get_effekt_rate') else tariff.effekt_rate
-                            peak_penalty_kr = rate * load.power_kw / max(1, tariff.top_n_peaks) / 22
+                            kw_factor = tariff.kw_factor(p["date"], p["hour"])
+                            peak_penalty_kr = rate * kw_factor * load.power_kw / max(1, tariff.top_n_peaks) / 22
                             cost += peak_penalty_kr * 100  # kr → öre
                         window_hours.append((h, cost))
                 # Sort by effective cost, pick cheapest N hours
