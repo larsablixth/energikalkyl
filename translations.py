@@ -394,12 +394,12 @@ STRINGS = {
         "en": "**Scheduled loads**",
     },
     "scheduled_caption": {
-        "sv": "Laster med fast schema. Elbil: modelleras som nattladdning 23-06. "
-              "I verkligheten laddar elbilen smartare (billigaste timmarna, "
-              "flexibelt på helger) — simuleringen är konservativ.",
-        "en": "Fixed-schedule loads. EV: modeled as night charging 23-06. "
-              "In reality, EVs charge smarter (cheapest hours, "
-              "flexible on weekends) — the simulation is conservative.",
+        "sv": "Laster med fast schema. Ändra effekt och tider efter ditt behov. "
+              "Standardvärdet för elbil (23-03) är konservativt — "
+              "i verkligheten laddar elbilen smartare (billigaste timmarna).",
+        "en": "Fixed-schedule loads. Adjust power and hours to match your needs. "
+              "The EV default (23-03) is conservative — "
+              "in reality, EVs charge smarter (cheapest hours).",
     },
     "add_load": {
         "sv": "+ Last",
