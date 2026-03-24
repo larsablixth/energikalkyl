@@ -1266,6 +1266,15 @@ if use_heating_model:
                             cop_base=cop_base, cop_slope=cop_slope,
                         )
                         non_heat_base = cal_base
+
+                        # Auto-update EV scheduled load from real data
+                        if cal_ev > 0 and st.session_state.get("scheduled_loads"):
+                            _ev_daily = round(cal_ev / 365, 1)
+                            for _sl in st.session_state["scheduled_loads"]:
+                                if "bil" in _sl["name"].lower() or "ev" in _sl["name"].lower():
+                                    _sl["daily_kwh"] = _ev_daily
+                            st.caption(f"Elbilsladdning uppdaterad: {_ev_daily} kWh/dag "
+                                       f"(baserat på {cal_ev:,} kWh/år från Tibber)")
                 else:
                     st.warning(f"Inte tillräckligt med väderdata för {cal_year} "
                                f"({len(year_temps)} dagar). Behöver minst 300.")
