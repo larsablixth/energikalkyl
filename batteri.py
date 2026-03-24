@@ -615,12 +615,7 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
 
             # --- Step 3: Discharge during expensive slots ---
             if i in discharge_indices and slot_discharge_value.get(i, total_ore) > avg_total:
-                # Limit discharge to house load if export is disabled
-                if config.export_price_factor > 0:
-                    max_discharge_kw = config.max_discharge_kw
-                else:
-                    max_discharge_kw = min(config.max_discharge_kw, load_kw)
-                max_energy = max_discharge_kw * slot_duration_h
+                max_energy = config.max_discharge_kw * slot_duration_h
                 available = soc - (config.capacity_kwh * config.min_soc)
                 deliverable = available * config.efficiency
                 energy_out = min(max_energy, deliverable)
@@ -628,19 +623,20 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
                     drained = energy_out / config.efficiency
                     soc -= drained
                     discharge_kw = energy_out / slot_duration_h
-                    # Split discharge: self-consumption (covers house load) + export (surplus)
-                    self_consumed_kw = min(discharge_kw, load_kw)
-                    export_kw = max(0, discharge_kw - load_kw)
-                    self_consumed_kwh = self_consumed_kw * slot_duration_h
-                    bat_export_kwh = export_kw * slot_duration_h
-                    # Self-consumption valued at full price (avoided purchase)
-                    value = self_consumed_kwh * total_ore / 100
-                    # Export valued at spot minus fee
-                    if bat_export_kwh > 0.001 and config.export_price_factor > 0:
-                        export_ore = spot_ore * config.export_price_factor - config.export_fee_ore
-                        bat_export_rev = bat_export_kwh * max(0, export_ore) / 100
-                        grid_export_kwh += bat_export_kwh
-                        export_revenue += bat_export_rev
+                    if config.export_price_factor > 0:
+                        # Export enabled: split into self-consumption + export
+                        self_consumed_kw = min(discharge_kw, load_kw)
+                        export_kw = max(0, discharge_kw - load_kw)
+                        bat_export_kwh = export_kw * slot_duration_h
+                        value = self_consumed_kw * slot_duration_h * total_ore / 100
+                        if bat_export_kwh > 0.001:
+                            export_ore = spot_ore * config.export_price_factor - config.export_fee_ore
+                            bat_export_rev = bat_export_kwh * max(0, export_ore) / 100
+                            grid_export_kwh += bat_export_kwh
+                            export_revenue += bat_export_rev
+                    else:
+                        # Zero-export: all discharge is self-consumption (avoided purchase)
+                        value = energy_out * total_ore / 100
                     result.slots.append(SlotResult(
                         date=row["date"], hour=row["hour"],
                         sek_per_kwh=float(row["sek_per_kwh"]),
