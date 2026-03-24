@@ -2548,6 +2548,23 @@ if "all_results" in st.session_state:
     _flatpack_kw = _n_flatpacks * 3
     _best_fuse = best.get("fuse_amps", fuse_amps)
 
+    # Size the discharge inverter based on household peak load (excl. EV — those charge at night)
+    _house_base_kw = base_load + sum(l.power_kw for l in scheduled_loads if l.start_hour >= 7 and l.start_hour < 19)
+    _inverter_kw = max(5, round(_house_base_kw / 5) * 5)  # round up to nearest 5 kW
+    if _inverter_kw <= 5:
+        _inverter_model = "MultiPlus-II 48/5000"
+        _inverter_price = 15000
+    elif _inverter_kw <= 8:
+        _inverter_model = "MultiPlus-II 48/8000"
+        _inverter_price = 20000
+    elif _inverter_kw <= 10:
+        _inverter_model = "MultiPlus-II 48/10000"
+        _inverter_price = 25000
+    else:
+        _inverter_model = f"2× MultiPlus-II 48/5000 parallell"
+        _inverter_price = 30000
+        _inverter_kw = 10
+
     st.markdown(f"""
 **Principen:** Separera laddning och urladdning i två oberoende vägar till batteriet.
 
@@ -2563,9 +2580,10 @@ if "all_results" in st.session_state:
 - Laddar {_best_cap:.0f} kWh på ~{_best_cap / _flatpack_kw:.0f} timmar
 
 **Urladdväg — smart, nollexport (batteri → hus)**
-- Victron MultiPlus-II 48/5000 (5 kW kontinuerligt)
+- Victron {_inverter_model} ({_inverter_kw} kW kontinuerligt)
+- Dimensionerad utifrån husets daglast (~{_house_base_kw:.0f} kW) — EV-laddning sker nattetid
 - ESS-läge med **grid feed-in: OFF** → nollexport garanterat i hårdvara
-- Matar husets laster under dyra timmar
+- Matar husets laster under dyra timmar, kapar effekttoppar
 - Cerbo GX som hjärna — läser BMS via CAN, fjärrövervakning via VRM
 
 **Batteri**
@@ -2590,11 +2608,11 @@ if "all_results" in st.session_state:
 |-----------|------|
 | {_best_units}× NKON ESS Pro 32 kWh | {best['bat_cost']:,.0f} kr |
 | {_n_flatpacks}× Eltek Flatpack2 + subrack | ~{_n_flatpacks * 800 + 1000:,} kr |
-| Victron MultiPlus-II 48/5000 | ~15 000 kr |
+| Victron {_inverter_model} | ~{_inverter_price:,} kr |
 | Victron Cerbo GX | ~3 000 kr |
 | Shelly Pro relä | ~500 kr |
 | DC-skena, kablage, brytare | ~2 000 kr |
-| **Totalt material** | **~{best['bat_cost'] + _n_flatpacks * 800 + 1000 + 15000 + 3000 + 500 + 2000:,.0f} kr** |
+| **Totalt material** | **~{best['bat_cost'] + _n_flatpacks * 800 + 1000 + _inverter_price + 3000 + 500 + 2000:,.0f} kr** |
 """)
 
     st.info(
