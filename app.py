@@ -1215,11 +1215,11 @@ if use_heating_model:
 
                     _cal_sum = 0
                     for d, hourly in year_temps.items():
-                        for hr, t in hourly:
-                            delta_t = max(0, heating_config.t_indoor - t)
+                        for hr, temp_c in hourly:
+                            delta_t = max(0, heating_config.t_indoor - temp_c)
                             if delta_t > 0:
                                 cop = max(heating_config.cop_min,
-                                          heating_config.cop_base + heating_config.cop_slope * t)
+                                          heating_config.cop_base + heating_config.cop_slope * temp_c)
                                 _cal_sum += delta_t / cop
 
                     if _cal_sum > 0:
