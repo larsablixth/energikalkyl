@@ -2549,7 +2549,14 @@ if "all_results" in st.session_state:
     _best_fuse = best.get("fuse_amps", fuse_amps)
 
     # Size the discharge inverter based on household peak load (excl. EV — those charge at night)
-    _house_base_kw = base_load + sum(l.power_kw for l in scheduled_loads if l.start_hour >= 7 and l.start_hour < 19)
+    # Include heating: heat pump compressor + elpatron on cold days
+    _daytime_loads_kw = sum(l.power_kw for l in scheduled_loads if l.start_hour >= 7 and l.start_hour < 19)
+    _heating_peak_kw = 0
+    if heating_config:
+        # Worst case: HP compressor at full power (low COP in cold) + elpatron
+        _hp_electric_kw = heating_config.hp_max_heat_kw / max(1.5, heating_config.cop_min)
+        _heating_peak_kw = _hp_electric_kw + heating_config.elpatron_kw
+    _house_base_kw = base_load + _daytime_loads_kw + _heating_peak_kw
     _inverter_kw = max(5, round(_house_base_kw / 5) * 5)  # round up to nearest 5 kW
     if _inverter_kw <= 5:
         _inverter_model = "MultiPlus-II 48/5000"
