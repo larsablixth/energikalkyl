@@ -103,8 +103,8 @@ The app follows a 6-step flow:
 
 ### Simulation strategy (batteri.py simulate())
 - Day-ahead scheduling with perfect foresight (prices known at 13:00)
-- Multi-cycle: up to 3 charge/discharge cycles per day when spread justifies it
-- Minimum 20 öre/kWh absolute spread required to cycle (avoid wear on low-spread days)
+- Multi-cycle: up to 3 charge/discharge cycles per day (5 with export arbitrage)
+- Minimum 20 öre/kWh absolute spread required to cycle (10 öre for export arbitrage)
 - Solar-aware: estimates expected daily solar surplus, reduces grid charging to leave room for free solar
 - Priority chain: household load → battery charging → flex loads (pool/varmvatten) → grid export
 - IMPORTANT: battery MUST charge before flex loads — flex loads steal solar otherwise (cost 5,000 kr/yr)
@@ -114,6 +114,11 @@ The app follows a 6-step flow:
 - **Fuse size optimization**: sweeps one size down + user's fuse + up to 3 larger, picks optimal fuse per battery (net of extra subscription cost). Minimum fuse floor based on household peak load (base + all scheduled loads). Deduplicates to show best fuse per battery label.
 - **Phase imbalance derating**: `phase_balance_factor=0.7` reduces usable fuse capacity by 30% for 3-phase. Real loads aren't balanced — one phase often carries ~43% instead of 33%. A 3-phase inverter with per-phase compensation can eliminate this derating by actively balancing phases (discharge onto the overloaded phase).
 - **Smart scheduled loads**: `LoadSchedule(smart=True, daily_kwh=30)` picks cheapest N hours within availability window each day (prices known day-ahead). Avoids effekttariff peak hours (penalty scaled by kw_factor for night discount). Tidstariff peak/off-peak handled via total_cost_ore().
+- **Discharge valuation**: two modes depending on export setting:
+  - Zero-export: ALL discharge valued as avoided purchase at full price (spot + grid + tax). This is correct for Swedish hourly net metering.
+  - Export enabled: discharge split into self-consumption (full price) + export surplus (spot × factor − fee). Scheduler uses blended value for cycle profitability.
+- **Solar curtailment**: in zero-export mode, solar surplus beyond battery + flex load absorption is curtailed (lost), not exported. Accurately reflects real zero-export inverter behavior.
+- **Export arbitrage**: `export_arbitrage_kwh` designates surplus capacity for pure grid trading. More aggressive scheduling (5 cycles, 10 öre min spread). Only viable with effekttariff operators with low energy rates (SEOM 5 öre). Tidstariff operators (Vattenfall 76.5 öre peak) make export unprofitable.
 
 ### Solar production data (solar.py, pvgis_source.py)
 - Three-tier fallback per simulation hour: real hourly → model scaled to real monthly → pure cos³
@@ -200,7 +205,8 @@ The app follows a 6-step flow:
 - **Solar self-consumption value** only counted when solar is part of investment
 - **The battery doesn't save kWh** — it shifts WHEN you buy (cheap night → expensive peak)
 - **EV is smart-scheduled**: wide availability window (18-07), picks cheapest hours day-ahead. Avoids effekttariff peak hours and tidstariff peak rates automatically. Pool + varmvatten are flexibla laster (solar surplus)
-- **Zero-export strategy**: varmvatten element (3 kW, no daily cap) + luft-luft (pre-heat/cool) absorb surplus after battery. Near-zero grid export. No need for export-capable inverter or microproducer registration.
+- **Zero-export strategy**: default mode. Varmvatten element (3 kW, no daily cap) + luft-luft (pre-heat/cool) absorb surplus after battery. Solar surplus curtailed if no flex loads available. No export-capable inverter or microproducer registration needed. Export mode available as option with comparison showing it's typically worse than self-consumption.
+- **Export comparison**: expandable section in results shows zero-export vs export side by side, with tipping point analysis. Conclusion: export only viable with effekttariff operators (SEOM) and consistently high daily spreads (>60 öre).
 - **Session persistence**: consumption data, prices, calibration inputs survive page refreshes (`.app_state/session.json`)
 - **Luft-luft is optional and separate**: shown outside main investment ROI, contribution reported as bonus
 - **Tibber auto-fill**: one click fetches address, city, grid operator, fuse size, house area, residents, heating type, price area — all auto-configured
@@ -238,6 +244,11 @@ The app follows a 6-step flow:
 - **Financing over battery lifetime, not loan term** — 50yr mortgage makes anything look positive, but battery dies at 15yr
 - **Test the actual integration path** — writing PDF to file works, Streamlit download_button needs bytes not bytearray
 - **House area is irrelevant when calibrated** — h_loss IS the house, area is only a starting guess
+- **Never use `t` as variable in app.py** — shadows translation function. Includes `for hr, t in hourly:` loop unpacking (renamed to `temp_c`)
+- **Zero-export discharge must NOT be capped at load_kw** — capping discharge at base_load (2 kW) made 96 kWh batteries unprofitable. Original behavior (full discharge = avoided purchase) is correct for Swedish hourly net metering
+- **Export split is separate from zero-export** — zero-export values all discharge as self-consumption. Export mode splits into self-consumption + export at different prices. Mixing the two broke profitability
+- **Phase imbalance matters for fuse sizing** — 70% derating for 3-phase. 3× Victron MultiPlus-II with per-phase compensation is the only 48V option that eliminates this
+- **Smart load scheduling needs effekttariff penalty** — without it, EV charges during SEOM peak hours (07-19), increasing effektavgift. Penalty scales by kw_factor for Ellevio night discount
 
 ## Verified simulation results (2026-03-21)
 With correct parameters (20A fuse, 270 m², calibrated h_loss=0.160, EV 23-03):
