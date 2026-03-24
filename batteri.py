@@ -118,6 +118,10 @@ class BatteryConfig:
     # Phase imbalance: real loads aren't balanced across 3 phases.
     # 0.7 means we assume the most loaded phase carries ~43% of total
     # (vs 33% if perfectly balanced). Effectively reduces usable capacity by 30%.
+    # Set to 1.0 if using a 3-phase inverter with per-phase compensation
+    # (e.g. 3× Victron MultiPlus-II in ESS "Total of all phases" mode —
+    # the only 48V option that does this; all other 3-phase inverters
+    # require HV batteries: Fronius, SMA, Huawei, Deye, GoodWe, Sungrow).
     phase_balance_factor: float = 0.7
 
     @property

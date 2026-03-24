@@ -2186,7 +2186,9 @@ if "all_results" in st.session_state:
                    f"Resultat för rekommenderat batteri ({best['label']}). "
                    f"OBS: kapaciteten är nedjusterad 30% för fasobalans — "
                    f"laster fördelar sig sällan jämnt över alla tre faser. "
-                   f"En 3-fas växelriktare med fasbalansering kan kompensera detta.")
+                   f"3× Victron MultiPlus-II (en per fas, ESS \"Total of all phases\") "
+                   f"kan kompensera detta med aktiv fasbalansering. "
+                   f"Enda 48V-alternativet — alla andra 3-fas växelriktare kräver HV-batteri.")
 
         fuse_comparison = []
         for fv in _fuse_variants_display:
