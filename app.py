@@ -852,22 +852,16 @@ if st.session_state.get("use_aa", False):
 # CALIBRATION: If you have real consumption data (Tibber/Vattenfall), the model
 # auto-calibrates h_loss (heat loss coefficient) to match your actual usage.
 # This is much more accurate than estimating from energy class + house area.
-st.subheader("Uppvärmning")
-use_heating_model = st.checkbox("Temperaturanpassad lastmodell", value=True,
-                                 help="Modellerar värmepumpens elförbrukning baserat på väderdata och husets egenskaper")
+st.subheader(t("heating_header"))
+use_heating_model = st.checkbox(t("heating_checkbox"), value=True,
+                                 help=t("heating_checkbox_help"))
 daily_load_override = None
 heating_config = None
 
 if use_heating_model:
-    st.caption(
-        "Modellen beräknar husets elförbrukning för uppvärmning timme för timme, "
-        "baserat på **verklig temperatur** från SMHI och **husets egenskaper** (energiklass, yta, värmepumptyp). "
-        "Kall timme = hög förbrukning = mer egenanvändning av sol/batteri. "
-        "Varm timme = låg förbrukning = mer överskott att sälja. "
-        "Har du laddat förbrukningsdata (Tibber/Vattenfall) kalibreras modellen automatiskt mot din verkliga förbrukning."
-    )
+    st.caption(t("heating_caption"))
     # --- Location selection ---
-    st.markdown("**Plats (för väderdata)**")
+    st.markdown(t("heating_location"))
     city_names = sorted(SWEDISH_CITIES.keys())
     # Auto-detect city from Tibber if available
     _city_default = city_names.index("Sigtuna") if "Sigtuna" in city_names else 0

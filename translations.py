@@ -761,6 +761,34 @@ STRINGS = {
         "sv": "Ladda ner PDF-rapport (bankunderlag)",
         "en": "Download PDF report (bank documentation)",
     },
+    "heating_header": {
+        "sv": "Uppvärmning",
+        "en": "Heating",
+    },
+    "heating_checkbox": {
+        "sv": "Temperaturanpassad lastmodell",
+        "en": "Temperature-dependent load model",
+    },
+    "heating_checkbox_help": {
+        "sv": "Modellerar värmepumpens elförbrukning baserat på väderdata och husets egenskaper",
+        "en": "Models heat pump electricity consumption based on weather data and house properties",
+    },
+    "heating_caption": {
+        "sv": "Modellen beräknar husets elförbrukning för uppvärmning timme för timme, "
+              "baserat på **verklig temperatur** från SMHI och **husets egenskaper** (energiklass, yta, värmepumptyp). "
+              "Kall timme = hög förbrukning = mer egenanvändning av sol/batteri. "
+              "Varm timme = låg förbrukning = mer överskott. "
+              "Har du laddat förbrukningsdata (Tibber/Vattenfall) kalibreras modellen automatiskt mot din verkliga förbrukning.",
+        "en": "The model calculates hourly heating electricity consumption based on "
+              "**real temperature** from SMHI and **house properties** (energy class, area, heat pump type). "
+              "Cold hour = high consumption = more self-use of solar/battery. "
+              "Warm hour = low consumption = more surplus. "
+              "If consumption data is loaded (Tibber/Vattenfall), the model auto-calibrates to your actual usage.",
+    },
+    "heating_location": {
+        "sv": "**Plats (för väderdata)**",
+        "en": "**Location (for weather data)**",
+    },
     "diy_header": {
         "sv": "Systemdesign — DIY utan export",
         "en": "System Design — DIY Zero Export",
