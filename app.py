@@ -2183,7 +2183,10 @@ if "all_results" in st.session_state:
         _base_fee = get_operator_fuse_fees(grid_operator).get(fuse_amps, 0)
         st.caption(f"Säkringsstorleken påverkar laddkapacitet och abonnemangskostnad. "
                    f"Din nuvarande: {fuse_amps:.0f}A ({_base_fee:,.0f} kr/år). "
-                   f"Resultat för rekommenderat batteri ({best['label']}).")
+                   f"Resultat för rekommenderat batteri ({best['label']}). "
+                   f"OBS: kapaciteten är nedjusterad 30% för fasobalans — "
+                   f"laster fördelar sig sällan jämnt över alla tre faser. "
+                   f"En 3-fas växelriktare med fasbalansering kan kompensera detta.")
 
         fuse_comparison = []
         for fv in _fuse_variants_display:

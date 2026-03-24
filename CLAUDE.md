@@ -112,6 +112,7 @@ The app follows a 6-step flow:
 - `daily_load_override`: when set, provides date+hour specific load (from heating model), overriding seasonal/hourly profiles
 - All tariff types simulated automatically — best picked per battery size
 - **Fuse size optimization**: sweeps one size down + user's fuse + up to 3 larger, picks optimal fuse per battery (net of extra subscription cost). Minimum fuse floor based on household peak load (base + all scheduled loads). Deduplicates to show best fuse per battery label.
+- **Phase imbalance derating**: `phase_balance_factor=0.7` reduces usable fuse capacity by 30% for 3-phase. Real loads aren't balanced — one phase often carries ~43% instead of 33%. A 3-phase inverter with per-phase compensation can eliminate this derating by actively balancing phases (discharge onto the overloaded phase).
 - **Smart scheduled loads**: `LoadSchedule(smart=True, daily_kwh=30)` picks cheapest N hours within availability window each day (prices known day-ahead). Avoids effekttariff peak hours (penalty scaled by kw_factor for night discount). Tidstariff peak/off-peak handled via total_cost_ore().
 
 ### Solar production data (solar.py, pvgis_source.py)
