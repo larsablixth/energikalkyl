@@ -669,6 +669,7 @@ with col_sys3:
         _fuse_default = _tibber_fuse
     fuse_amps = st.selectbox(t("fuse_size"), fuse_options,
                               index=fuse_options.index(_fuse_default) if _fuse_default in fuse_options else 0,
+                              format_func=lambda a: f"{a:.0f}A — {op_fuse_fees[a]:,.0f} kr/år",
                               help=t("fuse_help"))
     phases = st.selectbox(t("phases"), [3, 1], index=0)
     energy_tax = st.number_input(t("energy_tax"), value=54.88, step=0.1,
@@ -1488,7 +1489,9 @@ def _estimate_effekt_savings(result, eff_tariff, cfg, num_days):
         avg_without = sum(peaks_without) / len(peaks_without) if peaks_without else 0
         avg_with = sum(peaks_with) / len(peaks_with) if peaks_with else 0
 
-        saving = (avg_without - avg_with) * eff_tariff.effekt_rate
+        month = int(ym.split("-")[1])
+        rate = eff_tariff.get_effekt_rate(month) if hasattr(eff_tariff, 'get_effekt_rate') else eff_tariff.effekt_rate
+        saving = (avg_without - avg_with) * rate
         total_saving += max(0, saving)
 
     years = num_days / 365.25
@@ -1511,31 +1514,42 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
         solar_config.purchase_price = sol_price
         solar_config.installation_cost = sol_install
 
-    # Build tariffs from grid operator
-    all_tariffs = create_tariffs_for_operator(grid_operator, fuse_amps, energy_tax)
-    # Override rates if user changed them in expander
-    for _tf in all_tariffs:
-        if isinstance(_tf, Tidstariff):
-            _tf.peak = peak_rate
-            _tf.offpeak = offpeak_rate
-        elif isinstance(_tf, FastTariff):
-            _tf.flat_rate = flat_rate
-        elif isinstance(_tf, EffektTariff) and has_effekt:
-            _tf.effekt_rate = effekt_rate
-            _tf.energy_rate = effekt_energy
-            _tf.top_n_peaks = effekt_top_n
-    # If operator has no tariffs defined, fall back to Vattenfall defaults
-    if not all_tariffs:
-        all_tariffs = [
-            Tidstariff(peak=peak_rate, offpeak=offpeak_rate, energy_tax=energy_tax, fuse_amps=fuse_amps),
-            FastTariff(flat_rate=flat_rate, energy_tax=energy_tax, fuse_amps=fuse_amps),
-        ]
+    # Determine fuse sizes to sweep (user's selection and larger)
+    _op_fuse_fees = get_operator_fuse_fees(grid_operator)
+    _available_fuses = sorted(_op_fuse_fees.keys())
+    _fuses_to_sweep = [f for f in _available_fuses if f >= fuse_amps][:4]
+    _base_fuse_fee_yr = _op_fuse_fees.get(fuse_amps, 0)
+
+    def _build_tariffs_for_fuse(f_amps):
+        """Build tariffs for a given fuse size, applying user overrides."""
+        tariffs = create_tariffs_for_operator(grid_operator, f_amps, energy_tax)
+        for _tf in tariffs:
+            if isinstance(_tf, Tidstariff):
+                _tf.peak = peak_rate
+                _tf.offpeak = offpeak_rate
+            elif isinstance(_tf, FastTariff):
+                _tf.flat_rate = flat_rate
+            elif isinstance(_tf, EffektTariff) and has_effekt:
+                _tf.effekt_rate = effekt_rate
+                _tf.energy_rate = effekt_energy
+                _tf.top_n_peaks = effekt_top_n
+        if not tariffs:
+            tariffs = [
+                Tidstariff(peak=peak_rate, offpeak=offpeak_rate, energy_tax=energy_tax, fuse_amps=f_amps),
+                FastTariff(flat_rate=flat_rate, energy_tax=energy_tax, fuse_amps=f_amps),
+            ]
+        return tariffs
 
     price_rows = df_prices.to_dict("records")
 
-    # Simulate ALL battery sizes
-    all_results = []
-    with st.spinner(f"Simulerar {len(valid_rows)} batteristorlekar × {len(all_tariffs)} tariffer..."):
+    # Simulate ALL battery sizes × tariffs × fuse sizes
+    _all_raw_results = []
+    _n_tariffs = len(_build_tariffs_for_fuse(fuse_amps))
+    with st.spinner(f"Simulerar {len(valid_rows)} batteristorlekar × {_n_tariffs} tariffer × {len(_fuses_to_sweep)} säkringar..."):
+      for _fuse in _fuses_to_sweep:
+        _fuse_tariffs = _build_tariffs_for_fuse(_fuse)
+        _fuse_fee_delta_yr = _op_fuse_fees.get(_fuse, 0) - _base_fuse_fee_yr
+
         for _, row in valid_rows.iterrows():
             label = row["Namn"]
             cap = row["Kapacitet_kWh"]
@@ -1544,7 +1558,7 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
 
             cfg = BatteryConfig(
                 capacity_kwh=cap, max_charge_kw=max_kw, max_discharge_kw=max_kw,
-                efficiency=efficiency, fuse_amps=fuse_amps, phases=phases,
+                efficiency=efficiency, fuse_amps=_fuse, phases=phases,
                 base_load_kw=base_load,
                 # Scheduled loads: always pass with daily_load_override (house-only, needs EV on top)
                 # Skip when hourly/seasonal profile is loaded (those already include EV pattern)
@@ -1566,7 +1580,7 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
             num_days = 0
             effekt_saving_yr = 0
 
-            for _tf in all_tariffs:
+            for _tf in _fuse_tariffs:
                 r = simulate(price_rows, cfg, tariff=_tf, solar=solar_config)
                 d = len(set(s.date for s in r.slots))
                 if d == 0:
@@ -1605,12 +1619,13 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
                 solar_self_yr = (self_consumed * avg_ore / 100) / yrs
 
             total_benefit_yr = arb_yr + (solar_self_yr if sol_invest_total > 0 else 0)
+            net_benefit_yr = total_benefit_yr - _fuse_fee_delta_yr
             invest = bat_cost + bat_install
             total_invest = invest + sol_invest_total
             cycles_yr = result.num_cycles / (num_days / 365.25) if num_days > 0 else 0
             lifetime = min(cycle_life / cycles_yr if cycles_yr > 0 else 15, 15)
-            payback = total_invest / total_benefit_yr if total_benefit_yr > 0 else 999
-            profit_life = total_benefit_yr * lifetime - total_invest
+            payback = total_invest / net_benefit_yr if net_benefit_yr > 0 else 999
+            profit_life = net_benefit_yr * lifetime - total_invest
 
             # Track grid export for self-consumption optimization
             _yrs = num_days / 365.25 if num_days > 0 else 1
@@ -1625,11 +1640,14 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
                     if month in (3, 4, 5, 6, 7, 8, 9, 10) and s.flex_consumed_kwh > 0:
                         _aa_flex_kwh += s.flex_consumed_kwh
 
-            all_results.append({
+            _all_raw_results.append({
                 "label": label, "capacity": cap, "max_kw": max_kw,
                 "bat_cost": bat_cost, "invest": invest, "total_invest": total_invest,
                 "arb_yr": arb_yr, "solar_self_yr": solar_self_yr,
                 "total_benefit_yr": total_benefit_yr,
+                "net_benefit_yr": net_benefit_yr,
+                "fuse_amps": _fuse, "fuse_fee_yr": _op_fuse_fees.get(_fuse, 0),
+                "fuse_fee_delta_yr": _fuse_fee_delta_yr,
                 "payback": payback, "profit_life": profit_life,
                 "cycles_yr": cycles_yr, "lifetime": lifetime,
                 "best_tariff": best_tariff,
@@ -1640,9 +1658,20 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
                 "total_flex_kwh_yr": result.total_flex_consumed_kwh / _yrs,
             })
 
+    # Keep best fuse per battery label (dedup across fuse sweep)
+    _fuse_variants = {}  # label -> list of results (for fuse comparison display)
+    _best_per_label = {}
+    for r in _all_raw_results:
+        lbl = r["label"]
+        _fuse_variants.setdefault(lbl, []).append(r)
+        if lbl not in _best_per_label or r["profit_life"] > _best_per_label[lbl]["profit_life"]:
+            _best_per_label[lbl] = r
+    all_results = sorted(_best_per_label.values(), key=lambda r: r["capacity"])
+
     st.session_state["all_results"] = all_results
     st.session_state["solar_cfg"] = solar_config
     st.session_state["price_rows"] = price_rows
+    st.session_state["fuse_variants"] = _fuse_variants
     # Store a reference config for volatility section
     st.session_state["shared_config"] = all_results[0]["config"] if all_results else None
 
@@ -1675,13 +1704,25 @@ if "all_results" in st.session_state:
     best_idx = max(range(len(all_results)), key=lambda i: all_results[i]["profit_life"])
     best = all_results[best_idx]
 
+    _rec_fuse = best.get("fuse_amps", fuse_amps)
+    _rec_fuse_label = f" + uppgradera till {_rec_fuse:.0f}A" if _rec_fuse != fuse_amps else ""
+    _rec_benefit = best["net_benefit_yr"]
     st.success(
-        f"**Rekommendation: {best['label']}** — "
-        f"lägre elkostnad {best['total_benefit_yr']:,.0f} kr/år ({best['total_benefit_yr']/12:,.0f} kr/mån), "
+        f"**Rekommendation: {best['label']}{_rec_fuse_label}** — "
+        f"lägre elkostnad {_rec_benefit:,.0f} kr/år ({_rec_benefit/12:,.0f} kr/mån), "
         f"investering {best['total_invest']:,.0f} kr, "
         f"återbetald på {best['payback']:.1f} år, "
         f"netto {best['profit_life']:,.0f} kr under {best['lifetime']:.0f} år"
     )
+    if _rec_fuse != fuse_amps:
+        _fv = st.session_state.get("fuse_variants", {}).get(best["label"], [])
+        _current_fuse_result = next((r for r in _fv if r["fuse_amps"] == fuse_amps), None)
+        _extra_benefit = best["net_benefit_yr"] - _current_fuse_result["net_benefit_yr"] if _current_fuse_result else best["fuse_fee_delta_yr"]
+        st.info(
+            f"Säkringsuppgradering {fuse_amps:.0f}A → {_rec_fuse:.0f}A: "
+            f"extra abonnemang {best['fuse_fee_delta_yr']:+,.0f} kr/år, "
+            f"netto {_extra_benefit:+,.0f} kr/år bättre än nuvarande säkring"
+        )
 
     # Tariff recommendation (from best size)
     st.info(f"Bästa tariff: **{best['best_tariff']}**")
@@ -1700,7 +1741,7 @@ if "all_results" in st.session_state:
                 f"**Maximal egenförbrukning: {_zero_export['label']}** — "
                 f"nära noll export ({_zero_export['grid_export_yr']:.0f} kWh/år till nät), "
                 f"investering {_zero_export['total_invest']:,.0f} kr, "
-                f"lägre elkostnad {_zero_export['total_benefit_yr']:,.0f} kr/år"
+                f"lägre elkostnad {_zero_export['net_benefit_yr']:,.0f} kr/år"
             )
         else:
             _min_export = min(all_results, key=lambda r: r["grid_export_yr"])
@@ -1714,7 +1755,7 @@ if "all_results" in st.session_state:
         # Show export vs battery size chart
         _cap_list = [r["capacity"] for r in _sorted_by_cap]
         _export_list = [r["grid_export_yr"] for r in _sorted_by_cap]
-        _benefit_list = [r["total_benefit_yr"] for r in _sorted_by_cap]
+        _benefit_list = [r["net_benefit_yr"] for r in _sorted_by_cap]
         fig_self = go.Figure()
         fig_self.add_trace(go.Bar(x=_cap_list, y=_export_list, name="Export till nät (kWh/år)",
                                    marker_color="indianred"))
@@ -1761,12 +1802,12 @@ if "all_results" in st.session_state:
     # === PDF REPORT ===
     # Calculate financing for report
     _report_loan_cost = 0
-    _report_net = best["total_benefit_yr"] / 12
+    _report_net = best["net_benefit_yr"] / 12
     if loan_rate > 0 and loan_years > 0:
         _mr = loan_rate / 100 / 12
         _np = loan_years * 12
         _report_loan_cost = best["total_invest"] * _mr / (1 - (1 + _mr) ** -_np) if _mr > 0 else best["total_invest"] / _np
-        _report_net = best["total_benefit_yr"] / 12 - _report_loan_cost
+        _report_net = best["net_benefit_yr"] / 12 - _report_loan_cost
 
     # Gather scenario data if available (computed below, but we can peek at price_rows)
     _normal_yrs = []
@@ -1793,7 +1834,7 @@ if "all_results" in st.session_state:
         pdf_bytes = generate_report(
         address=_pdf_address,
         grid_operator=grid_operator,
-        fuse_amps=fuse_amps,
+        fuse_amps=best.get("fuse_amps", fuse_amps),
         solar_kwp=solar_kwp if use_solar else 0,
         battery_label=best["label"],
         battery_capacity=best["capacity"],
@@ -1802,8 +1843,8 @@ if "all_results" in st.session_state:
         solar_price=sol_price if use_solar else 0,
         solar_install=sol_install if use_solar else 0,
         total_investment=best["total_invest"],
-        savings_per_year=best["total_benefit_yr"],
-        savings_per_month=best["total_benefit_yr"] / 12,
+        savings_per_year=best["net_benefit_yr"],
+        savings_per_month=best["net_benefit_yr"] / 12,
         payback_years=best["payback"],
         lifetime_years=best["lifetime"],
         lifetime_profit=best["profit_life"],
@@ -1816,7 +1857,7 @@ if "all_results" in st.session_state:
         price_data_range=f"{df_prices['date'].min()} — {df_prices['date'].max()}" if df_prices is not None else "",
         price_data_days=df_prices["date"].nunique() if df_prices is not None else 0,
         weather_station=_pdf_weather,
-        all_results=[{"label": r["label"], "total_benefit_yr": r["total_benefit_yr"],
+        all_results=[{"label": r["label"], "total_benefit_yr": r["net_benefit_yr"],
                        "total_invest": r["total_invest"], "payback": r["payback"],
                        "profit_life": r["profit_life"]} for r in all_results],
         future_scenarios=st.session_state.get("scenario_results"),
@@ -1863,7 +1904,7 @@ if "all_results" in st.session_state:
                 yp = _yearly_profit(r["result"], y)
                 if yp is not None:
                     row[y] = yp
-            row["all"] = r["total_benefit_yr"]
+            row["all"] = r["net_benefit_yr"]
             scenario_data.append(row)
 
         # Identify "normal" and "high" scenarios
@@ -1948,7 +1989,7 @@ if "all_results" in st.session_state:
     ))
     fig_annual.add_trace(go.Bar(
         x=labels,
-        y=[r["total_benefit_yr"] for r in all_results],
+        y=[r["net_benefit_yr"] for r in all_results],
         name="Lägre elkostnad per år",
         marker_color="#2ecc71",
         hovertemplate="%{x}<br>Besparing: %{y:,.0f} kr/år<extra></extra>",
@@ -1959,12 +2000,15 @@ if "all_results" in st.session_state:
     st.plotly_chart(fig_annual, use_container_width=True)
 
     # === COMPARISON TABLE ===
+    def _fuse_label(r):
+        f = r.get("fuse_amps", fuse_amps)
+        return f" ({f:.0f}A)" if f != fuse_amps else ""
     st.dataframe(pd.DataFrame([{
-        "Batteri": r["label"],
-        "Besparing/år": f"{r['total_benefit_yr']:,.0f} kr",
+        "Batteri": r["label"] + _fuse_label(r),
+        "Besparing/år": f"{r['net_benefit_yr']:,.0f} kr",
         "Kostnad/år": f"{r['total_invest'] / r['lifetime']:,.0f} kr",
-        "Netto/år": f"{r['total_benefit_yr'] - r['total_invest'] / r['lifetime']:,.0f} kr",
-        "Netto/mån": f"{(r['total_benefit_yr'] - r['total_invest'] / r['lifetime']) / 12:,.0f} kr",
+        "Netto/år": f"{r['net_benefit_yr'] - r['total_invest'] / r['lifetime']:,.0f} kr",
+        "Netto/mån": f"{(r['net_benefit_yr'] - r['total_invest'] / r['lifetime']) / 12:,.0f} kr",
         "Investering": f"{r['total_invest']:,.0f} kr",
         "Livslängd": f"{r['lifetime']:.0f} år",
         "Tariff": r["best_tariff"],
@@ -1987,7 +2031,7 @@ if "all_results" in st.session_state:
     for i, r in enumerate(_show):
         cum = [-r["total_invest"]]
         for yr in range(1, 16):
-            cum.append(cum[-1] + r["total_benefit_yr"])
+            cum.append(cum[-1] + r["net_benefit_yr"])
         is_best = r["label"] == best["label"]
         fig_life.add_trace(go.Scatter(
             x=years, y=cum, mode="lines+markers", name=r["label"],
@@ -2020,11 +2064,11 @@ if "all_results" in st.session_state:
                 m_cost = total * m_rate / (1 - (1 + m_rate) ** -n_payments)
             else:
                 m_cost = total / n_payments
-            m_saving = r["total_benefit_yr"] / 12
+            m_saving = r["net_benefit_yr"] / 12
             net = m_saving - m_cost
             # True lifetime profit: savings during battery life - loan payments during same period
             lifetime = r["lifetime"]
-            total_savings_life = r["total_benefit_yr"] * lifetime
+            total_savings_life = r["net_benefit_yr"] * lifetime
             total_loan_life = m_cost * 12 * lifetime
             net_lifetime = total_savings_life - total_loan_life
             fin_data.append({"label": r["label"], "total": total,
@@ -2092,7 +2136,7 @@ if "all_results" in st.session_state:
             years = list(range(0, 16))
             cf = [-r["total_invest"]]
             for y in range(1, 16):
-                cf.append(cf[-1] + r["total_benefit_yr"])
+                cf.append(cf[-1] + r["net_benefit_yr"])
             fig_cf.add_trace(go.Scatter(
                 x=years, y=cf, mode="lines+markers", name=r["label"],
                 line=dict(width=2, color=colors[i % len(colors)]),
@@ -2106,138 +2150,80 @@ if "all_results" in st.session_state:
     # ================================================================
     # FUSE SIZE COMPARISON
     # ================================================================
-    # Your fuse size limits how fast the battery can charge from the grid.
-    # A 20A fuse = ~14 kW max total. If your house uses 5 kW, only 9 kW
-    # is left for battery charging. A larger fuse means faster charging,
-    # which means the battery can capture more cheap hours.
-    # But larger fuses cost more per year (subscription fee).
-    # This section re-simulates the recommended battery at larger fuse
-    # sizes and shows whether the extra savings justify the extra cost.
-    op_fees = get_operator_fuse_fees(grid_operator)
-    available_fuses = sorted(op_fees.keys())
-    current_fuse_idx = available_fuses.index(fuse_amps) if fuse_amps in available_fuses else 0
-    # Only show if there are fuses to compare above current
-    larger_fuses = [f for f in available_fuses if f > fuse_amps]
-    if larger_fuses and best:
+    # FUSE COMPARISON — show pre-computed fuse variants for recommended battery
+    # The main optimization already swept fuse sizes and picked the best.
+    # This section shows the full comparison for transparency.
+    _fuse_variants_display = st.session_state.get("fuse_variants", {}).get(best["label"], [])
+    _fuse_variants_display = sorted(_fuse_variants_display, key=lambda r: r["fuse_amps"])
+    if len(_fuse_variants_display) > 1 and best:
         st.divider()
         st.subheader(t("fuse_header"))
-        current_fee_yr = op_fees.get(fuse_amps, 0)
+        _base_fee = get_operator_fuse_fees(grid_operator).get(fuse_amps, 0)
         st.caption(f"Större säkring ger mer laddkapacitet för batteriet. "
-                   f"Din nuvarande: {fuse_amps:.0f}A ({current_fee_yr:,.0f} kr/år). "
-                   f"Simuleringen körs för rekommenderat batteri ({best['label']}).")
+                   f"Din nuvarande: {fuse_amps:.0f}A ({_base_fee:,.0f} kr/år). "
+                   f"Resultat för rekommenderat batteri ({best['label']}).")
 
-        # Re-simulate best battery at different fuse sizes
         fuse_comparison = []
-        best_cfg_base = best["config"]
-        best_tariff_obj = best["tariff"]
+        for fv in _fuse_variants_display:
+            is_current = fv["fuse_amps"] == fuse_amps
+            is_optimal = fv["fuse_amps"] == best.get("fuse_amps", fuse_amps)
+            fuse_comparison.append({
+                "fuse": fv["fuse_amps"],
+                "fee_yr": fv["fuse_fee_yr"],
+                "benefit_yr": fv["total_benefit_yr"],  # gross savings
+                "extra_fee_yr": fv["fuse_fee_delta_yr"],
+                "net_yr": fv["net_benefit_yr"],
+                "current": is_current,
+                "optimal": is_optimal,
+            })
 
-        # Current fuse result (already computed)
-        fuse_comparison.append({
-            "fuse": fuse_amps,
-            "fee_yr": current_fee_yr,
-            "benefit_yr": best["total_benefit_yr"],
-            "net_yr": best["total_benefit_yr"],
-            "current": True,
-        })
+        # Chart
+        fig_fuse = go.Figure()
+        fuse_labels = [f"{fc['fuse']:.0f}A" + (" (nu)" if fc["current"] else "") + (" ★" if fc["optimal"] and not fc["current"] else "") for fc in fuse_comparison]
+        fig_fuse.add_trace(go.Bar(
+            x=fuse_labels,
+            y=[fc["net_yr"] for fc in fuse_comparison],
+            name="Netto besparing (kr/år)",
+            marker_color=["#2ecc71" if fc["optimal"] else "#3498db" for fc in fuse_comparison],
+            hovertemplate="%{x}<br>Netto: %{y:,.0f} kr/år<extra></extra>",
+        ))
+        fig_fuse.add_trace(go.Bar(
+            x=fuse_labels,
+            y=[-fc.get("extra_fee_yr", 0) for fc in fuse_comparison],
+            name="Extra abonnemangskostnad (kr/år)",
+            marker_color="#e74c3c",
+            hovertemplate="%{x}<br>Extra avgift: %{y:,.0f} kr/år<extra></extra>",
+        ))
+        fig_fuse.update_layout(barmode="relative", yaxis_title="kr/år", height=350,
+                                margin=dict(l=0, r=0, t=30, b=0),
+                                legend=dict(orientation="h", y=1.02))
+        st.plotly_chart(fig_fuse, use_container_width=True)
 
-        fuses_to_test = [f for f in available_fuses if f > fuse_amps][:3]  # max 3 upgrades
-        if fuses_to_test:
-            with st.spinner("Jämför säkringsstorlekar..."):
-                for f in fuses_to_test:
-                    fuse_cfg = BatteryConfig(
-                        capacity_kwh=best_cfg_base.capacity_kwh,
-                        max_charge_kw=best_cfg_base.max_charge_kw,
-                        max_discharge_kw=best_cfg_base.max_discharge_kw,
-                        efficiency=best_cfg_base.efficiency,
-                        fuse_amps=f, phases=best_cfg_base.phases,
-                        base_load_kw=best_cfg_base.base_load_kw,
-                        scheduled_loads=best_cfg_base.scheduled_loads,
-                        hourly_load_profile=best_cfg_base.hourly_load_profile,
-                        seasonal_load_profile=best_cfg_base.seasonal_load_profile,
-                        daily_load_override=best_cfg_base.daily_load_override,
-                        flexible_loads=best_cfg_base.flexible_loads,
-                        purchase_price=best_cfg_base.purchase_price,
-                        installation_cost=best_cfg_base.installation_cost,
-                        cycle_life=best_cfg_base.cycle_life,
-                        calendar_life_years=best_cfg_base.calendar_life_years,
-                        export_price_factor=best_cfg_base.export_price_factor,
-                        export_fee_ore=best_cfg_base.export_fee_ore,
-                    )
-                    r_fuse = simulate(price_rows, fuse_cfg, tariff=best_tariff_obj,
-                                       solar=solar_cfg)
-                    d_fuse = len(set(s.date for s in r_fuse.slots))
-                    if d_fuse == 0:
-                        continue
-                    arb_fuse = r_fuse.net_profit_sek / d_fuse * 365.25
-                    eff_save = 0
-                    if isinstance(best_tariff_obj, EffektTariff):
-                        eff_save = _estimate_effekt_savings(r_fuse, best_tariff_obj, fuse_cfg, d_fuse)
-                    benefit_fuse = arb_fuse + eff_save
-                    fee_yr = op_fees.get(f, 0)
-                    extra_fee = fee_yr - current_fee_yr
-                    net = benefit_fuse - extra_fee  # net benefit after paying extra fuse cost
+        # Table
+        _current_net = next((fc["net_yr"] for fc in fuse_comparison if fc["current"]), 0)
+        st.dataframe(pd.DataFrame([{
+            "Säkring": f"{fc['fuse']:.0f}A" + (" (nuvarande)" if fc["current"] else "") + (" ★ optimal" if fc["optimal"] and not fc["current"] else ""),
+            "Abonnemang": f"{fc['fee_yr']:,.0f} kr/år",
+            "Brutto besparing": f"{fc['benefit_yr']:,.0f} kr/år",
+            "Extra abonnemang": f"{fc.get('extra_fee_yr', 0):+,.0f} kr/år" if not fc["current"] else "—",
+            "Netto": f"{fc['net_yr']:,.0f} kr/år ({fc['net_yr']/12:,.0f} kr/mån)",
+            "vs nuvarande": f"{fc['net_yr'] - _current_net:+,.0f} kr/år" if not fc["current"] else "—",
+        } for fc in fuse_comparison]), use_container_width=True, hide_index=True)
 
-                    fuse_comparison.append({
-                        "fuse": f,
-                        "fee_yr": fee_yr,
-                        "benefit_yr": benefit_fuse,
-                        "extra_fee_yr": extra_fee,
-                        "extra_benefit_yr": benefit_fuse - best["total_benefit_yr"],
-                        "net_yr": net,
-                        "current": False,
-                    })
-
-        if len(fuse_comparison) > 1:
-            # Chart
-            fig_fuse = go.Figure()
-            fuse_labels = [f"{fc['fuse']:.0f}A" + (" (nu)" if fc["current"] else "") for fc in fuse_comparison]
-            fig_fuse.add_trace(go.Bar(
-                x=fuse_labels,
-                y=[fc["benefit_yr"] for fc in fuse_comparison],
-                name="Lägre elkostnad (kr/år)",
-                marker_color=["#2ecc71" if not fc["current"] else "#3498db" for fc in fuse_comparison],
-                hovertemplate="%{x}<br>Besparing: %{y:,.0f} kr/år<extra></extra>",
-            ))
-            fig_fuse.add_trace(go.Bar(
-                x=fuse_labels,
-                y=[-fc.get("extra_fee_yr", 0) for fc in fuse_comparison],
-                name="Extra abonnemangskostnad (kr/år)",
-                marker_color="#e74c3c",
-                hovertemplate="%{x}<br>Extra avgift: %{y:,.0f} kr/år<extra></extra>",
-            ))
-            fig_fuse.update_layout(barmode="relative", yaxis_title="kr/år", height=350,
-                                    margin=dict(l=0, r=0, t=30, b=0),
-                                    legend=dict(orientation="h", y=1.02))
-            st.plotly_chart(fig_fuse, use_container_width=True)
-
-            # Table
-            st.dataframe(pd.DataFrame([{
-                "Säkring": f"{fc['fuse']:.0f}A" + (" (nuvarande)" if fc["current"] else ""),
-                "Abonnemang": f"{fc['fee_yr']:,.0f} kr/år",
-                "Lägre elkostnad": f"{fc['benefit_yr']:,.0f} kr/år",
-                "Extra abonnemang": f"{fc.get('extra_fee_yr', 0):+,.0f} kr/år" if not fc["current"] else "—",
-                "Extra besparing": f"{fc.get('extra_benefit_yr', 0):+,.0f} kr/år" if not fc["current"] else "—",
-                "Netto": f"{fc['net_yr']:,.0f} kr/år ({fc['net_yr']/12:,.0f} kr/mån)",
-            } for fc in fuse_comparison]), use_container_width=True, hide_index=True)
-
-            # Recommendation
-            best_fuse = max(fuse_comparison, key=lambda fc: fc["net_yr"])
-            if not best_fuse["current"]:
-                extra = best_fuse["net_yr"] - fuse_comparison[0]["net_yr"]
-                st.success(f"**{best_fuse['fuse']:.0f}A ger bäst netto** — "
-                           f"{extra:+,.0f} kr/år mer än {fuse_amps:.0f}A "
-                           f"(extra avgift {best_fuse.get('extra_fee_yr', 0):+,.0f} kr/år, "
-                           f"extra besparing {best_fuse.get('extra_benefit_yr', 0):+,.0f} kr/år)")
-            else:
-                # Find closest upgrade and show what it costs vs gives
-                upgrades = [fc for fc in fuse_comparison if not fc["current"]]
-                if upgrades:
-                    next_up = upgrades[0]
-                    st.info(f"**{fuse_amps:.0f}A ger bäst netto för batteriet.** "
-                            f"Uppgradering till {next_up['fuse']:.0f}A kostar "
-                            f"{next_up.get('extra_fee_yr', 0):,.0f} kr/år mer och ger "
-                            f"{next_up.get('extra_benefit_yr', 0):,.0f} kr/år extra besparing. "
-                            f"Kan ändå vara värt det för marginal och framtida behov.")
+        # Recommendation
+        best_fuse = max(fuse_comparison, key=lambda fc: fc["net_yr"])
+        if not best_fuse["current"]:
+            extra = best_fuse["net_yr"] - _current_net
+            st.success(f"**{best_fuse['fuse']:.0f}A ger bäst netto** — "
+                       f"{extra:+,.0f} kr/år mer än {fuse_amps:.0f}A "
+                       f"(extra avgift {best_fuse.get('extra_fee_yr', 0):+,.0f} kr/år)")
+        else:
+            upgrades = [fc for fc in fuse_comparison if not fc["current"]]
+            if upgrades:
+                next_up = upgrades[0]
+                st.info(f"**{fuse_amps:.0f}A ger bäst netto för batteriet.** "
+                        f"Uppgradering till {next_up['fuse']:.0f}A kostar "
+                        f"{next_up.get('extra_fee_yr', 0):,.0f} kr/år mer.")
 
     # ================================================================
     # STEP 5: DEEP-DIVE — detail view for selected battery
@@ -2260,7 +2246,7 @@ if "all_results" in st.session_state:
     config = sel["config"]
     tariff = sel["tariff"]
     num_days = sel["num_days"]
-    per_year = sel["total_benefit_yr"]
+    per_year = sel["net_benefit_yr"]
 
     col_d1, col_d2, col_d3, col_d4 = st.columns(4)
     col_d1.metric(t("lower_cost"), f"{per_year/12:,.0f} kr/mån")

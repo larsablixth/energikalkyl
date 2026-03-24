@@ -165,6 +165,7 @@ class EffektTariff:
     night_discount: float = 0.5
     # Peak hours restriction (None = all hours like Ellevio)
     peak_months: tuple | None = None  # e.g. (1,2,3,11,12) for winter only
+    low_season_rate: float | None = None  # effekt_rate for non-peak months (e.g. 72.5 for SEOM Apr-Oct)
     peak_weekday_only: bool = False
     peak_hour_start: int = 0
     peak_hour_end: int = 24
@@ -180,11 +181,18 @@ class EffektTariff:
     def transfer_fee_ore(self, d: str, hour: str) -> float:
         return self.energy_rate
 
+    def get_effekt_rate(self, month: int) -> float:
+        """Get effektavgift rate (kr/kW/mån) for a given month."""
+        if self.peak_months and month not in self.peak_months and self.low_season_rate is not None:
+            return self.low_season_rate
+        return self.effekt_rate
+
     def is_peak_hour(self, d: str, hour: str) -> bool:
         """Check if this hour counts toward peak demand measurement."""
         dt = date.fromisoformat(d)
         h = int(hour.split(":")[0])
-        if self.peak_months and dt.month not in self.peak_months:
+        # Skip non-peak months only if there's no low_season_rate
+        if self.peak_months and dt.month not in self.peak_months and self.low_season_rate is None:
             return False
         if self.peak_weekday_only and dt.weekday() >= 5:
             return False
@@ -274,11 +282,12 @@ GRID_OPERATORS = {
     },
     "SEOM (Sollentuna)": {
         "tariffs": ["Effekttariff"],
-        # Flat grundavgift — 16-25A same tier, then steps up
-        "fuse_fees": {16: 1780, 20: 1780, 25: 1780, 35: 3175, 50: 4475, 63: 5445},
+        # 2026 fasta elnätsavgifter (inkl. moms)
+        "fuse_fees": {16: 2550, 20: 3675, 25: 4725, 35: 7425, 50: 10950, 63: 14025},
         "effekttariff": {
             "energy_rate": 5.0,   # 5 öre/kWh inkl. moms
-            "effekt_rate": 145.0,  # höglast Nov-Mar (72.5 låglast Apr-Okt)
+            "effekt_rate": 145.0,  # höglast Nov-Mar
+            "low_season_rate": 72.5,  # låglast Apr-Okt
             "top_n_peaks": 3,
             "night_discount": 1.0,  # no night discount — only weekday 07-19
             "peak_months": (11, 12, 1, 2, 3),
@@ -345,6 +354,7 @@ def create_tariffs_for_operator(operator: str, fuse_amps: float = 25.0,
             effekt_rate=t["effekt_rate"], top_n_peaks=t["top_n_peaks"],
             night_discount=t["night_discount"],
             peak_months=t.get("peak_months"),
+            low_season_rate=t.get("low_season_rate"),
             peak_weekday_only=t.get("peak_weekday_only", False),
             peak_hour_start=t.get("peak_hour_start", 0),
             peak_hour_end=t.get("peak_hour_end", 24),

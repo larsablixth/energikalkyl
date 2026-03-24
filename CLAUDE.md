@@ -43,7 +43,7 @@ The app follows a 6-step flow:
 3. **Investment** — two pricing modes:
    - Specificerade batterier: editable price table (NKON defaults 5-96 kWh), user can add/remove
    - SEK per kWh: enter price/kWh, auto-generates 5-100 kWh sizes, finds optimal for self-consumption
-4. **Results** — simulates ALL battery sizes × ALL tariffs × fuse comparison, recommends optimal
+4. **Results** — simulates ALL battery sizes × ALL tariffs × ALL fuse sizes, recommends optimal combo
    - Annualized cost vs savings (same timescale), cumulative cashflow chart
    - Scenario comparison by year (normal vs high-price years)
    - Self-consumption optimization: finds smallest battery for near-zero grid export
@@ -67,7 +67,7 @@ The app follows a 6-step flow:
   - Göteborg Energi (effekttariff: 135 kr/kW/mån winter, + enkeltariff)
   - Mälarenergi (effekttariff: 59.25 kr/kW/mån, single peak)
   - Jämtkraft (enkeltariff only, 7.5 öre/kWh)
-  - SEOM/Sollentuna (effekttariff: 145 kr/kW/mån winter, flat grundavgift)
+  - SEOM/Sollentuna (effekttariff: 145 kr/kW/mån winter, 72.5 kr/kW/mån summer, 2026 fuse fees by category)
   - Anpassad (fully editable)
 
 ### Heating & weather
@@ -111,6 +111,7 @@ The app follows a 6-step flow:
 - Charging power limited by fuse headroom (fuse capacity − household load at that hour)
 - `daily_load_override`: when set, provides date+hour specific load (from heating model), overriding seasonal/hourly profiles
 - All tariff types simulated automatically — best picked per battery size
+- **Fuse size optimization**: sweeps user's fuse + up to 3 larger sizes, picks optimal fuse per battery (net of extra subscription cost). Deduplicates to show best fuse per battery label.
 
 ### Solar production data (solar.py, pvgis_source.py)
 - Three-tier fallback per simulation hour: real hourly → model scaled to real monthly → pure cos³
@@ -127,6 +128,7 @@ The app follows a 6-step flow:
 - `EffektTariff` class: charges based on peak kW demand per month
 - `_estimate_effekt_savings()` in app.py: compares monthly peak demand WITH vs WITHOUT battery
 - Each operator has different measurement rules (top-N peaks from different days, peak hours, night discount)
+- **Seasonal rates**: `low_season_rate` field for operators with different summer/winter effekt rates (e.g. SEOM: 72.5 kr/kW Apr-Oct, 145 kr/kW Nov-Mar). `get_effekt_rate(month)` returns correct rate.
 - Battery peak shaving: discharge during high-load hours to reduce measured peak
 - For SEOM/Ellevio customers: this is often the LARGEST savings component (400-900 kr/mån)
 
@@ -175,10 +177,13 @@ The app follows a 6-step flow:
 - Grouped bar chart per battery size per year
 - Addresses bias from including extreme periods (e.g., Q1 2026 with 2× normal prices)
 
-### Fuse size comparison (app.py)
-- Re-simulates recommended battery at larger fuse sizes
-- Shows extra savings vs extra subscription cost
-- Particularly valuable for operators with cheap fuse upgrades (SEOM: 25A→35A only +1,395 kr/yr)
+### Fuse size optimization (app.py)
+- Main optimization sweeps fuse sizes (user's selection + up to 3 larger) in outer loop
+- Each battery label keeps only the fuse size with highest `profit_life` (net of fuse cost delta)
+- `net_benefit_yr` = gross savings − extra fuse subscription cost (vs user's selected fuse)
+- Fuse comparison section shows pre-computed variants for recommended battery (no re-simulation)
+- Fuse dropdown shows yearly fee per size (e.g. "20A — 3 675 kr/år")
+- SEOM 2026 effekttariff customer fuse fees: 16A=2,550, 20A=3,675, 25A=4,725, 35A=7,425 kr/år
 
 ## Key design decisions
 - **Recommendation-first**: app tells you what to buy, not the other way around
