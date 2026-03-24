@@ -397,11 +397,11 @@ STRINGS = {
         "sv": "Ange ett brett tidsfönster och aktivera Smart för att välja billigaste timmarna "
               "(spotpriser kända dygnet före). kWh/dag styr hur många timmar som behövs. "
               "Utan Smart körs lasten alla timmar i fönstret. "
-              "OBS: Om du fyller i kalibrering (Tibber Insights) uppdateras elbilens kWh/dag automatiskt från verklig data.",
+              "OBS: Kalibrerad elbilsdata (Tibber Insights) används i simuleringen oavsett vad som anges i kWh/dag här.",
         "en": "Set a wide time window and enable Smart to pick the cheapest hours "
               "(spot prices known day-ahead). kWh/day controls how many hours are needed. "
               "Without Smart, the load runs every hour in the window. "
-              "Note: If you enter calibration data (Tibber Insights), the EV's kWh/day is automatically updated from real data.",
+              "Note: Calibrated EV data (Tibber Insights) is used in the simulation regardless of the kWh/day value set here.",
     },
     "add_load": {
         "sv": "+ Last",
