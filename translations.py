@@ -359,6 +359,70 @@ STRINGS = {
         "sv": "Din nuvarande säkring. Simuleringen utvärderar om du bör uppgradera.",
         "en": "Your current fuse. The simulation evaluates if you should upgrade.",
     },
+    "fuse_overcurrent_header": {
+        "sv": "⚡ Säkringsmarginal (IEC 60269, DIAZED trög)",
+        "en": "⚡ Fuse overcurrent margin (IEC 60269, DIAZED slow-blow)",
+    },
+    "fuse_overcurrent_caption": {
+        "sv": "**Expertinställning.** DIAZED trög-säkringar (gG/gL) smälter inte omedelbart vid nominell ström. "
+              "IEC 60269 specificerar två strömnivåer: Inf (1.25× In) där säkringen garanterat INTE "
+              "smälter inom 1 timme, och If (1.6× In) där den MÅSTE smälta inom 1 timme. "
+              "Detta påverkar hur mycket laddeffekt som är tillgänglig utöver hushållets last.",
+        "en": "**Expert setting.** DIAZED slow-blow fuses (gG/gL) don't melt instantly at rated current. "
+              "IEC 60269 specifies two current levels: Inf (1.25× In) where the fuse is guaranteed NOT "
+              "to blow within 1 hour, and If (1.6× In) where it MUST blow within 1 hour. "
+              "This affects how much charging power is available beyond household load.",
+    },
+    "fuse_overcurrent_label": {
+        "sv": "Överströmsmarginal",
+        "en": "Overcurrent margin",
+    },
+    "fuse_oc_nominal": {
+        "sv": "Nominell — exakt säkringsvärde (konservativ)",
+        "en": "Nominal — exact fuse rating (conservative)",
+    },
+    "fuse_oc_safe": {
+        "sv": "1.25× In — garanterat ingen smältning (Inf, 1h)",
+        "en": "1.25× In — guaranteed no blow (Inf, 1h)",
+    },
+    "fuse_oc_aggressive": {
+        "sv": "1.6× In — kan smälta inom 1h (If, riskabelt)",
+        "en": "1.6× In — may blow within 1h (If, risky)",
+    },
+    "fuse_overcurrent_help": {
+        "sv": "IEC 60269 definierar två trösklar för DIAZED trög-säkringar (gG/gL):\n"
+              "• 1.25× In (Inf): konventionell icke-smältström — smälter INTE inom 1 timme\n"
+              "• 1.6× In (If): konventionell smältström — MÅSTE smälta inom 1 timme\n\n"
+              "Batteriladdning sker i block om 1-3 timmar, så 1.25× är säker i praktiken. "
+              "1.6× riskerar att säkringen går vid långa laddpass.",
+        "en": "IEC 60269 defines two thresholds for DIAZED slow-blow fuses (gG/gL):\n"
+              "• 1.25× In (Inf): conventional non-fusing current — will NOT blow within 1 hour\n"
+              "• 1.6× In (If): conventional fusing current — MUST blow within 1 hour\n\n"
+              "Battery charging happens in 1-3 hour blocks, so 1.25× is safe in practice. "
+              "1.6× risks blowing the fuse during long charge sessions.",
+    },
+    "fuse_overcurrent_warning": {
+        "sv": "⚠️ Säkring {fuse:.0f}A × {factor:.2f} = **{effective:.1f}A effektiv**. "
+              "Detta är inte ett standardvärde — var medveten om att säkringen kan smälta vid hög last.",
+        "en": "⚠️ Fuse {fuse:.0f}A × {factor:.2f} = **{effective:.1f}A effective**. "
+              "This is not a default setting — be aware the fuse may blow under high load.",
+    },
+    "fuse_overcurrent_sim_note": {
+        "sv": "Simuleringen använder DIAZED-marginal {factor:.2f}× på din {fuse:.0f}A säkring → "
+              "**{effective:.1f}A effektiv** ({eff_kw:.1f} kW istället för {nom_kw:.1f} kW). "
+              "Det ger **+{extra_kw:.1f} kW** extra laddkapacitet utan säkringsbyte.",
+        "en": "Simulation uses DIAZED margin {factor:.2f}× on your {fuse:.0f}A fuse → "
+              "**{effective:.1f}A effective** ({eff_kw:.1f} kW instead of {nom_kw:.1f} kW). "
+              "That gives **+{extra_kw:.1f} kW** extra charging capacity without upgrading the fuse.",
+    },
+    "fuse_overcurrent_no_upgrade": {
+        "sv": "Din {fuse:.0f}A DIAZED-säkring räcker med {factor:.2f}× marginal "
+              "({effective:.1f}A effektiv, +{extra_kw:.1f} kW). Inget säkringsbyte behövs — "
+              "du sparar den extra årsavgiften för en större säkring.",
+        "en": "Your {fuse:.0f}A DIAZED fuse is sufficient with {factor:.2f}× margin "
+              "({effective:.1f}A effective, +{extra_kw:.1f} kW). No fuse upgrade needed — "
+              "you save the extra yearly fee for a larger fuse.",
+    },
     "phases": {
         "sv": "Faser",
         "en": "Phases",
@@ -2177,6 +2241,12 @@ STRINGS = {
     "diy_intro": {
         "sv": "En kostnadseffektiv design som separerar laddning (billig, hög effekt) från urladdning (smart, nollexport). Kräver ingen mikroproducentregistrering.",
         "en": "A cost-effective design that separates charging (cheap, high power) from discharging (smart, zero export). No microproducer registration needed.",
+    },
+
+    # ---- Degradation ----
+    "degradation_caption": {
+        "sv": "Inkluderar batteriåldring: LiFePO4 tappar ~1% kapacitet per år (85% SoH efter 15 år).",
+        "en": "Includes battery aging: LiFePO4 loses ~1% capacity per year (85% SoH after 15 years).",
     },
 }
 

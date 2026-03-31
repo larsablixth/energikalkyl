@@ -688,6 +688,24 @@ with col_sys3:
                               format_func=lambda a: f"{a:.0f}A — {op_fuse_fees[a]:,.0f} kr/år",
                               help=t("fuse_help"))
     phases = st.selectbox(t("phases"), [3, 1], index=0)
+    with st.expander(t("fuse_overcurrent_header"), expanded=False):
+        st.caption(t("fuse_overcurrent_caption"))
+        _overcurrent_options = {
+            t("fuse_oc_nominal"): 0.0,
+            t("fuse_oc_safe"): 0.25,
+            t("fuse_oc_aggressive"): 0.60,
+        }
+        _oc_label = st.radio(
+            t("fuse_overcurrent_label"),
+            list(_overcurrent_options.keys()),
+            index=0,
+            help=t("fuse_overcurrent_help"),
+        )
+        fuse_overcurrent_factor = _overcurrent_options[_oc_label]
+        if fuse_overcurrent_factor > 0:
+            _eff_amps = fuse_amps * (1.0 + fuse_overcurrent_factor)
+            st.warning(t("fuse_overcurrent_warning").format(
+                fuse=fuse_amps, factor=1.0 + fuse_overcurrent_factor, effective=_eff_amps))
     energy_tax = st.number_input(t("energy_tax"), value=45.0, step=0.1,
                                   help=t("energy_tax_help"))
     available_tariffs = op_info["tariffs"]
@@ -1586,6 +1604,7 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
                 cycle_life=cycle_life, calendar_life_years=15,
                 export_price_factor=export_factor, export_fee_ore=export_fee,
                 export_arbitrage_kwh=_export_arb_kwh,
+                fuse_overcurrent_factor=fuse_overcurrent_factor,
             )
 
             # Simulate all tariffs, pick best
@@ -1748,6 +1767,14 @@ if "all_results" in st.session_state:
             )
         )
 
+    if fuse_overcurrent_factor > 0 and _rec_fuse == fuse_amps:
+        _eff_a = fuse_amps * (1.0 + fuse_overcurrent_factor)
+        _pb = 0.7 if phases == 3 else 1.0
+        _extra_kw = fuse_amps * fuse_overcurrent_factor * 0.23 * phases * _pb
+        st.info(t("fuse_overcurrent_no_upgrade").format(
+            fuse=fuse_amps, effective=_eff_a, extra_kw=_extra_kw,
+            factor=1.0 + fuse_overcurrent_factor))
+
     # Tariff recommendation (from best size)
     st.info(t("best_tariff_info").format(tariff=best['best_tariff']))
 
@@ -1780,6 +1807,7 @@ if "all_results" in st.session_state:
                 calendar_life_years=best["config"].calendar_life_years,
                 export_price_factor=_alt_export,
                 export_fee_ore=_alt_fee,
+                fuse_overcurrent_factor=best["config"].fuse_overcurrent_factor,
             )
             _alt_result = simulate(price_rows, _alt_cfg, tariff=best["tariff"],
                                     solar=solar_cfg)
@@ -2152,18 +2180,28 @@ if "all_results" in st.session_state:
     else:
         _show = all_results
 
+    # LFP degradation: ~1%/year capacity fade (well-established in literature)
+    LFP_FADE_PER_YEAR = 0.01
+
     fig_life = go.Figure()
     colors = ["#3498db", "#2ecc71", "#e74c3c"]
     years = list(range(0, 16))
     for i, r in enumerate(_show):
+        # Solid line: degradation-adjusted cashflow
         cum = [-r["total_invest"]]
         for yr in range(1, 16):
-            cum.append(cum[-1] + r["net_benefit_yr"])
+            soh = 1 - LFP_FADE_PER_YEAR * yr
+            cum.append(cum[-1] + r["net_benefit_yr"] * soh)
         is_best = r["label"] == best["label"]
         fig_life.add_trace(go.Scatter(
             x=years, y=cum, mode="lines+markers", name=r["label"],
             line=dict(width=4 if is_best else 2, color=colors[i % len(colors)]),
-            hovertemplate=f"{r['label']}<br>År %{{x}}: %{{y:,.0f}} kr<extra></extra>",
+            hovertemplate=(
+                f"{r['label']}<br>"
+                f"{t('xaxis_year')} %{{x}}: %{{y:,.0f}} kr<br>"
+                "SoH: %{customdata:.0f}%<extra></extra>"
+            ),
+            customdata=[100 - yr * LFP_FADE_PER_YEAR * 100 for yr in years],
         ))
     fig_life.add_hline(y=0, line_color="gray", line_width=1,
                         annotation_text=t("repaid_annotation"), annotation_position="bottom right")
@@ -2172,6 +2210,7 @@ if "all_results" in st.session_state:
         margin=dict(l=0, r=0, t=30, b=0), legend=dict(orientation="h", y=1.02),
     )
     st.plotly_chart(fig_life, use_container_width=True)
+    st.caption(t("degradation_caption"))
 
     # === FINANCING PERSPECTIVE ===
     st.divider()
@@ -2292,6 +2331,14 @@ if "all_results" in st.session_state:
                        fuse=f"{fuse_amps:.0f}",
                        fee=f"{_base_fee:,.0f}",
                        label=best['label']))
+        if fuse_overcurrent_factor > 0:
+            _eff_amps_info = fuse_amps * (1.0 + fuse_overcurrent_factor)
+            _phase_bal = 0.7 if phases == 3 else 1.0
+            _eff_kw = _eff_amps_info * 0.23 * phases * _phase_bal
+            _nom_kw = fuse_amps * 0.23 * phases * _phase_bal
+            st.info(t("fuse_overcurrent_sim_note").format(
+                fuse=fuse_amps, effective=_eff_amps_info, nom_kw=_nom_kw, eff_kw=_eff_kw,
+                extra_kw=_eff_kw - _nom_kw, factor=1.0 + fuse_overcurrent_factor))
 
         fuse_comparison = []
         for fv in _fuse_variants_display:
@@ -2561,6 +2608,7 @@ if "all_results" in st.session_state:
                 export_price_factor=ref_cfg.export_price_factor, export_fee_ore=ref_cfg.export_fee_ore,
                 purchase_price=bp, installation_cost=ref_cfg.installation_cost,
                 cycle_life=ref_cfg.cycle_life, calendar_life_years=15,
+                fuse_overcurrent_factor=ref_cfg.fuse_overcurrent_factor,
             )
             r = simulate(scaled, fc_cfg, tariff=ref_tariff, solar=solar_cfg)
             d = len(set(s.date for s in r.slots))
@@ -2607,6 +2655,7 @@ if "all_results" in st.session_state:
                     export_price_factor=ref_cfg.export_price_factor, export_fee_ore=ref_cfg.export_fee_ore,
                     purchase_price=bp, installation_cost=ref_cfg.installation_cost,
                     cycle_life=ref_cfg.cycle_life, calendar_life_years=15,
+                    fuse_overcurrent_factor=ref_cfg.fuse_overcurrent_factor,
                 )
                 r = simulate(scaled, fc_cfg, tariff=ref_tariff, solar=solar_cfg)
                 d = len(set(s.date for s in r.slots))

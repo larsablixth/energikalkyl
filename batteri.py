@@ -129,10 +129,18 @@ class BatteryConfig:
     # require HV batteries: Fronius, SMA, Huawei, Deye, GoodWe, Sungrow).
     phase_balance_factor: float = 0.7
 
+    # IEC 60269 gG fuse overcurrent margin (fraction of rated current).
+    # DIAZED trög (slow-blow, gG/gL) — standard in Swedish residential installations.
+    # 0.0  = nominal (no overcurrent)
+    # 0.25 = conventional non-fusing current Inf (1.25×In, guaranteed no blow for 1h)
+    # 0.60 = conventional fusing current If (1.6×In, must blow within 1h — risky)
+    fuse_overcurrent_factor: float = 0.0
+
     @property
     def grid_max_kw(self) -> float:
-        """Max power from grid based on fuse size, derated for phase imbalance."""
-        theoretical = self.fuse_amps * self.voltage * self.phases / 1000.0
+        """Max power from grid based on fuse size + overcurrent margin, derated for phase imbalance."""
+        effective_amps = self.fuse_amps * (1.0 + self.fuse_overcurrent_factor)
+        theoretical = effective_amps * self.voltage * self.phases / 1000.0
         if self.phases == 3:
             return theoretical * self.phase_balance_factor
         return theoretical  # single phase: no imbalance
