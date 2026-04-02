@@ -825,6 +825,10 @@ STRINGS = {
         "sv": "Ladda ner PDF-rapport (bankunderlag)",
         "en": "Download PDF report (bank documentation)",
     },
+    "export_simulator_json": {
+        "sv": "Exportera för Simulator (JSON)",
+        "en": "Export for Simulator (JSON)",
+    },
     "heating_header": {
         "sv": "Uppvärmning",
         "en": "Heating",

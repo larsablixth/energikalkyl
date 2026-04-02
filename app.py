@@ -54,6 +54,7 @@ STREAMLIT BASICS (for non-coders):
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+import json
 from datetime import date, timedelta
 from elpriser import fetch_range, load_csv, ZONES, ZONE_NAMES
 from batteri import BatteryConfig, LoadSchedule, FlexibleLoad, simulate
@@ -2022,6 +2023,111 @@ if "all_results" in st.session_state:
         )
     except Exception as e:
         st.warning(t("pdf_error").format(error=e))
+
+    # === EXPORT FOR SIMULATOR ===
+    def _build_simulator_export():
+        """Build JSON export dict for energy-scheduler-sim."""
+        export = {"source": "energikalkyl", "exported": date.today().isoformat()}
+
+        # Consumption: hourly data grouped by date
+        vf_hourly = st.session_state.get("vattenfall_hourly", [])
+        if vf_hourly:
+            cons = {}
+            for rec in vf_hourly:
+                d = rec["date"]
+                if d not in cons:
+                    cons[d] = [0.0] * 24
+                h = int(rec["hour"].split(":")[0]) if isinstance(rec["hour"], str) else int(rec["hour"])
+                cons[d][h] = round(rec["kwh"], 4)
+            export["consumption"] = dict(sorted(cons.items()))
+
+        # Prices: hourly SEK/kWh grouped by date
+        _df = st.session_state.get("df_prices")
+        if _df is not None and len(_df) > 0:
+            prices = {}
+            for _, row in _df.iterrows():
+                d = str(row["date"])
+                if d not in prices:
+                    prices[d] = [0.0] * 24
+                h = int(str(row["hour"]).split(":")[0])
+                prices[d][h] = round(float(row["sek_per_kwh"]), 4)
+            export["prices"] = dict(sorted(prices.items()))
+            # Zone from price data
+            if "zone" in _df.columns:
+                export["zone"] = str(_df["zone"].iloc[0])
+
+        # Weather: hourly °C grouped by date
+        try:
+            _temps = temps_data
+        except NameError:
+            _temps = {}
+        if _temps:
+            weather = {}
+            for d, hourly in _temps.items():
+                weather[d] = [0.0] * 24
+                for h, temp_c in hourly:
+                    weather[d][h] = round(temp_c, 1)
+            export["weather"] = dict(sorted(weather.items()))
+
+        # Solar: hourly kW grouped by date
+        solar_hourly = st.session_state.get("tibber_solar_hourly", {})
+        if solar_hourly:
+            solar = {}
+            for key, kw in solar_hourly.items():
+                # key format: "YYYY-MM-DD HH:00"
+                parts = key.split(" ")
+                if len(parts) == 2:
+                    d = parts[0]
+                    h = int(parts[1].split(":")[0])
+                    if d not in solar:
+                        solar[d] = [0.0] * 24
+                    solar[d][h] = round(kw, 4)
+            export["solar"] = dict(sorted(solar.items()))
+
+        # Calibration
+        try:
+            _hc = heating_config
+            _ev_annual = sum(sl.daily_kwh * 365 for sl in scheduled_loads
+                            if "bil" in sl.name.lower() or "ev" in sl.name.lower()) if scheduled_loads else 0
+            export["calibration"] = {
+                "h_loss": round(_hc.h_loss, 4),
+                "base_load_kw": round(non_heat_base, 2),
+                "dhw_kwh_per_day": round(_hc.dhw_kwh_per_day, 1),
+                "cop_base": round(_hc.cop_base, 3),
+                "cop_slope": round(_hc.cop_slope, 4),
+                "hp_max_heat_kw": round(_hc.hp_max_heat_kw, 1),
+                "ev_annual_kwh": round(_ev_annual),
+            }
+        except NameError:
+            pass
+
+        # Location
+        home = st.session_state.get("tibber_home", {})
+        if home.get("latitude") and home.get("longitude"):
+            export["location"] = {
+                "lat": round(home["latitude"], 2),
+                "lon": round(home["longitude"], 2),
+                "city": home.get("city", ""),
+            }
+        elif home.get("city"):
+            _city_coords = SWEDISH_CITIES.get(home["city"])
+            if _city_coords:
+                export["location"] = {
+                    "lat": round(_city_coords[0], 2),
+                    "lon": round(_city_coords[1], 2),
+                    "city": home["city"],
+                }
+
+        return export
+
+    _export_data = _build_simulator_export()
+    _export_json = json.dumps(_export_data, ensure_ascii=False, indent=2)
+    st.download_button(
+        t("export_simulator_json"),
+        data=_export_json,
+        file_name=f"energikalkyl-export-{date.today().isoformat()}.json",
+        mime="application/json",
+    )
 
     # === SCENARIO SPLIT: Normal years vs High-price period ===
     # Split simulation results by year to show realistic range
