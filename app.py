@@ -2084,6 +2084,37 @@ if "all_results" in st.session_state:
                     solar[d][h] = round(kw, 4)
             export["solar"] = dict(sorted(solar.items()))
 
+        # Battery (from recommended config)
+        _bcfg = best.get("config")
+        if _bcfg:
+            export["battery"] = {
+                "capacity_kwh": _bcfg.capacity_kwh,
+                "max_charge_kw": _bcfg.max_charge_kw,
+                "min_soc": round(_bcfg.min_soc * 100),
+                "max_soc": round(_bcfg.max_soc * 100),
+            }
+            export["grid"] = {
+                "fuse_amps": _bcfg.fuse_amps,
+                "phases": _bcfg.phases,
+                "phase_balance_factor": _bcfg.phase_balance_factor,
+            }
+
+        # EV (from scheduled loads)
+        for _sl in st.session_state.get("scheduled_loads", []):
+            if _sl.get("power", 0) > 0 and ("bil" in _sl["name"].lower() or "ev" in _sl["name"].lower()):
+                _start_h, _end_h = _sl["start"], _sl["end"]
+                if _start_h > _end_h:  # wraps midnight: e.g. 18→7 means home 18-24 + 0-7
+                    _home_hrs = f"0-{_end_h},{_start_h}-24"
+                else:
+                    _home_hrs = f"{_start_h}-{_end_h}"
+                export["ev"] = {
+                    "capacity_kwh": 77,
+                    "target_soc": 80,
+                    "daily_kwh": _sl.get("daily_kwh", 30.0),
+                    "home_hours": _home_hrs,
+                }
+                break
+
         # Calibration
         try:
             _hc = heating_config
@@ -2100,6 +2131,20 @@ if "all_results" in st.session_state:
             }
         except NameError:
             pass
+
+        # Flexible loads
+        _fl_raw = st.session_state.get("flexible_loads", [])
+        if _fl_raw:
+            export["flex_loads"] = [
+                {
+                    "name": fl["name"],
+                    "power_kw": fl["power"],
+                    "daily_kwh": fl["daily"],
+                    "start_month": fl["sm"],
+                    "end_month": fl["em"],
+                }
+                for fl in _fl_raw if fl.get("power", 0) > 0
+            ]
 
         # Location
         home = st.session_state.get("tibber_home", {})
