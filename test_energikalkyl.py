@@ -628,5 +628,276 @@ class TestIntegration:
         assert r_solar.total_solar_charge_kwh >= 0
 
 
+# ============================================================
+# financial.py tests
+# ============================================================
+
+class TestNPV:
+    def test_zero_discount_equals_sum(self):
+        """With 0% discount rate, NPV = sum of cashflows."""
+        from financial import npv
+        cashflows = [-1000, 300, 300, 300, 300]
+        assert abs(npv(cashflows, 0.0) - 200.0) < 1e-9
+
+    def test_positive_discount_reduces_npv(self):
+        """Higher discount rate reduces NPV of a positive cashflow stream."""
+        from financial import npv
+        cashflows = [-1000, 300, 300, 300, 300]
+        npv_0 = npv(cashflows, 0.0)
+        npv_5 = npv(cashflows, 0.05)
+        npv_10 = npv(cashflows, 0.10)
+        assert npv_0 > npv_5 > npv_10
+
+    def test_known_value(self):
+        """Hand-calculated: -100 + 110/1.10 = 0."""
+        from financial import npv
+        assert abs(npv([-100, 110], 0.10)) < 1e-9
+
+    def test_investment_only_is_negative(self):
+        """Just an investment with no returns has NPV equal to -investment."""
+        from financial import npv
+        assert npv([-1000], 0.05) == -1000
+
+
+class TestIRR:
+    def test_simple_case(self):
+        """Known answer: [-1000, 500, 500, 500] has IRR ≈ 23.375%."""
+        from financial import irr
+        result = irr([-1000, 500, 500, 500])
+        assert result is not None
+        assert abs(result - 0.23375) < 0.001
+
+    def test_break_even(self):
+        """[-100, 110] has IRR = 10% exactly."""
+        from financial import irr
+        result = irr([-100, 110])
+        assert result is not None
+        assert abs(result - 0.10) < 1e-6
+
+    def test_irr_satisfies_npv_zero(self):
+        """By definition, NPV at the IRR should be zero."""
+        from financial import irr, npv
+        cashflows = [-5000, 1200, 1500, 1800, 2000]
+        r = irr(cashflows)
+        assert r is not None
+        assert abs(npv(cashflows, r)) < 1e-4
+
+    def test_no_positive_returns(self):
+        """All-negative cashflows have no IRR."""
+        from financial import irr
+        assert irr([-100, -50, -50]) is None
+
+    def test_no_negative_investment(self):
+        """All-positive cashflows have no IRR."""
+        from financial import irr
+        assert irr([100, 50, 50]) is None
+
+
+class TestDiscountedPayback:
+    def test_payback_within_horizon(self):
+        """Investment of 1000, 500/year: undiscounted payback is 2 years."""
+        from financial import discounted_payback
+        # At 0% discount, payback is exactly 2 years
+        result = discounted_payback([-1000, 500, 500, 500], 0.0)
+        assert result is not None
+        assert abs(result - 2.0) < 1e-6
+
+    def test_discounting_extends_payback(self):
+        """Higher discount rate pushes payback further out."""
+        from financial import discounted_payback
+        cashflows = [-1000, 300, 300, 300, 300, 300]
+        pb_0 = discounted_payback(cashflows, 0.0)
+        pb_10 = discounted_payback(cashflows, 0.10)
+        assert pb_0 is not None and pb_10 is not None
+        assert pb_10 > pb_0
+
+    def test_never_pays_back(self):
+        """Cashflows too small to ever recover investment."""
+        from financial import discounted_payback
+        assert discounted_payback([-1000, 10, 10, 10], 0.05) is None
+
+
+class TestBuildCashflows:
+    def test_length(self):
+        """Cashflow length = horizon + 1 (year 0 + years 1..N)."""
+        from financial import FinancialAssumptions, build_cashflows
+        a = FinancialAssumptions(analysis_horizon_years=10, standby_draw_w=0,
+                                  annual_capacity_degradation=0)
+        cf = build_cashflows(10000, 2000, a)
+        assert len(cf) == 11
+
+    def test_year_zero_is_investment(self):
+        """Index 0 should be negative investment."""
+        from financial import FinancialAssumptions, build_cashflows
+        a = FinancialAssumptions(standby_draw_w=0, annual_capacity_degradation=0,
+                                  analysis_horizon_years=5)
+        cf = build_cashflows(10000, 1000, a)
+        assert cf[0] == -10000
+
+    def test_flat_no_degradation_no_standby(self):
+        """With no degradation and no standby, years 1..N should all equal savings."""
+        from financial import FinancialAssumptions, build_cashflows
+        a = FinancialAssumptions(
+            analysis_horizon_years=5,
+            electricity_price_inflation=0.0,
+            annual_capacity_degradation=0.0,
+            standby_draw_w=0.0,
+            annual_maintenance_sek=0.0,
+            residual_value_fraction=0.0,
+        )
+        cf = build_cashflows(10000, 2000, a)
+        for year_cf in cf[1:]:
+            assert abs(year_cf - 2000) < 1e-9
+
+    def test_degradation_reduces_later_years(self):
+        """With degradation, year 5 earns less than year 1."""
+        from financial import FinancialAssumptions, build_cashflows
+        a = FinancialAssumptions(
+            analysis_horizon_years=10,
+            annual_capacity_degradation=0.02,
+            standby_draw_w=0.0,
+        )
+        cf = build_cashflows(10000, 2000, a)
+        assert cf[1] > cf[5] > cf[10]
+
+    def test_standby_reduces_net(self):
+        """Standby draw should reduce net annual cashflow."""
+        from financial import FinancialAssumptions, build_cashflows
+        no_standby = FinancialAssumptions(
+            analysis_horizon_years=5, standby_draw_w=0,
+            annual_capacity_degradation=0,
+        )
+        with_standby = FinancialAssumptions(
+            analysis_horizon_years=5, standby_draw_w=50,
+            standby_price_sek_per_kwh=2.0,
+            annual_capacity_degradation=0,
+        )
+        cf_no = build_cashflows(10000, 3000, no_standby)
+        cf_yes = build_cashflows(10000, 3000, with_standby)
+        # ~50 W * 8760 h * 2 SEK = 876 SEK/year cost
+        assert abs((cf_no[1] - cf_yes[1]) - 876) < 1.0
+
+
+class TestAnalyze:
+    def test_profitable_investment(self):
+        """Investment that should be clearly profitable."""
+        from financial import FinancialAssumptions, analyze
+        a = FinancialAssumptions(
+            discount_rate=0.04,
+            analysis_horizon_years=15,
+            standby_draw_w=0,
+            annual_capacity_degradation=0,
+        )
+        # 50k investment, 8k/year savings over 15 years = clearly profitable
+        result = analyze(50000, 8000, a)
+        assert result.npv_sek > 0
+        assert result.irr is not None
+        assert result.irr > 0.04  # Better than discount rate
+        assert result.simple_payback_years is not None
+        assert result.simple_payback_years < 15
+
+    def test_unprofitable_investment(self):
+        """Investment too expensive to be worth it."""
+        from financial import FinancialAssumptions, analyze
+        a = FinancialAssumptions(
+            discount_rate=0.04,
+            analysis_horizon_years=15,
+        )
+        # 200k investment, 5k/year — won't pay back within horizon
+        result = analyze(200000, 5000, a)
+        assert result.npv_sek < 0
+
+    def test_verdict_format(self):
+        """Verdict should contain NPV indication."""
+        from financial import FinancialAssumptions, analyze
+        result = analyze(50000, 8000, FinancialAssumptions(standby_draw_w=0))
+        assert "NPV" in result.verdict
+
+
+# ============================================================
+# scenarios.py tests
+# ============================================================
+
+class TestScenarios:
+    def _build_prices(self, years: list[int], spread: float = 0.5):
+        """Build synthetic hourly prices for specified years."""
+        from datetime import date, timedelta
+        prices = []
+        for y in years:
+            start = date(y, 1, 1)
+            # 365 days of data
+            for d in range(365):
+                current = start + timedelta(days=d)
+                date_str = current.isoformat()
+                for h in range(24):
+                    # Simple diurnal pattern: cheap at night, expensive 17-19
+                    if 17 <= h <= 19:
+                        price = 1.0 + spread
+                    elif 2 <= h <= 5:
+                        price = 1.0 - spread
+                    else:
+                        price = 1.0
+                    prices.append({
+                        "date": date_str,
+                        "hour": f"{h:02d}:00",
+                        "sek_per_kwh": price,
+                    })
+        return prices
+
+    def test_splits_by_year(self):
+        """Scenario runner should produce one result per year."""
+        from scenarios import run_yearly_scenarios
+        from batteri import BatteryConfig, simulate
+        prices = self._build_prices([2022, 2023, 2024])
+        config = BatteryConfig(
+            capacity_kwh=10, max_charge_kw=3, max_discharge_kw=3,
+            purchase_price=50000, base_load_kw=0.5,
+        )
+        summary = run_yearly_scenarios(prices, simulate, config)
+        assert len(summary.years) == 3
+        assert {s.year for s in summary.years} == {2022, 2023, 2024}
+
+    def test_skips_sparse_years(self):
+        """Years with <180 days should be dropped."""
+        from scenarios import run_yearly_scenarios
+        from batteri import BatteryConfig, simulate
+        # 2024 has full year, 2025 has only 10 days
+        prices = self._build_prices([2024])
+        # Add a handful of 2025 days
+        from datetime import date, timedelta
+        start_2025 = date(2025, 1, 1)
+        for d in range(10):
+            current = start_2025 + timedelta(days=d)
+            for h in range(24):
+                prices.append({"date": current.isoformat(), "hour": f"{h:02d}:00",
+                               "sek_per_kwh": 1.0})
+        config = BatteryConfig(
+            capacity_kwh=10, max_charge_kw=3, max_discharge_kw=3,
+            base_load_kw=0.5,
+        )
+        summary = run_yearly_scenarios(prices, simulate, config)
+        years_seen = {s.year for s in summary.years}
+        assert 2024 in years_seen
+        assert 2025 not in years_seen
+
+    def test_summary_statistics(self):
+        """Summary stats should be consistent."""
+        from scenarios import ScenarioSummary, YearlyScenario
+        summary = ScenarioSummary(years=[
+            YearlyScenario(year=2020, num_days=365, annual_savings_sek=1000,
+                           cycles=100, avg_spot_ore_per_kwh=50, avg_spread_ore_per_kwh=20),
+            YearlyScenario(year=2021, num_days=365, annual_savings_sek=2000,
+                           cycles=150, avg_spot_ore_per_kwh=80, avg_spread_ore_per_kwh=30),
+            YearlyScenario(year=2022, num_days=365, annual_savings_sek=5000,
+                           cycles=250, avg_spot_ore_per_kwh=150, avg_spread_ore_per_kwh=80),
+        ])
+        assert summary.min_savings == 1000
+        assert summary.max_savings == 5000
+        assert summary.median_savings == 2000
+        # P25 should be between min and median
+        p25 = summary.percentile(0.25)
+        assert 1000 <= p25 <= 2000
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

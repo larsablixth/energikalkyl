@@ -1279,8 +1279,8 @@ STRINGS = {
         "en": "Net savings",
     },
     "aa_net_saving_help": {
-        "sv": "Värmebesparing minus AC-kostnad (vid ~60 öre/kWh snitt)",
-        "en": "Heating savings minus AC cost (at ~60 öre/kWh average)",
+        "sv": "Värmebesparing minus AC-kostnad (till aktuellt retail-elpris)",
+        "en": "Heating savings minus AC cost (at current retail electricity price)",
     },
     "aa_payback": {
         "sv": "Återbetalningstid",
@@ -2152,9 +2152,11 @@ STRINGS = {
     },
     "aa_avoided_export_help": {
         "sv": "Värdet av att använda solöverskottet i huset "
-              "istället för att exportera till nät (~60 öre/kWh)",
+              "istället för att exportera till nät (spotpris ~30–60 öre/kWh "
+              "sedan skattereduktionen togs bort 2026)",
         "en": "Value of using solar surplus in the house "
-              "instead of exporting to grid (~60 öre/kWh)",
+              "instead of exporting to grid (spot price ~30–60 öre/kWh "
+              "since the tax credit was abolished in 2026)",
     },
     "aa_other_flex": {
         "sv": "Övriga flex-laster",

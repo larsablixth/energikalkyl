@@ -340,7 +340,7 @@ def generate_report(
     pdf.body_text(
         f"Simuleringen testar automatiskt alla tillgängliga tariffer hos {grid_operator} "
         f"och väljer den som ger bäst resultat för varje batteristorlek. "
-        f"Energiskatt (54,88 öre/kWh inkl. moms) och abonnemangsavgift ingår i beräkningen."
+        f"Energiskatt (45,0 öre/kWh inkl. moms, 2026 års nivå) och abonnemangsavgift ingår i beräkningen."
     )
 
     pdf.sub_title("Batteri")

@@ -924,6 +924,26 @@ def print_summary(result: SimResult, tariff=None, base_fuse_amps: float | None =
 
     print("=" * 70)
 
+    # --- Financial analysis (NPV / IRR / discounted payback) ---
+    # Only run if we have an investment and positive annual savings to analyse.
+    if total_investment > 0 and num_days > 0 and per_year > 0:
+        try:
+            from financial import FinancialAssumptions, analyze, print_report
+
+            # Horizon = shorter of battery and solar lifetime, capped at 15 years.
+            horizon = int(min(effective_lifetime, 15))
+            assumptions = FinancialAssumptions(
+                analysis_horizon_years=max(1, horizon),
+            )
+            fin_result = analyze(
+                investment_sek=total_investment,
+                annual_savings_sek=per_year,
+                assumptions=assumptions,
+            )
+            print_report(fin_result, label="Batteri + sol" if solar else "Batteri")
+        except ImportError:
+            pass  # financial module not available, skip silently
+
 
 def print_daily_breakdown(result: SimResult):
     """Print per-day summary."""

@@ -225,6 +225,8 @@ def main():
                        help="Flexibel last (solöverskott): NAMN:KW[:DAGKWH:STARTMÅN-SLUTMÅN], "
                             "t.ex. --flex poolpump:3:20:5-9")
     p_bat.add_argument("--dagvis", action="store_true", help="Visa daglig uppdelning")
+    p_bat.add_argument("--scenarier", action="store_true",
+                       help="Kör simuleringen per kalenderår och visa spridningen av årsbesparingar")
     p_bat.add_argument("--pris", type=float, default=0, help="Batteriets inköpspris i SEK")
     p_bat.add_argument("--installation", type=float, default=0, help="Installationskostnad i SEK")
     p_bat.add_argument("--cykler", type=int, default=8000, help="Batteriets cykellivslängd (default: 8000)")
@@ -521,6 +523,32 @@ def main():
         print_summary(result, tariff=tariff, base_fuse_amps=base_fuse, solar=solar)
         if args.dagvis:
             print_daily_breakdown(result)
+        if args.scenarier:
+            from scenarios import run_yearly_scenarios, print_scenario_table
+            summary = run_yearly_scenarios(rows, simulate, config, tariff=tariff, solar=solar)
+            if summary.years:
+                print_scenario_table(summary)
+                # Also run financial analysis on the P25 (conservative) savings
+                total_investment = config.purchase_price + config.installation_cost
+                if solar:
+                    total_investment += solar.purchase_price + solar.installation_cost
+                if total_investment > 0:
+                    from financial import FinancialAssumptions, analyze, print_report
+                    for label, savings in [
+                        ("Konservativt (P25)", summary.percentile(0.25)),
+                        ("Median", summary.median_savings),
+                        ("Optimistiskt (P75)", summary.percentile(0.75)),
+                    ]:
+                        if savings > 0:
+                            fin = analyze(
+                                investment_sek=total_investment,
+                                annual_savings_sek=savings,
+                                assumptions=FinancialAssumptions(),
+                            )
+                            print_report(fin, label=label)
+            else:
+                print("  Otillräcklig historisk data för årliga scenarier "
+                      "(kräver minst 180 dagar per år).")
 
 
 if __name__ == "__main__":
