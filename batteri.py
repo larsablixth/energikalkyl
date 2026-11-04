@@ -462,21 +462,22 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
             charge_room.append(max(0.0, avail_kw * slot_duration_h - solar_in[i]) if avail_kw > 0.1 else 0.0)
 
         # Discharge capacity per slot, split into tranches by value: covering
-        # the house's own load saves the full price; with export enabled, the
-        # rest is sold at the export price. Zero-export: all at full price.
+        # the house's own load (what solar doesn't already cover) saves the
+        # full price; with export enabled, the rest is sold at the export
+        # price. Zero-export: the battery can only deliver up to that load.
         _can_export = config.export_price_factor > 0
         discharge_tranches = []  # per slot: list of [value öre/kWh, room kWh]
         for j, p in enumerate(day_prices):
             total_ore, spot_ore, _ = slot_cost_map[j]
             max_out = config.max_discharge_kw * slot_duration_h
+            h = int(p["hour"].split(":")[0])
+            month = int(p["date"].split("-")[1])
+            net_load_kw = max(0.0, config.total_load_kw(h, month, p["date"]) - _solar_kw(p["date"], p["hour"]))
+            own = min(max_out, net_load_kw * slot_duration_h)
+            tranches = [[total_ore, own]]
             if _can_export:
-                h = int(p["hour"].split(":")[0])
-                month = int(p["date"].split("-")[1])
-                own = min(max_out, config.total_load_kw(h, month, p["date"]) * slot_duration_h)
                 export_ore = max(0, spot_ore * config.export_price_factor - config.export_fee_ore)
-                tranches = [[total_ore, own], [export_ore, max_out - own]]
-            else:
-                tranches = [[total_ore, max_out]]
+                tranches.append([export_ore, max_out - own])
             discharge_tranches.append([tr for tr in tranches if tr[1] > 0.001])
 
         candidates = []  # (profit öre/kWh delivered, charge idx or -1, discharge idx, tranche)
@@ -610,14 +611,18 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
                 available = soc - (config.capacity_kwh * config.min_soc)
                 deliverable = available * config.efficiency
                 energy_out = min(max_energy, deliverable)
+                net_load_kw = max(0.0, load_kw - solar_kw)
+                if config.export_price_factor <= 0:
+                    # Zero-export: the battery can't deliver more than the house uses
+                    energy_out = min(energy_out, net_load_kw * slot_duration_h)
                 if energy_out > 0.001:
                     drained = energy_out / config.efficiency
                     soc -= drained
                     discharge_kw = energy_out / slot_duration_h
                     if config.export_price_factor > 0:
                         # Export enabled: split into self-consumption + export
-                        self_consumed_kw = min(discharge_kw, load_kw)
-                        export_kw = max(0, discharge_kw - load_kw)
+                        self_consumed_kw = min(discharge_kw, net_load_kw)
+                        export_kw = max(0, discharge_kw - net_load_kw)
                         bat_export_kwh = export_kw * slot_duration_h
                         value = self_consumed_kw * slot_duration_h * total_ore / 100
                         if bat_export_kwh > 0.001:
@@ -626,7 +631,7 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
                             grid_export_kwh += bat_export_kwh
                             export_revenue += bat_export_rev
                     else:
-                        # Zero-export: all discharge is self-consumption (avoided purchase)
+                        # Zero-export: all discharge (capped at net load) is avoided purchase
                         value = energy_out * total_ore / 100
                     result.slots.append(SlotResult(
                         date=row["date"], hour=row["hour"],

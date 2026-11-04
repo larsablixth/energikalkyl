@@ -615,11 +615,26 @@ class TestSimulate:
                    "sek_per_kwh": 0.2 if h < 4 else (3.0 if h == 18 else 1.0)}
                   for h in range(24)]
         config = BatteryConfig(capacity_kwh=32.0, max_charge_kw=15.0, max_discharge_kw=15.0,
-                               export_price_factor=0.0)
+                               export_price_factor=1.0)
         result = simulate(prices, config, None)
         peak = [s for s in result.slots if s.hour == "18:00"][0]
         assert peak.action == "discharge"
         assert abs(peak.energy_kwh - 15.0) < 0.01
+
+    def test_zero_export_discharge_capped_at_house_load(self):
+        """Without export, the battery can't deliver more than the house uses."""
+        from batteri import simulate, BatteryConfig
+        prices = [{"date": "2026-01-07", "hour": f"{h:02d}:00",
+                   "sek_per_kwh": 0.2 if h < 4 else (3.0 if h == 18 else 1.0)}
+                  for h in range(24)]
+        config = BatteryConfig(capacity_kwh=32.0, max_charge_kw=15.0, max_discharge_kw=15.0,
+                               base_load_kw=2.0, export_price_factor=0.0)
+        result = simulate(prices, config, None)
+        discharges = [s for s in result.slots if s.action == "discharge"]
+        assert discharges
+        assert all(s.energy_kwh <= 2.0 + 1e-6 for s in discharges)
+        peak = [s for s in result.slots if s.hour == "18:00"][0]
+        assert peak.action == "discharge"
 
     def test_no_loss_making_trades_on_small_spread(self):
         """Tiny spreads below efficiency loss must not trigger cycling."""

@@ -117,7 +117,7 @@ The app follows a 6-step flow:
 - **Phase imbalance derating**: `phase_balance_factor=0.7` reduces usable fuse capacity by 30% for 3-phase. Real loads aren't balanced — one phase often carries ~43% instead of 33%. A 3-phase inverter with per-phase compensation can eliminate this derating by actively balancing phases (discharge onto the overloaded phase).
 - **Smart scheduled loads**: `LoadSchedule(smart=True, daily_kwh=30)` picks cheapest N hours within availability window each day (prices known day-ahead). Avoids effekttariff peak hours (penalty scaled by kw_factor for night discount). Tidstariff peak/off-peak handled via total_cost_ore().
 - **Discharge valuation**: two modes depending on export setting:
-  - Zero-export: ALL discharge valued as avoided purchase at full price (spot + grid + tax). This is correct for Swedish hourly net metering.
+  - Zero-export: discharge is capped at the house's net load (load minus solar) and valued at full price (spot + grid + tax). Sweden has no net metering: power the house can't use can't be credited (owner decision, Nov 2026).
   - Export enabled: discharge split into self-consumption (full price) + export surplus (spot × factor − fee). Scheduler uses blended value for cycle profitability.
 - **Solar curtailment**: in zero-export mode, solar surplus beyond battery + flex load absorption is curtailed (lost), not exported. Accurately reflects real zero-export inverter behavior.
 - **Export arbitrage**: `export_arbitrage_kwh` designates surplus capacity for pure grid trading. More aggressive scheduling (5 cycles, 10 öre min spread). Only viable with effekttariff operators with low energy rates (SEOM 5 öre). Tidstariff operators (Vattenfall 76.5 öre peak) make export unprofitable.
@@ -249,7 +249,7 @@ The app adds 25% Swedish VAT to these (`BATTERY_VAT` in app.py), so default tabl
 - **Test the actual integration path** — writing PDF to file works, Streamlit download_button needs bytes not bytearray
 - **House area is irrelevant when calibrated** — h_loss IS the house, area is only a starting guess
 - **Never use `t` as variable in app.py** — shadows translation function. Includes `for hr, t in hourly:` loop unpacking (renamed to `temp_c`)
-- **Zero-export discharge must NOT be capped at load_kw** — capping discharge at base_load (2 kW) made 96 kWh batteries unprofitable. Original behavior (full discharge = avoided purchase) is correct for Swedish hourly net metering
+- **Zero-export discharge IS capped at net load** (owner decision, Nov 2026). This makes very large batteries less profitable when the load profile is only a flat base load: realistic load data (Tibber/Vattenfall/heating model) matters for big sizes
 - **Export split is separate from zero-export** — zero-export values all discharge as self-consumption. Export mode splits into self-consumption + export at different prices. Mixing the two broke profitability
 - **Phase imbalance matters for fuse sizing** — 70% derating for 3-phase. 3× Victron MultiPlus-II with per-phase compensation is the only 48V option that eliminates this
 - **Smart load scheduling needs effekttariff penalty** — without it, EV charges during SEOM peak hours (07-19), increasing effektavgift. Penalty scales by kw_factor for Ellevio night discount
