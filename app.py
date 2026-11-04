@@ -294,102 +294,106 @@ with col_consumption:
     # File upload section — always visible (works alongside Tibber/E.ON)
     with st.expander(t("upload_expander"), expanded=not st.session_state.get("seasonal_profile")):
         st.caption(t("upload_caption"))
-        cons_files = st.file_uploader(t("consumption_data"), type=["csv", "txt", "xlsx", "xls"],
+        cons_files = st.file_uploader(t("consumption_data"), type=["csv", "txt", "tsv", "xlsx", "xls", "json"],
                                        accept_multiple_files=True, key="cons_upload")
         # Parse each set of uploaded files only ONCE (not on every rerun): key on file ids.
         _cons_sig = tuple((getattr(f, "file_id", None) or f.name, f.size) for f in cons_files) if cons_files else None
         if not cons_files:
             st.session_state.pop("_cons_upload_sig", None)
+            st.session_state.pop("_cons_upload_msgs", None)
         if cons_files and st.session_state.get("_cons_upload_sig") != _cons_sig:
             st.session_state["_cons_upload_sig"] = _cons_sig
+            _cons_msgs = []  # (streamlit method, text) — shown on every rerun below
             try:
-                import tempfile, os
+                from import_consumption import (
+                    parse_any_consumption_file, ConsumptionParseError, rows_to_hourly,
+                    consumption_to_hourly_profile,
+                )
+                from import_vattenfall import vattenfall_hourly_to_seasonal_profile
                 # Clear previous *uploaded* data to avoid mixing old + new uploads.
                 # Tibber data (hourly_profile / seasonal_profile from Tibber) is kept unless
                 # the new upload replaces it below.
                 st.session_state.pop("vattenfall_hourly", None)
                 if st.session_state.pop("_seasonal_from_upload", False):
                     st.session_state.pop("seasonal_profile", None)
-                all_vf = []
-                all_csv = []
+                all_rows = []
+                seen_keys = set()
+                vf_daily = []
                 for f in cons_files:
-                    if f.name.lower().endswith((".xlsx", ".xls")):
-                        from import_vattenfall import parse_vattenfall_excel
-                        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
-                            tmp.write(f.getvalue())
-                            tmp_path = tmp.name
-                        try:
-                            all_vf.extend(parse_vattenfall_excel(tmp_path))
-                        finally:
-                            os.unlink(tmp_path)
-                    else:
-                        from import_consumption import parse_consumption_csv
-                        raw = f.getvalue()
-                        for enc in ["utf-8", "utf-8-sig", "iso-8859-1", "cp1252"]:
+                    raw = f.getvalue()
+                    try:
+                        rows, info = parse_any_consumption_file(f.name, raw)
+                    except Exception as e:
+                        # Vattenfall Excel without hourly columns: fall back to daily totals
+                        if raw[:2] == b"PK":
+                            import tempfile, os
+                            from import_vattenfall import parse_vattenfall_excel
+                            with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+                                tmp.write(raw)
+                                tmp_path = tmp.name
                             try:
-                                all_csv.extend(parse_consumption_csv(raw.decode(enc), f.name))
-                                break
-                            except (UnicodeDecodeError, ValueError):
-                                continue
-
-                if all_vf:
-                    from import_vattenfall import (
-                        vattenfall_to_seasonal_profile, parse_vattenfall_hourly,
-                        vattenfall_hourly_to_seasonal_profile,
-                    )
-                    # Try hourly extraction first (much better)
-                    all_hourly = []
-                    for f2 in cons_files:
-                        if f2.name.lower().endswith((".xlsx", ".xls")):
-                            with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp2:
-                                tmp2.write(f2.getvalue())
-                                tmp2_path = tmp2.name
-                            try:
-                                all_hourly.extend(parse_vattenfall_hourly(tmp2_path))
+                                _daily = parse_vattenfall_excel(tmp_path)
                             except Exception:
-                                pass
+                                _daily = []
                             finally:
-                                os.unlink(tmp2_path)
+                                os.unlink(tmp_path)
+                            if _daily:
+                                vf_daily.extend(_daily)
+                                continue
+                        if isinstance(e, ConsumptionParseError):
+                            _reason = t(f"cons_err_{e.reason}")
+                            _cols = ", ".join(e.columns[:30]) or "–"
+                        else:
+                            _reason, _cols = str(e), "–"
+                        _cons_msgs.append(("error", t("cons_parse_failed").format(
+                            name=f.name, reason=_reason, columns=_cols)))
+                        continue
+                    # Overlapping files: keep the first file's value for a timestamp
+                    file_keys = {(r["date"], r["hour"]) for r in rows}
+                    all_rows.extend(r for r in rows if (r["date"], r["hour"]) not in seen_keys)
+                    seen_keys |= file_keys
+                    _res = info.get("resolution_min")
+                    _fmt = t(f"cons_fmt_{info['format']}") + f" ({info['container']}"
+                    _fmt += f", {_res} min)" if _res else ")"
+                    if info.get("detail") and info["format"].startswith("ha_"):
+                        _fmt += f" — {info['detail']}"
+                    _cons_msgs.append(("success", t("cons_file_loaded").format(
+                        name=f.name, fmt=_fmt, start=rows[0]["date"], end=rows[-1]["date"],
+                        days=len({r["date"] for r in rows}), count=f"{len(rows):,}")))
 
-                    if all_hourly:
-                        # Use real hourly data — best quality
-                        seasonal = vattenfall_hourly_to_seasonal_profile(all_hourly)
-                        st.session_state["seasonal_profile"] = seasonal
-                        st.session_state["_seasonal_from_upload"] = True
-                        st.session_state["vattenfall_hourly"] = all_hourly
-                        days = len(set(h["date"] for h in all_hourly))
-                        total = sum(h["kwh"] for h in all_hourly)
-                        avg = total / days if days > 0 else 0
-                        st.success(t("hourly_data_loaded").format(
-                            count=f"{len(all_hourly):,}", days=days,
-                            avg_day=avg, avg_year=f"{avg*365:,.0f}"))
-                    else:
-                        # Fallback to daily totals
-                        seen = set()
-                        unique = sorted([r for r in all_vf if r["date"] not in seen and not seen.add(r["date"])],
-                                        key=lambda x: x["date"])
-                        hourly_shape = st.session_state.get("hourly_profile")
-                        seasonal = vattenfall_to_seasonal_profile(unique, hourly_shape)
-                        st.session_state["seasonal_profile"] = seasonal
-                        st.session_state["_seasonal_from_upload"] = True
-                        total = sum(r["consumption_kwh"] for r in unique)
-                        avg = total / len(unique)
-                        st.success(t("daily_data_loaded").format(
-                            days=len(unique), avg_day=avg, avg_year=f"{avg*365:,.0f}"))
-                elif all_csv:
-                    from import_consumption import consumption_to_hourly_profile, consumption_to_monthly_daily
-                    profile = consumption_to_hourly_profile(all_csv)
+                if all_rows:
+                    hourly = rows_to_hourly(all_rows)
+                    profile = consumption_to_hourly_profile(all_rows)
                     st.session_state["hourly_profile"] = profile
-                    monthly = consumption_to_monthly_daily(all_csv)
-                    if sum(1 for v in monthly.values() if v > 0) >= 6:
-                        base = sum(profile.values())
-                        seasonal = {m: {h: profile[h] * (monthly[m]/base if base > 0 and monthly[m] > 0 else 1)
-                                        for h in range(24)} for m in range(1, 13)}
+                    months_with_data = {int(h["date"][5:7]) for h in hourly}
+                    if len(months_with_data) >= 6:
+                        # Real hourly series: seasonal profile + price date range sync.
+                        seasonal = vattenfall_hourly_to_seasonal_profile(hourly)
+                        for m in range(1, 13):
+                            if m not in months_with_data:
+                                seasonal[m] = {h: round(profile[h], 3) for h in range(24)}
                         st.session_state["seasonal_profile"] = seasonal
                         st.session_state["_seasonal_from_upload"] = True
-                    st.success(t("csv_data_loaded").format(count=len(all_csv)))
+                        st.session_state["vattenfall_hourly"] = hourly
+                    # (summary line for the loaded series is shown by the status block below)
+                elif vf_daily:
+                    from import_vattenfall import vattenfall_to_seasonal_profile
+                    seen = set()
+                    unique = sorted([r for r in vf_daily if r["date"] not in seen and not seen.add(r["date"])],
+                                    key=lambda x: x["date"])
+                    hourly_shape = st.session_state.get("hourly_profile")
+                    seasonal = vattenfall_to_seasonal_profile(unique, hourly_shape)
+                    st.session_state["seasonal_profile"] = seasonal
+                    st.session_state["_seasonal_from_upload"] = True
+                    total = sum(r["consumption_kwh"] for r in unique)
+                    avg = total / len(unique)
+                    _cons_msgs.append(("success", t("daily_data_loaded").format(
+                        days=len(unique), avg_day=avg, avg_year=f"{avg*365:,.0f}")))
             except Exception as e:
-                st.error(t("import_error").format(error=e))
+                _cons_msgs.append(("error", t("import_error").format(error=e)))
+            st.session_state["_cons_upload_msgs"] = _cons_msgs
+        for _kind, _msg in st.session_state.get("_cons_upload_msgs", []):
+            getattr(st, _kind)(_msg)
 
     # Show loaded profile status
     if "seasonal_profile" in st.session_state:

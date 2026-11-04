@@ -112,20 +112,75 @@ STRINGS = {
         "en": "Fetch from E.ON",
     },
     "upload_expander": {
-        "sv": "Ladda upp förbrukningsdata (Excel/CSV)",
-        "en": "Upload consumption data (Excel/CSV)",
+        "sv": "Ladda upp förbrukningsdata (Excel/CSV/JSON)",
+        "en": "Upload consumption data (Excel/CSV/JSON)",
     },
     "upload_caption": {
-        "sv": "**Vattenfall:** Logga in på [mina.vattenfall.se](https://mina.vattenfall.se) → "
-              "Elavtal → Elförbrukning → Exportera till Excel. Ladda upp Excel-filen direkt — "
-              "det komplicerade formatet hanteras automatiskt.  \n"
-              "**Övriga nätägare:** CSV med kolumner för datum, tid och förbrukning (kWh). "
-              "Formatet detekteras automatiskt (semikolon/komma, svensk/engelsk header).",
-        "en": "**Vattenfall:** Log in at [mina.vattenfall.se](https://mina.vattenfall.se) → "
-              "Electricity contract → Consumption → Export to Excel. Upload the Excel file directly — "
-              "the complex format is handled automatically.  \n"
-              "**Other grid operators:** CSV with columns for date, time, and consumption (kWh). "
-              "Format is auto-detected (semicolon/comma, Swedish/English headers).",
+        "sv": "Ladda upp filen precis som du fick den — formatet känns igen automatiskt.  \n"
+              "**Vattenfall:** [mina.vattenfall.se](https://mina.vattenfall.se) → Elavtal → "
+              "Elförbrukning → Exportera till Excel.  \n"
+              "**Ellevio, E.ON, Göteborg Energi, Mälarenergi m.fl.:** Mina sidor → förbrukning → "
+              "välj ett helt år och upplösning *timme* (eller kvart) → exportera/ladda ner (CSV eller Excel).  \n"
+              "**Home Assistant:** Historik → välj din energisensor (kWh, mätarställning) → "
+              "*Ladda ner data*.  \n"
+              "Klarar tim- och kvartsvärden, en rad per dag med 24 kolumner, mätarställningar, "
+              "Wh/kWh, UTC-tider och sommar-/vintertid.",
+        "en": "Upload the file exactly as you got it — the format is detected automatically.  \n"
+              "**Vattenfall:** [mina.vattenfall.se](https://mina.vattenfall.se) → Electricity contract → "
+              "Consumption → Export to Excel.  \n"
+              "**Ellevio, E.ON, Göteborg Energi, Mälarenergi etc.:** My pages → consumption → "
+              "pick a full year and *hourly* (or 15-min) resolution → export/download (CSV or Excel).  \n"
+              "**Home Assistant:** History → pick your energy sensor (kWh, meter total) → "
+              "*Download data*.  \n"
+              "Handles hourly and 15-min values, one row per day with 24 columns, meter readings, "
+              "Wh/kWh, UTC timestamps and daylight saving time.",
+    },
+    "cons_file_loaded": {
+        "sv": "**{name}**: {fmt} — {start} → {end}, {days} dagar ({count} värden)",
+        "en": "**{name}**: {fmt} — {start} → {end}, {days} days ({count} values)",
+    },
+    "cons_parse_failed": {
+        "sv": "**{name}** kunde inte läsas: {reason}  \nKolumner som hittades: {columns}",
+        "en": "**{name}** could not be read: {reason}  \nColumns found: {columns}",
+    },
+    "cons_fmt_vattenfall_excel": {"sv": "Vattenfall Eldistribution, timvärden", "en": "Vattenfall Eldistribution, hourly values"},
+    "cons_fmt_long": {"sv": "Tidsserie (en rad per intervall)", "en": "Time series (one row per interval)"},
+    "cons_fmt_wide": {"sv": "En rad per dag med timkolumner", "en": "One row per day with hour columns"},
+    "cons_fmt_meter": {"sv": "Mätarställningar (omräknade till förbrukning)", "en": "Meter readings (converted to consumption)"},
+    "cons_fmt_ha_history": {"sv": "Home Assistant-historik, energisensor", "en": "Home Assistant history, energy sensor"},
+    "cons_fmt_ha_history_power": {"sv": "Home Assistant-historik, effektsensor (integrerad)", "en": "Home Assistant history, power sensor (integrated)"},
+    "cons_fmt_ha_statistics": {"sv": "Home Assistant långtidsstatistik", "en": "Home Assistant long-term statistics"},
+    "cons_err_empty": {"sv": "filen är tom.", "en": "the file is empty."},
+    "cons_err_no_table": {"sv": "hittade ingen tabell med förbrukning i filen.", "en": "no consumption table found in the file."},
+    "cons_err_no_time": {
+        "sv": "hittade ingen kolumn med datum/tid.",
+        "en": "no date/time column found.",
+    },
+    "cons_err_no_value": {
+        "sv": "hittade ingen kolumn med förbrukning (kWh). Kostnads- och produktionskolumner ignoreras.",
+        "en": "no consumption (kWh) column found. Cost and production columns are ignored.",
+    },
+    "cons_err_no_values": {"sv": "inga rader med både tid och värde.", "en": "no rows with both a time and a value."},
+    "cons_err_daily_only": {
+        "sv": "filen innehåller bara dygnsvärden. Exportera igen med upplösning *timme* eller *kvart*.",
+        "en": "the file only has daily totals. Export again with *hourly* or *15-minute* resolution.",
+    },
+    "cons_err_irregular": {
+        "sv": "tidsstegen är oregelbundna och värdena ser inte ut som mätarställningar.",
+        "en": "the time steps are irregular and the values don't look like meter readings.",
+    },
+    "cons_err_all_zero": {"sv": "alla förbrukningsvärden är 0.", "en": "all consumption values are 0."},
+    "cons_err_xls_old": {
+        "sv": "gammalt Excel-format (.xls). Öppna filen och spara som .xlsx eller CSV.",
+        "en": "old Excel format (.xls). Open the file and save it as .xlsx or CSV.",
+    },
+    "cons_err_power_unknown": {
+        "sv": "statistiken är medelvärden men enheten (W/kW) saknas.",
+        "en": "the statistics are averages but the unit (W/kW) is missing.",
+    },
+    "cons_err_vattenfall_no_hourly": {
+        "sv": "Vattenfall-filen saknar timvärden.",
+        "en": "the Vattenfall file has no hourly values.",
     },
     "consumption_data": {
         "sv": "Förbrukningsdata",

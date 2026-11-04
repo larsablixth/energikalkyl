@@ -83,6 +83,7 @@ The app follows a 6-step flow:
 - `entsoe_source.py` — ENTSO-E API + EUR/SEK via ECB (frankfurter.app)
 - `import_vattenfall.py` — Parse Vattenfall Eldistribution Excel. Daily (col 7 = Summa/dag) AND hourly (cols L-W = 24 values/day/month). `parse_vattenfall_hourly()` extracts 8,760 records/year.
 - `import_consumption.py` — Generic CSV consumption import
+  - `parse_any_consumption_file(name, bytes)`: one entry point for uploads (CSV/TXT/TSV/XLSX/JSON; long, wide 24/96-column, meter readings, Wh/kWh, UTC→local, Home Assistant history/statistics). Grid-company layouts other than Vattenfall are generic/assumed until real sample files are collected
 - `convert_vattenfall.py` — CLI: Vattenfall Excel → standard JSON
 - `convert_eon.py` — CLI: E.ON API → standard JSON
 - `convert_csv.py` — CLI: generic Swedish CSV → standard JSON
