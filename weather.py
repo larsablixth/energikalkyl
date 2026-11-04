@@ -106,13 +106,18 @@ def fetch_station_data(station_id: str, force: bool = False) -> Path:
 
     CACHE_DIR.mkdir(exist_ok=True)
 
+    # Start from existing cache so a failed archive download doesn't wipe history
+    records = _read_cache(cache_path)
+    fetched = False
+
     # Fetch corrected archive (CSV)
     archive_url = f"{SMHI_BASE}/station/{station_id}/period/corrected-archive/data.csv"
     try:
         archive_raw = _fetch_url(archive_url)
-        records = _parse_archive_csv(archive_raw)
+        records.update(_parse_archive_csv(archive_raw))  # archive overwrites old cache
+        fetched = True
     except Exception:
-        records = {}
+        pass
 
     # Fetch latest months (JSON)
     latest_url = f"{SMHI_BASE}/station/{station_id}/period/latest-months/data.json"
@@ -120,11 +125,12 @@ def fetch_station_data(station_id: str, force: bool = False) -> Path:
         latest_raw = _fetch_url(latest_url)
         latest = _parse_latest_json(latest_raw)
         records.update(latest)  # latest overwrites archive on conflict
+        fetched = True
     except Exception:
         pass
 
-    if not records:
-        return cache_path  # empty, but don't crash
+    if not records or not fetched:
+        return cache_path  # nothing new — keep existing cache untouched
 
     # Write CSV
     sorted_keys = sorted(records.keys())
@@ -135,6 +141,20 @@ def fetch_station_data(station_id: str, force: bool = False) -> Path:
             w.writerow([date_str, hour, round(records[(date_str, hour)], 1)])
 
     return cache_path
+
+
+def _read_cache(cache_path: Path) -> dict:
+    """Read an existing station cache into {(date, hour): temp_c}."""
+    records = {}
+    if not cache_path.exists():
+        return records
+    try:
+        with open(cache_path) as f:
+            for row in csv.DictReader(f):
+                records[(row["date"], int(row["hour"]))] = float(row["temp_c"])
+    except (OSError, KeyError, ValueError):
+        return {}
+    return records
 
 
 def _parse_archive_csv(raw_bytes: bytes) -> dict:

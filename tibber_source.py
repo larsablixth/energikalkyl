@@ -72,6 +72,55 @@ def get_homes(token: str = None) -> list[dict]:
     return data["data"]["viewer"]["homes"]
 
 
+def _fetch_paginated(home_id: str, field: str, resolution: str, count: int,
+                     node_fields: str, token: str, batch_size: int = 2000) -> list[dict]:
+    """
+    Fetch the latest `count` nodes of consumption/production, paging backwards
+    in time with Tibber's cursor pagination (last: N, before: startCursor).
+
+    Returns nodes in chronological order (oldest first), nulls included.
+    """
+    pages = []
+    remaining = count
+    before = None
+    while remaining > 0:
+        fetch_count = min(remaining, batch_size)
+        before_arg = ', before: "%s"' % before if before else ""
+        query = """
+        {
+          viewer {
+            home(id: "%s") {
+              %s(resolution: %s, last: %d%s) {
+                pageInfo {
+                  startCursor
+                }
+                nodes {
+                  %s
+                }
+              }
+            }
+          }
+        }
+        """ % (home_id, field, resolution, fetch_count, before_arg, node_fields)
+
+        data = _query(query, token)
+        conn = data["data"]["viewer"]["home"][field] or {}
+        nodes = conn.get("nodes") or []
+        pages.append(nodes)
+        remaining -= len(nodes)
+
+        page_info = conn.get("pageInfo") or {}
+        before = page_info.get("startCursor")
+        if len(nodes) < fetch_count or not before:
+            break  # No more (older) data available
+
+    # Pages were fetched newest-first; each page is oldest-first
+    all_nodes = []
+    for nodes in reversed(pages):
+        all_nodes.extend(nodes)
+    return all_nodes
+
+
 def fetch_consumption(hours: int = 24 * 30, home_id: str = None, token: str = None) -> list[dict]:
     """
     Fetch hourly consumption data from Tibber.
@@ -93,41 +142,11 @@ def fetch_consumption(hours: int = 24 * 30, home_id: str = None, token: str = No
         addr = homes[0].get("address", {})
         print(f"  Tibber hem: {addr.get('address1', '?')}, {addr.get('city', '?')}")
 
-    # Tibber limits to ~2500 nodes per query, so we may need to paginate
-    all_nodes = []
-    remaining = hours
-    batch_size = 2000
-
-    while remaining > 0:
-        fetch_count = min(remaining, batch_size)
-        query = """
-        {
-          viewer {
-            home(id: "%s") {
-              consumption(resolution: HOURLY, last: %d) {
-                nodes {
-                  from
-                  to
-                  consumption
-                  cost
-                  unitPrice
-                  currency
-                }
-              }
-            }
-          }
-        }
-        """ % (home_id, fetch_count)
-
-        print(f"  Hämtar {fetch_count} timmar från Tibber...")
-        data = _query(query, token)
-        nodes = data["data"]["viewer"]["home"]["consumption"]["nodes"]
-        nodes = [n for n in nodes if n.get("consumption") is not None]
-        all_nodes.extend(nodes)
-
-        if len(nodes) < fetch_count:
-            break  # No more data available
-        remaining -= fetch_count
+    # Tibber limits to ~2500 nodes per query — page backwards with cursors
+    print(f"  Hämtar {hours} timmar från Tibber...")
+    all_nodes = _fetch_paginated(home_id, "consumption", "HOURLY", hours,
+                                 "from to consumption cost unitPrice unitPriceVAT currency", token)
+    all_nodes = [n for n in all_nodes if n.get("consumption") is not None]
 
     print(f"  Hämtade {len(all_nodes)} timmar med förbrukningsdata")
     return all_nodes
@@ -150,39 +169,9 @@ def fetch_production(hours: int = 24 * 30, home_id: str = None, token: str = Non
             raise RuntimeError("Inga hem hittades på Tibber-kontot")
         home_id = homes[0]["id"]
 
-    all_nodes = []
-    remaining = hours
-    batch_size = 2000
-
-    while remaining > 0:
-        fetch_count = min(remaining, batch_size)
-        query = """
-        {
-          viewer {
-            home(id: "%s") {
-              production(resolution: HOURLY, last: %d) {
-                nodes {
-                  from
-                  to
-                  production
-                  profit
-                  unitPrice
-                  currency
-                }
-              }
-            }
-          }
-        }
-        """ % (home_id, fetch_count)
-
-        data = _query(query, token)
-        nodes = data["data"]["viewer"]["home"]["production"]["nodes"]
-        nodes = [n for n in nodes if n.get("production") is not None]
-        all_nodes.extend(nodes)
-
-        if len(nodes) < fetch_count:
-            break
-        remaining -= fetch_count
+    all_nodes = _fetch_paginated(home_id, "production", "HOURLY", hours,
+                                 "from to production profit unitPrice currency", token)
+    all_nodes = [n for n in all_nodes if n.get("production") is not None]
 
     if all_nodes:
         print(f"  Hämtade {len(all_nodes)} timmar med solproduktionsdata")
@@ -202,39 +191,9 @@ def fetch_daily_production(days: int = 365 * 3, home_id: str = None, token: str 
             raise RuntimeError("Inga hem hittades på Tibber-kontot")
         home_id = homes[0]["id"]
 
-    all_nodes = []
-    remaining = days
-    batch_size = 2000
-
-    while remaining > 0:
-        fetch_count = min(remaining, batch_size)
-        query = """
-        {
-          viewer {
-            home(id: "%s") {
-              production(resolution: DAILY, last: %d) {
-                nodes {
-                  from
-                  to
-                  production
-                  profit
-                  unitPrice
-                  currency
-                }
-              }
-            }
-          }
-        }
-        """ % (home_id, fetch_count)
-
-        data = _query(query, token)
-        nodes = data["data"]["viewer"]["home"]["production"]["nodes"]
-        nodes = [n for n in nodes if n.get("production") is not None]
-        all_nodes.extend(nodes)
-
-        if len(nodes) < fetch_count:
-            break
-        remaining -= fetch_count
+    all_nodes = _fetch_paginated(home_id, "production", "DAILY", days,
+                                 "from to production profit unitPrice currency", token)
+    all_nodes = [n for n in all_nodes if n.get("production") is not None]
 
     if all_nodes:
         print(f"  Hämtade {len(all_nodes)} dagar med solproduktionsdata")
@@ -279,10 +238,13 @@ def production_to_monthly_kwh(nodes: list[dict]) -> dict[int, float]:
     return {m: (sum(vals) / len(vals) if vals else 0.0) for m, vals in monthly.items()}
 
 
-def fetch_prices_tibber(home_id: str = None, token: str = None) -> list[dict]:
+def fetch_prices_tibber(home_id: str = None, token: str = None, zone: str = "SE3") -> list[dict]:
     """
     Fetch today's and tomorrow's prices from Tibber.
     Returns list of dicts in the app's price format.
+
+    NOTE: sek_per_kwh here is Tibber's TOTAL price (incl. energy tax and
+    VAT) — fine for display, not as spot input to simulate().
     """
     token = token or _get_token()
 
@@ -339,7 +301,7 @@ def fetch_prices_tibber(home_id: str = None, token: str = None) -> list[dict]:
             rows.append({
                 "date": ts.strftime("%Y-%m-%d"),
                 "hour": ts.strftime("%H:%M"),
-                "zone": "SE3",  # Tibber doesn't expose zone, but price includes it
+                "zone": zone,  # Tibber doesn't expose zone; passed in by caller
                 "sek_per_kwh": round(p["total"], 4),
                 "eur_per_kwh": 0,  # Tibber gives SEK directly
                 "ore_per_kwh": round(p["total"] * 100, 2),
@@ -366,40 +328,10 @@ def fetch_daily_consumption(days: int = 365 * 3, home_id: str = None, token: str
         addr = homes[0].get("address", {})
         print(f"  Tibber hem: {addr.get('address1', '?')}, {addr.get('city', '?')}")
 
-    all_nodes = []
-    remaining = days
-    batch_size = 2000
-
-    while remaining > 0:
-        fetch_count = min(remaining, batch_size)
-        query = """
-        {
-          viewer {
-            home(id: "%s") {
-              consumption(resolution: DAILY, last: %d) {
-                nodes {
-                  from
-                  to
-                  consumption
-                  cost
-                  unitPrice
-                  currency
-                }
-              }
-            }
-          }
-        }
-        """ % (home_id, fetch_count)
-
-        print(f"  Hämtar {fetch_count} dagar från Tibber...")
-        data = _query(query, token)
-        nodes = data["data"]["viewer"]["home"]["consumption"]["nodes"]
-        nodes = [n for n in nodes if n.get("consumption") is not None]
-        all_nodes.extend(nodes)
-
-        if len(nodes) < fetch_count:
-            break
-        remaining -= fetch_count
+    print(f"  Hämtar {days} dagar från Tibber...")
+    all_nodes = _fetch_paginated(home_id, "consumption", "DAILY", days,
+                                 "from to consumption cost unitPrice currency", token)
+    all_nodes = [n for n in all_nodes if n.get("consumption") is not None]
 
     print(f"  Hämtade {len(all_nodes)} dagar med förbrukningsdata")
     return all_nodes
@@ -607,24 +539,44 @@ def print_load_profile(profile: dict[int, float]):
     print(f"  {'Medel':>6} {total/24:>8.2f} kW")
 
 
-def consumption_to_rows(nodes: list[dict]) -> list[dict]:
+VAT = 0.25
+
+
+def consumption_to_rows(nodes: list[dict], zone: str = "SE3") -> list[dict]:
     """
     Convert Tibber consumption nodes to app-compatible price rows.
-    Uses unitPrice from Tibber (which is the total price you pay per kWh).
+
+    Tibber's unitPrice is the energy price you pay Tibber per kWh (spot +
+    Tibber markup + VAT). In Sweden energy tax is billed by the grid
+    company, so it is not part of unitPrice. The simulation treats
+    sek_per_kwh as the spot price excl. VAT and adds VAT itself, so:
+        spot ≈ unitPrice - unitPriceVAT
+    (VAT from unitPriceVAT if provided, else unitPrice / 1.25 × 0.25).
+    Tibber's small markup remains included. The raw unitPrice is kept in
+    "tibber_unit_price_sek"; rows are flagged with "spot_derived": True.
+
+    zone: elområde (Tibber's consumption API doesn't expose it).
     """
     rows = []
     for node in nodes:
         if node.get("consumption") is None or node.get("unitPrice") is None:
             continue
         ts = datetime.fromisoformat(node["from"])
+        unit_price = node["unitPrice"]
+        vat_part = node.get("unitPriceVAT")
+        if vat_part is None:
+            vat_part = unit_price * VAT / (1 + VAT)
+        spot_sek = unit_price - vat_part
         rows.append({
             "date": ts.strftime("%Y-%m-%d"),
             "hour": ts.strftime("%H:%M"),
-            "zone": "SE3",
-            "sek_per_kwh": round(node["unitPrice"], 4),
+            "zone": zone,
+            "sek_per_kwh": round(spot_sek, 4),
             "eur_per_kwh": 0,
-            "ore_per_kwh": round(node["unitPrice"] * 100, 2),
+            "ore_per_kwh": round(spot_sek * 100, 2),
             "consumption_kwh": round(node["consumption"], 4),
             "cost_sek": round(node.get("cost", 0) or 0, 4),
+            "tibber_unit_price_sek": round(unit_price, 4),
+            "spot_derived": True,
         })
     return rows

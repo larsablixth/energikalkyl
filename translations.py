@@ -561,6 +561,10 @@ STRINGS = {
         "sv": "Specificerade batterier (NKON)",
         "en": "Specific batteries (NKON)",
     },
+    "tibber_token_required": {
+        "sv": "Klistra in din Tibber-token först (hämtas på developer.tibber.com).",
+        "en": "Paste your Tibber token first (get it at developer.tibber.com).",
+    },
     "sek_per_kwh_mode": {
         "sv": "SEK per kWh — hitta optimal storlek",
         "en": "SEK per kWh — find optimal size",
@@ -1925,8 +1929,8 @@ STRINGS = {
         "en": "Net {value} SEK over {lifetime} years",
     },
     "forecast_15yr_header": {
-        "sv": "15-\u00e5rsprognos \u2014 {label}",
-        "en": "15-year forecast \u2014 {label}",
+        "sv": "Prognos \u2014 {label}",
+        "en": "Forecast \u2014 {label}",
     },
     "forecast_15yr_caption": {
         "sv": "Ackumulerat kassafl\u00f6de under batteriets livsl\u00e4ngd i tre scenarier. Volatiliteten \u00f6kar linj\u00e4rt till m\u00e5lniv\u00e5 under de f\u00f6rsta 10 \u00e5ren.",
@@ -1953,12 +1957,12 @@ STRINGS = {
         "en": "Savings/mo",
     },
     "scenario_col_net_15yr": {
-        "sv": "Netto 15 \u00e5r",
-        "en": "Net 15 years",
+        "sv": "Netto {lifetime} \u00e5r",
+        "en": "Net {lifetime} years",
     },
     "scenario_vol_desc": {
-        "sv": "{vf:.0%}x om 10 \u00e5r",
-        "en": "{vf:.0%}x in 10 years",
+        "sv": "{vf:.1f}x om 10 \u00e5r",
+        "en": "{vf:.1f}x in 10 years",
     },
 
     # ---- Results: recommendation, export comparison, self-consumption, luft-luft, PDF ----
@@ -1974,12 +1978,12 @@ STRINGS = {
         "sv": "**Rekommendation: {label}{fuse_label}** — "
               "lägre elkostnad {benefit:,.0f} kr/år ({benefit_mo:,.0f} kr/mån), "
               "investering {invest:,.0f} kr, "
-              "återbetald på {payback:.1f} år, "
+              "{payback_text}, "
               "netto {profit:,.0f} kr under {lifetime:.0f} år",
         "en": "**Recommendation: {label}{fuse_label}** — "
               "lower electricity cost {benefit:,.0f} SEK/yr ({benefit_mo:,.0f} SEK/mo), "
               "investment {invest:,.0f} SEK, "
-              "payback in {payback:.1f} years, "
+              "{payback_text}, "
               "net {profit:,.0f} SEK over {lifetime:.0f} years",
     },
     "fuse_change_info": {
@@ -2254,17 +2258,112 @@ STRINGS = {
         "sv": "Inkluderar batteriåldring: LiFePO4 tappar ~1% kapacitet per år (85% SoH efter 15 år).",
         "en": "Includes battery aging: LiFePO4 loses ~1% capacity per year (85% SoH after 15 years).",
     },
+
+    # ---- Added: validation, stale results, grön teknik, battery table ----
+    "price_csv_error": {
+        "sv": "Kunde inte läsa pris-CSV: {error}",
+        "en": "Could not read price CSV: {error}",
+    },
+    "price_csv_missing_cols": {
+        "sv": "filen är tom eller saknar kolumner ({cols}). Krävs: date, hour, sek_per_kwh (eller ore_per_kwh).",
+        "en": "the file is empty or missing columns ({cols}). Required: date, hour, sek_per_kwh (or ore_per_kwh).",
+    },
+    "price_range_invalid": {
+        "sv": "Startdatum måste vara före eller lika med slutdatum.",
+        "en": "Start date must be on or before the end date.",
+    },
+    "price_range_future": {
+        "sv": "Datumintervallet ligger helt i framtiden — det finns inga priser för det ännu.",
+        "en": "The date range is entirely in the future — no prices exist for it yet.",
+    },
+    "no_battery_rows": {
+        "sv": "Ange minst ett batteri i pristabellen.",
+        "en": "Enter at least one battery in the price table.",
+    },
+    "results_outdated": {
+        "sv": "⚠️ Indata har ändrats sedan simuleringen kördes. Resultaten och PDF-rapporten nedan gäller de tidigare inställningarna — kör simuleringen igen för att uppdatera.",
+        "en": "⚠️ Inputs have changed since the simulation was run. The results and PDF report below reflect the previous settings — run the simulation again to update.",
+    },
+    "bt_col_name": {"sv": "Namn", "en": "Name"},
+    "bt_col_capacity": {"sv": "Kapacitet (kWh)", "en": "Capacity (kWh)"},
+    "bt_col_max_kw": {"sv": "Max effekt (kW)", "en": "Max power (kW)"},
+    "bt_col_price": {"sv": "Pris (SEK)", "en": "Price (SEK)"},
+    "price_per_kwh_caption": {"sv": "Pris per kWh:", "en": "Price per kWh:"},
+    "nkon_vat_note": {
+        "sv": "Obs: standardpriserna är NKON:s listpriser i EUR **exkl. moms** (25 %) och exkl. frakt. Ange gärna ditt faktiska pris inkl. moms.",
+        "en": "Note: default prices are NKON list prices in EUR **excl. VAT** (25%) and shipping. Enter your actual price incl. VAT if you can.",
+    },
+    "green_deduction_label": {
+        "sv": "Skattereduktion för grön teknik",
+        "en": "Green technology tax deduction (grön teknik)",
+    },
+    "green_deduction_help": {
+        "sv": "2026: 50 % av arbete + material för batterilagring av egenproducerad el, 15 % för solceller (20 % för installationer 2025). "
+              "Max 50 000 kr per person och år, högst 2 personer (100 000 kr). Kräver installation av företag med F-skatt "
+              "(egen installation/DIY ger inget avdrag). Batteriavdraget kräver att batteriet lagrar egen solel. Avdraget dras av från investeringen i kalkylen.",
+        "en": "2026: 50% of labour + material for battery storage of self-produced electricity, 15% for solar panels (20% for 2025 installs). "
+              "Max 50,000 SEK per person per year, at most 2 persons (100,000 SEK). Requires installation by a company with F-skatt "
+              "(DIY installs do not qualify). The battery part requires that it stores your own solar power. The deduction is subtracted from the investment.",
+    },
+    "green_owners_label": {"sv": "Antal ägare", "en": "Number of owners"},
+    "green_owners_help": {
+        "sv": "Taket är 50 000 kr per person och år. Två ägare kan dela på avdraget (max 100 000 kr).",
+        "en": "The cap is 50,000 SEK per person per year. Two owners can share the deduction (max 100,000 SEK).",
+    },
+    "green_deduction_info": {
+        "sv": "Grönt avdrag: **{total} kr** (batteri {bat} kr + solceller {sol} kr). Investering efter avdrag: {net} kr (före avdrag {gross} kr).",
+        "en": "Green deduction: **{total} SEK** (battery {bat} SEK + solar {sol} SEK). Investment after deduction: {net} SEK (before deduction {gross} SEK).",
+    },
+    "green_no_battery_without_solar": {
+        "sv": "Batteriet ger inget grönt avdrag utan solceller (avdraget gäller lagring av egenproducerad el).",
+        "en": "The battery gets no green deduction without solar panels (the deduction covers storage of self-produced electricity).",
+    },
+    "payback_text": {"sv": "återbetald på {years:.1f} år", "en": "payback in {years:.1f} years"},
+    "payback_never": {"sv": "betalar sig inte", "en": "does not pay back"},
+    "rec_not_profitable": {
+        "sv": "Ingen av de testade batteristorlekarna blir lönsam under batteriets livslängd med dessa förutsättningar. Rekommendationen ovan är det minst dåliga alternativet.",
+        "en": "None of the tested battery sizes is profitable over the battery lifetime with these inputs. The recommendation above is the least bad option.",
+    },
+    "horizon_note": {
+        "sv": "Kalkylhorisont = batteriets livslängd. Solcellsinvesteringen fördelas över solcellernas livslängd ({solar_life} år); endast andelen för horisonten belastar nettot. Investeringar visas efter eventuellt grönt avdrag.",
+        "en": "Calculation horizon = battery lifetime. The solar investment is spread over the panels' lifetime ({solar_life} years); only the share for the horizon is charged to the net result. Investments are shown after any green deduction.",
+    },
+    "export_compare_button": {"sv": "Kör jämförelsen", "en": "Run comparison"},
+    "detail_green_deduction": {"sv": "Grönt avdrag", "en": "Green deduction"},
 }
 
 
+def _session_state():
+    """Return Streamlit's per-session state when running inside a Streamlit script, else None.
+
+    The language must be per visitor session: a module global would be shared by all
+    concurrent sessions in the same server process.
+    """
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+        if get_script_run_ctx(suppress_warning=True) is None:
+            return None
+        import streamlit as st
+        return st.session_state
+    except Exception:
+        return None
+
+
 def set_language(lang: str):
-    """Set the current language ('sv' or 'en')."""
+    """Set the current language ('sv' or 'en') for this session (or process, outside Streamlit)."""
     global _lang
-    _lang = lang
+    ss = _session_state()
+    if ss is not None:
+        ss["app_language"] = lang
+    else:
+        _lang = lang
 
 
 def get_language() -> str:
     """Get the current language."""
+    ss = _session_state()
+    if ss is not None:
+        return ss.get("app_language", "sv")
     return _lang
 
 
@@ -2273,4 +2372,5 @@ def t(key: str) -> str:
     entry = STRINGS.get(key)
     if entry is None:
         return f"[{key}]"
-    return entry.get(_lang, entry.get("sv", f"[{key}]"))
+    lang = get_language()
+    return entry.get(lang, entry.get("sv", f"[{key}]"))

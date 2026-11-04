@@ -12,9 +12,13 @@ Vattenfall format (Serie sheet):
     Each column has 24 consecutive values per day (hour 00-23)
 """
 
+import calendar
 import openpyxl
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+TZ = ZoneInfo("Europe/Stockholm")
 
 
 MONTH_MAP = {
@@ -122,49 +126,94 @@ def parse_vattenfall_hourly(path: str) -> list[dict]:
         wb.close()
         return []
 
-    # Columns 12-23 (L-W) = Jan-Dec hourly data
-    # Each column: row 3 = first value (header/hour 0 of day 1)
-    # Then 24 values per day
-    import calendar
+    # Columns 12-23 (L-W) = Jan-Dec hourly data, read positionally from row 3
+    columns = {month_offset + 1: [ws.cell(r, col).value for r in range(3, ws.max_row + 1)]
+               for month_offset, col in enumerate(range(12, 24))}
+    skip_first = _detect_leading_value(year, columns)
     hourly = []
-    for month_offset, col in enumerate(range(12, 24)):
-        month = month_offset + 1
-        days_in_month = calendar.monthrange(year, month)[1]
-
-        # Read all values in this column
-        vals = []
-        for r in range(3, ws.max_row + 1):
-            v = ws.cell(r, col).value
-            if v is not None and isinstance(v, (int, float)):
-                vals.append(float(v))
-
-        if not vals:
-            continue
-
-        # First value might be a monthly average — skip if count matches days*24 + 1
-        if len(vals) == days_in_month * 24 + 1:
-            vals = vals[1:]
-        elif len(vals) < days_in_month * 24:
-            # Partial month or different format — take what we have
-            pass
-
-        # Extract 24 values per day
-        for day_idx in range(min(days_in_month, len(vals) // 24)):
-            try:
-                d = date(year, month, day_idx + 1)
-            except ValueError:
-                continue
-            for hour in range(24):
-                idx = day_idx * 24 + hour
-                if idx < len(vals):
-                    hourly.append({
-                        "date": d.isoformat(),
-                        "hour": hour,
-                        "kwh": round(vals[idx], 3),
-                    })
-
+    for month, cells in columns.items():
+        hourly.extend(_hourly_from_column(year, month, cells, skip_first))
     wb.close()
     print(f"  År: {year}, {len(hourly)} timvärden ({len(hourly)//24} dagar)")
+    return hourly
+
+
+def _local_hours(d: date) -> list[int]:
+    """Local clock hours of a day in Europe/Stockholm (23/24/25 entries on DST days)."""
+    start = datetime(d.year, d.month, d.day, tzinfo=TZ).astimezone(timezone.utc)
+    nxt = d + timedelta(days=1)
+    end = datetime(nxt.year, nxt.month, nxt.day, tzinfo=TZ).astimezone(timezone.utc)
+    n = int((end - start).total_seconds() // 3600)
+    return [(start + timedelta(hours=i)).astimezone(TZ).hour for i in range(n)]
+
+
+def _is_num(v) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _detect_leading_value(year: int, columns: dict[int, list]) -> bool | None:
+    """Decide once per file whether row 3 holds an extra (summary) value.
+
+    Uses a complete month without DST change: 24*days values means row 3 is
+    already hour 00 of day 1, 24*days + 1 means row 3 must be skipped.
+    """
+    for month, cells in columns.items():
+        if month in (3, 10) or not cells or not _is_num(cells[0]):
+            continue
+        last = max(i for i, v in enumerate(cells) if _is_num(v))
+        days_in_month = calendar.monthrange(year, month)[1]
+        if last + 1 == days_in_month * 24 + 1:
+            return True
+        if last + 1 == days_in_month * 24:
+            return False
+    return None
+
+
+def _hourly_from_column(year: int, month: int, cells: list, skip_first: bool | None = None) -> list[dict]:
+    """Map one month column (cells from row 3 downward) to hourly records.
+
+    Cell positions are kept: a blank/non-numeric cell skips that hour instead
+    of shifting the following values. Handles 23/25-hour DST days.
+    skip_first: whether row 3 holds an extra summary value (None = guess).
+    """
+    days_in_month = calendar.monthrange(year, month)[1]
+    days = [date(year, month, dd) for dd in range(1, days_in_month + 1)]
+    day_hours = [_local_hours(d) for d in days]
+    n_local = sum(len(h) for h in day_hours)
+
+    last = max((i for i, v in enumerate(cells) if _is_num(v)), default=-1)
+    if last < 0:
+        return []
+    span = last + 1
+
+    # Row 3 is the label row; if it holds a number it is either a summary
+    # value (one value too many) or already the first hour of the month.
+    if skip_first is None:
+        skip_first = span in (n_local + 1, days_in_month * 24 + 1) and span != n_local
+    if not _is_num(cells[0]) or skip_first:
+        cells = cells[1:]
+        span -= 1
+
+    # Files without DST handling: exactly 24 values per day
+    if span == days_in_month * 24 and span != n_local:
+        day_hours = [list(range(24)) for _ in days]
+
+    hourly = []
+    pos = 0
+    for d, hours in zip(days, day_hours):
+        day_vals: dict[int, float] = {}
+        for hour in hours:
+            v = cells[pos] if pos < len(cells) else None
+            pos += 1
+            if _is_num(v):
+                # Repeated 02:00 in October: sum both to keep the daily total
+                day_vals[hour] = day_vals.get(hour, 0.0) + float(v)
+        for hour in sorted(day_vals):
+            hourly.append({
+                "date": d.isoformat(),
+                "hour": hour,
+                "kwh": round(day_vals[hour], 3),
+            })
     return hourly
 
 

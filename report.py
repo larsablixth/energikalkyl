@@ -26,11 +26,38 @@ def _safe(text: str) -> str:
         '\u2264': '<=',  # less than or equal
         '\u2192': '->',  # right arrow
         '\u2190': '<-',  # left arrow
+        '\u20ac': 'EUR', # euro sign
+        '\u2212': '-',   # minus sign
+        '\u2009': ' ',   # thin space
+        '\u202f': ' ',   # narrow no-break space
+        '\u2248': '~',   # approximately
+        '\u2605': '*',   # star
+        '\u00b2': '2',   # superscript two is latin-1, kept for safety in some fonts
     }
     for old, new in replacements.items():
         text = text.replace(old, new)
-    # Fallback: replace any remaining non-latin-1 chars
-    return text.encode('latin-1', errors='replace').decode('latin-1')
+    # Fallback: drop any remaining non-latin-1 chars (emoji etc.) instead of printing "?"
+    return text.encode('latin-1', errors='ignore').decode('latin-1')
+
+
+def _fmt_payback(payback_years) -> str:
+    """Payback text; None/unreasonably large means the investment never pays back."""
+    if payback_years is None or payback_years >= 999:
+        return "Betalar sig inte"
+    return f"{payback_years:.1f} år"
+
+
+def _aspect_text(aspect) -> str:
+    """PVGIS aspect (0=south, -90=east, 90=west) to Swedish text."""
+    if aspect is None:
+        return ""
+    a = ((aspect + 180) % 360) - 180
+    names = [(-157.5, "norrvänd"), (-112.5, "nordostvänd"), (-67.5, "östvänd"), (-22.5, "sydostvänd"),
+             (22.5, "sydvänd"), (67.5, "sydvästvänd"), (112.5, "västvänd"), (157.5, "nordvästvänd")]
+    for limit, name in names:
+        if a < limit:
+            return name
+    return "norrvänd"
 
 
 class EnergiReport(FPDF):
@@ -135,9 +162,23 @@ def generate_report(
     all_results: list = None,
     # Future scenarios
     future_scenarios: dict = None,
+    # Actual inputs (so the methodology text matches what was simulated)
+    phases: int = 3,
+    efficiency: float = None,
+    cycle_life: int = 8000,
+    energy_tax: float = 45.0,
+    solar_source: str = "",
+    solar_tilt: float = None,
+    solar_aspect: float = None,
+    location: str = "",
+    # Grön teknik tax deduction (already subtracted from total_investment)
+    green_deduction_battery: float = 0,
+    green_deduction_solar: float = 0,
+    solar_lifetime_years: int = 25,
 ) -> bytes:
     """Generate a PDF report and return it as bytes."""
 
+    green_total = (green_deduction_battery or 0) + (green_deduction_solar or 0)
     pdf = EnergiReport()
     pdf.alias_nb_pages()
     pdf.set_auto_page_break(auto=True, margin=20)
@@ -162,24 +203,38 @@ def generate_report(
         f"{' och ' + str(solar_kwp) + ' kWp solceller' if solar_kwp > 0 else ''} "
         f"ger en lägre elkostnad på {savings_per_year:,.0f} kr per år "
         f"({savings_per_month:,.0f} kr per månad). "
-        f"Total investering: {total_investment:,.0f} kr. "
-        f"Återbetalningstid: {payback_years:.1f} år."
+        f"Total investering: {total_investment:,.0f} kr"
+        f"{' (efter skattereduktion för grön teknik)' if green_total > 0 else ''}. "
+        f"Återbetalningstid: {_fmt_payback(payback_years).lower()}."
     )
-    if monthly_net > 0 and loan_rate > 0:
-        pdf.body_text(
-            f"Vid finansiering via bolån ({loan_rate}%, {loan_years} år) är investeringen "
-            f"kassaflödespositiv från dag ett: besparingen ({savings_per_month:,.0f} kr/mån) "
-            f"överstiger lånekostnaden ({monthly_loan_cost:,.0f} kr/mån) med "
-            f"{monthly_net:,.0f} kr/mån."
-        )
+    financed = loan_rate > 0 and loan_years > 0
+    if financed:
+        if monthly_net > 0:
+            pdf.body_text(
+                f"Vid lånefinansiering ({loan_rate}%, {loan_years} år) är investeringen "
+                f"kassaflödespositiv från dag ett: besparingen ({savings_per_month:,.0f} kr/mån) "
+                f"överstiger lånekostnaden ({monthly_loan_cost:,.0f} kr/mån) med "
+                f"{monthly_net:,.0f} kr/mån."
+            )
+        else:
+            pdf.body_text(
+                f"Vid lånefinansiering ({loan_rate}%, {loan_years} år) överstiger lånekostnaden "
+                f"({monthly_loan_cost:,.0f} kr/mån) besparingen ({savings_per_month:,.0f} kr/mån) "
+                f"med {-monthly_net:,.0f} kr/mån, dvs. investeringen är inte kassaflödespositiv."
+            )
     pdf.ln(3)
 
-    # Highlight box
-    pdf.set_fill_color(46, 204, 113)
+    # Highlight box (green only when the monthly net is actually positive)
+    if monthly_net > 0:
+        pdf.set_fill_color(46, 204, 113)
+        box = (f"  Netto i fickan: +{monthly_net:,.0f} kr/mån"
+               f"{' (kassaflödespositivt dag 1)' if financed else ''}")
+    else:
+        pdf.set_fill_color(231, 76, 60)
+        box = f"  Netto i fickan: {monthly_net:,.0f} kr/mån (ej kassaflödespositivt)"
     pdf.set_text_color(255, 255, 255)
     pdf.set_font("Helvetica", "B", 12)
-    pdf.cell(0, 10, _safe(f"  Netto i fickan: +{monthly_net:,.0f} kr/mån (kassaflödespositivt dag 1)"),
-             fill=True, new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 10, _safe(box), fill=True, new_x="LMARGIN", new_y="NEXT")
     pdf.set_text_color(50, 50, 50)
     pdf.ln(5)
 
@@ -188,7 +243,7 @@ def generate_report(
     if address:
         pdf.key_value("Adress:", address)
     pdf.key_value("Nätägare:", grid_operator)
-    pdf.key_value("Huvudsäkring:", f"{fuse_amps:.0f}A, 3-fas")
+    pdf.key_value("Huvudsäkring:", f"{fuse_amps:.0f}A, {phases}-fas")
     pdf.key_value("Rekommenderad tariff:", best_tariff)
     if solar_kwp > 0:
         pdf.key_value("Solceller:", f"{solar_kwp:.1f} kWp")
@@ -206,6 +261,12 @@ def generate_report(
     pdf.set_draw_color(200, 200, 200)
     pdf.line(self_x := pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
     pdf.ln(2)
+    if green_total > 0:
+        pdf.key_value("Före skattereduktion:", f"{total_investment + green_total:,.0f} kr")
+        if green_deduction_battery > 0:
+            pdf.key_value("Grön teknik, batteri (50%):", f"-{green_deduction_battery:,.0f} kr")
+        if green_deduction_solar > 0:
+            pdf.key_value("Grön teknik, solceller (15%):", f"-{green_deduction_solar:,.0f} kr")
     pdf.key_value("Total investering:", f"{total_investment:,.0f} kr", bold_value=True)
     pdf.ln(3)
 
@@ -214,21 +275,34 @@ def generate_report(
 
     pdf.sub_title("Årlig besparing")
     pdf.key_value("Lägre elkostnad:", f"{savings_per_year:,.0f} kr/år ({savings_per_month:,.0f} kr/mån)", bold_value=True)
-    pdf.key_value("Återbetalningstid:", f"{payback_years:.1f} år")
+    pdf.key_value("Återbetalningstid:", _fmt_payback(payback_years))
     pdf.key_value("Batterilivslängd:", f"{lifetime_years:.0f} år ({cycles_per_year:.0f} cykler/år)")
-    pdf.key_value("Netto under livslängd:", f"{lifetime_profit:,.0f} kr")
+    pdf.key_value(f"Netto under {lifetime_years:.0f} år:", f"{lifetime_profit:+,.0f} kr")
+    if solar_kwp > 0 and (solar_price + solar_install) > 0:
+        pdf.body_text(
+            f"Kalkylhorisonten är batteriets livslängd ({lifetime_years:.0f} år). Solcellerna har "
+            f"längre livslängd ({solar_lifetime_years} år), så endast motsvarande andel av "
+            f"solcellsinvesteringen belastar nettot."
+        )
     pdf.ln(3)
 
-    if loan_rate > 0 and loan_years > 0:
-        pdf.sub_title(f"Finansiering via bolån ({loan_rate}%, {loan_years} år)")
+    if financed:
+        pdf.sub_title(f"Lånefinansiering ({loan_rate}%, {loan_years} år)")
         pdf.key_value("Lånekostnad:", f"{monthly_loan_cost:,.0f} kr/mån")
         pdf.key_value("Elbesparing:", f"{savings_per_month:,.0f} kr/mån")
-        pdf.key_value("Netto kassaflöde:", f"+{monthly_net:,.0f} kr/mån", bold_value=True)
-        pdf.body_text(
-            f"Investeringen läggs på befintligt bolån. Lånekostnaden ({monthly_loan_cost:,.0f} kr/mån) "
-            f"understiger elbesparingen ({savings_per_month:,.0f} kr/mån) med {monthly_net:,.0f} kr/mån. "
-            f"Hushållet har därmed lägre totala månadskostnader från första dagen."
-        )
+        pdf.key_value("Netto kassaflöde:", f"{monthly_net:+,.0f} kr/mån", bold_value=True)
+        if monthly_net > 0:
+            pdf.body_text(
+                f"Lånekostnaden ({monthly_loan_cost:,.0f} kr/mån) understiger elbesparingen "
+                f"({savings_per_month:,.0f} kr/mån) med {monthly_net:,.0f} kr/mån. "
+                f"Hushållet har därmed lägre totala månadskostnader från första dagen."
+            )
+        else:
+            pdf.body_text(
+                f"Lånekostnaden ({monthly_loan_cost:,.0f} kr/mån) överstiger elbesparingen "
+                f"({savings_per_month:,.0f} kr/mån) med {-monthly_net:,.0f} kr/mån. "
+                f"Hushållets månadskostnader ökar alltså under lånets löptid."
+            )
         pdf.ln(3)
 
     # Scenario comparison
@@ -237,8 +311,7 @@ def generate_report(
         pdf.body_text(
             f"Besparingen varierar med elprisnivån. Vid normala priser "
             f"({', '.join(normal_years)}) uppskattas besparingen till {normal_savings:,.0f} kr/år. "
-            f"Vid högre priser ({', '.join(high_years)}) ökar besparingen till {high_savings:,.0f} kr/år. "
-            f"Den rekommenderade investeringen är lönsam i båda scenarierna."
+            f"Vid högre priser ({', '.join(high_years)}) blir besparingen {high_savings:,.0f} kr/år."
         )
         pdf.ln(3)
 
@@ -251,23 +324,31 @@ def generate_report(
             "prisskillnader under de kommande 10-15 åren. Tre scenarier har simulerats:"
         )
         widths = [35, 30, 30, 30, 35]
-        pdf.table_row(["Scenario", "Besparing/år", "Besparing/mån", "Netto 15 år", "Antagande"],
-                       header=True, widths=widths)
+        pdf.table_row(["Scenario", "Besparing/år", "Besparing/mån", f"Netto {lifetime_years:.0f} år",
+                       "Antagande"], header=True, widths=widths)
         for label, data in future_scenarios.items():
             pdf.table_row([
                 label,
                 f"{data['arb_yr']:,.0f} kr",
                 f"{data['arb_yr']/12:,.0f} kr",
                 f"{data['lifetime_profit']:+,.0f} kr",
-                f"{data['vol']:.0%}x volatilitet",
+                f"{data['vol']:.1f}x volatilitet",
             ], widths=widths)
         pdf.ln(3)
+        n_profitable = sum(1 for d in future_scenarios.values() if d["lifetime_profit"] > 0)
+        if n_profitable == len(future_scenarios):
+            verdict = "Investeringen är lönsam i samtliga scenarier."
+        elif n_profitable == 0:
+            verdict = "Investeringen är inte lönsam i något av scenarierna."
+        else:
+            verdict = (f"Investeringen är lönsam i {n_profitable} av {len(future_scenarios)} scenarier "
+                       f"- lönsamheten är beroende av att prissvängningarna ökar.")
         pdf.body_text(
             "Konservativt: prissvängningarna ökar 50% under 10 år (måttlig utbyggnad av förnybart). "
             "Sannolikt: prissvängningarna 2-3x under 10 år. Fortsatt utbyggnad av vind/sol, "
             "fler elbilar, elektrifiering av industri. De flesta energianalytiker förväntar sig detta. "
             "Hög volatilitet: prissvängningarna 4x (massiv förnybar utbyggnad, kärnkraft fasas ut). "
-            "Investeringen är lönsam i samtliga scenarier."
+            + verdict
         )
         pdf.ln(3)
 
@@ -289,7 +370,7 @@ def generate_report(
                 f"{r['total_benefit_yr']:,.0f} kr",
                 f"{r['total_benefit_yr']/12:,.0f} kr",
                 f"{r['total_invest']:,.0f} kr",
-                f"{r['payback']:.1f} år",
+                _fmt_payback(r['payback']),
                 f"{r['profit_life']:,.0f} kr",
             ], widths=widths)
         pdf.ln(5)
@@ -327,11 +408,21 @@ def generate_report(
 
     pdf.sub_title("Solceller")
     if solar_kwp > 0:
+        if solar_source == "pvgis" and solar_tilt is not None:
+            src_txt = (f"{_aspect_text(solar_aspect)} montering och {solar_tilt:.0f}° lutning. "
+                       f"Timproduktionen baseras på satellitdata från EU JRC PVGIS"
+                       f"{' för ' + location if location else ''}.")
+        elif solar_source == "csv":
+            src_txt = "uppmätt produktion från importerad växelriktardata (CSV)."
+        elif solar_source == "pvgis":
+            src_txt = "satellitdata från EU JRC PVGIS, alternativt uppmätt produktion från Tibber."
+        else:
+            src_txt = ("en förenklad modell (sydvänd montering, typvärden per månad för svenska "
+                       "förhållanden) eller uppmätt produktion om sådan fanns.")
         pdf.body_text(
-            f"Solproduktionen beräknas utifrån en {solar_kwp:.0f} kWp anläggning med "
-            f"sydvänd montering och 35° lutning. Månadsproduktionen baseras på "
-            f"typvärden för Stockholm. Solel används i första hand för egenförbrukning, "
-            f"sedan batteriladdning, och slutligen export till elnätet."
+            f"Solproduktionen beräknas utifrån en {solar_kwp:.1f} kWp anläggning med "
+            f"{src_txt} Solel används i första hand för egenförbrukning, "
+            f"sedan batteriladdning, och slutligen export till elnätet (eller begränsas vid nollexport)."
         )
     else:
         pdf.body_text("Inga solceller ingår i denna kalkyl.")
@@ -340,18 +431,32 @@ def generate_report(
     pdf.body_text(
         f"Simuleringen testar automatiskt alla tillgängliga tariffer hos {grid_operator} "
         f"och väljer den som ger bäst resultat för varje batteristorlek. "
-        f"Energiskatt (45,0 öre/kWh inkl. moms, 2026 års nivå) och abonnemangsavgift ingår i beräkningen."
+        f"Energiskatt ({f'{energy_tax:.1f}'.replace('.', ',')} öre/kWh inkl. moms) och abonnemangsavgift ingår i beräkningen."
     )
 
     pdf.sub_title("Batteri")
     pdf.body_text(
-        f"Batteriet modelleras med {90}% tur-retur-verkningsgrad (energiförlust vid laddning "
+        f"Batteriet modelleras med "
+        f"{(f'{efficiency * 100:.0f}% ' if efficiency else '')}tur-retur-verkningsgrad (energiförlust vid laddning "
         f"och urladdning). Laddeffekten begränsas av säkringens kapacitet minus hushållets "
-        f"momentana last. Batteriets livslängd beräknas från antal cykler per år (max 8000 cykler "
+        f"momentana last. Batteriets livslängd beräknas från antal cykler per år (max {cycle_life:,.0f} cykler "
         f"eller 15 års kalenderlivslängd)."
     )
 
     # === ASSUMPTIONS & RISKS ===
+    if green_total > 0:
+        green_text = (
+            f"- Skattereduktion för grön teknik ({green_total:,.0f} kr) är avdragen från investeringen: "
+            "50% för batterilagring av egenproducerad el och 15% för solceller (2026), "
+            "max 50 000 kr per person och år. Förutsätter installation av företag med F-skatt "
+            "och att köparna har tillräcklig skatt att reducera."
+        )
+    else:
+        green_text = (
+            "- Beräkningen inkluderar inte skattereduktion för grön teknik "
+            "(50% för batteri, 15% för solceller vid installation av företag), "
+            "som kan förbättra lönsamheten."
+        )
     pdf.section_title("Antaganden och risker")
     pdf.body_text(
         "- Framtida elpriser antas följa samma mönster som historiska priser. "
@@ -362,8 +467,7 @@ def generate_report(
         "- Nättariffer och energiskatt kan ändras av myndighetsbeslut.\n"
         "- Elbilens laddmönster modelleras som schemalagd nattladdning. "
         "Verkligt laddmönster varierar.\n"
-        "- Beräkningen inkluderar inte eventuella skatteavdrag (ROT/grönt avdrag) "
-        "som kan förbättra lönsamheten ytterligare."
+        + green_text
     )
     pdf.ln(5)
 

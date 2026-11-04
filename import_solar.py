@@ -13,32 +13,24 @@ Swedish CSVs typically use semicolon delimiter and comma decimal separator.
 
 import csv
 import io
+import re
 from datetime import datetime
 
+# Shared tolerant format detection / number parsing (decimal comma, thousands
+# separators) — same rules for consumption and production CSVs.
+from import_consumption import detect_csv_format, parse_number
 
-def detect_csv_format(content: str) -> dict:
-    """Detect delimiter and decimal separator."""
-    first_lines = content.split("\n")[:5]
-    header = first_lines[0] if first_lines else ""
+_ENERGY_KEYWORDS = ["produktion", "production", "yield", "energi", "energy",
+                    "genererad", "generated", "kwh"]
+_POWER_KEYWORDS = ["effekt", "power"]
 
-    if ";" in header:
-        delimiter = ";"
-    elif "\t" in header:
-        delimiter = "\t"
-    else:
-        delimiter = ","
 
-    has_comma_decimal = False
-    for line in first_lines[1:]:
-        fields = line.split(delimiter)
-        for f in fields:
-            f = f.strip().strip('"')
-            if "," in f and f.replace(",", "").replace(".", "").replace("-", "").isdigit():
-                parts = f.split(",")
-                if len(parts) == 2 and len(parts[1]) <= 4:
-                    has_comma_decimal = True
-
-    return {"delimiter": delimiter, "comma_decimal": has_comma_decimal}
+def _column_unit(header: str) -> str | None:
+    """Return unit found in a column header: 'kwh', 'wh', 'kw', 'w' or None."""
+    for unit in ("kwh", "wh", "kw", "w"):
+        if re.search(rf"(?<![a-z]){unit}(?![a-z])", header):
+            return unit
+    return None
 
 
 def parse_solar_csv(content: str, filename: str = "") -> list[dict]:
@@ -91,12 +83,32 @@ def parse_solar_csv(content: str, filename: str = "") -> list[dict]:
         if any(kw in h for kw in ["tid", "time", "timme", "hour"]) and "starttid" not in h:
             if time_col is None:
                 time_col = i
-        if any(kw in h for kw in [
-            "produktion", "production", "yield", "energi", "energy",
-            "kwh", "genererad", "generated", "effekt", "power",
-        ]):
-            if prod_col is None:
-                prod_col = i
+
+    # Pick production column: prefer an energy column (kWh/Wh) over a power
+    # column (W/kW) — exports often contain both, e.g. "Power (W)" + "Energy (kWh)".
+    energy_cols = []
+    power_cols = []
+    for i, h in enumerate(header_lower):
+        if i in (date_col, time_col):
+            continue
+        unit = _column_unit(h)
+        if unit in ("kwh", "wh"):
+            energy_cols.append((0, i))
+        elif unit in ("kw", "w") or any(kw in h for kw in _POWER_KEYWORDS):
+            power_cols.append(i)
+        elif any(kw in h for kw in _ENERGY_KEYWORDS):
+            energy_cols.append((1, i))
+    is_power = False
+    scale = 1.0
+    if energy_cols:
+        prod_col = min(energy_cols)[1]
+        if _column_unit(header_lower[prod_col]) == "wh":
+            scale = 0.001
+    elif power_cols:
+        prod_col = power_cols[0]
+        is_power = True
+        if _column_unit(header_lower[prod_col]) == "w":
+            scale = 0.001  # W -> kW
 
     if date_col is None:
         date_col = 0
@@ -110,7 +122,7 @@ def parse_solar_csv(content: str, filename: str = "") -> list[dict]:
     if prod_col is None:
         raise ValueError(f"Kunde inte hitta produktionskolumn i CSV. Kolumner: {header}")
 
-    results = []
+    samples: dict[tuple[str, str], list[float]] = {}
     for row in rows_raw[header_idx + 1:]:
         max_col = max(c for c in [date_col, time_col, prod_col] if c is not None)
         if len(row) <= max_col:
@@ -152,23 +164,25 @@ def parse_solar_csv(content: str, filename: str = "") -> list[dict]:
             continue
 
         # Parse production value
-        prod_str = row[prod_col].strip().strip('"')
-        if not prod_str or prod_str == "-":
-            continue
-        if comma_decimal:
-            prod_str = prod_str.replace(",", ".")
-        try:
-            production = float(prod_str)
-        except ValueError:
+        production = parse_number(row[prod_col], comma_decimal, delimiter)
+        if production is None:
             continue
 
         if production < 0:
             continue  # Skip negative values (some inverters log consumption as negative)
 
+        key = (dt.strftime("%Y-%m-%d"), dt.strftime("%H:00"))
+        samples.setdefault(key, []).append(production * scale)
+
+    # Aggregate to one record per hour: energy samples (kWh) are summed,
+    # power samples (kW) are averaged — mean kW over an hour == kWh that hour.
+    results = []
+    for (d, h), vals in samples.items():
+        kwh = sum(vals) / len(vals) if is_power else sum(vals)
         results.append({
-            "date": dt.strftime("%Y-%m-%d"),
-            "hour": dt.strftime("%H:00"),
-            "production_kwh": round(production, 4),
+            "date": d,
+            "hour": h,
+            "production_kwh": round(kwh, 4),
         })
 
     return results
@@ -179,8 +193,8 @@ def solar_to_hourly_dict(records: list[dict]) -> dict[str, float]:
     Convert parsed solar records to lookup dict: "YYYY-MM-DD HH:00" -> kW.
 
     For hourly data, kWh ≈ kW average for that hour.
-    If multiple records exist for the same hour, they are summed
-    (handles sub-hourly data like 15-min intervals).
+    parse_solar_csv() already aggregates sub-hourly samples per hour (energy
+    summed, power averaged); any remaining duplicates are summed as energy.
     """
     result: dict[str, float] = {}
     for r in records:

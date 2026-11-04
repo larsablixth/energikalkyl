@@ -32,7 +32,7 @@ The app follows a 6-step flow:
    - Tibber API: consumption profile + auto-fills address, fuse, grid operator, house size, heating type
    - Vattenfall/CSV/JSON: 3+ years hourly consumption data. JSON is standard format (see `consumption_format.py`)
    - Spot prices: auto-syncs date range with loaded consumption data
-   - **Session persistence**: loaded data survives page refreshes (stored in `.app_state/`)
+   - **Session persistence**: opt-in only (`ENERGIKALKYL_PERSIST=1`, self-hosted). Off on the public deployment: one shared file leaked data between visitors
 2. **Configure setup** — grid operator (8 presets), fuse (simulated as output), solar, loads, heating model
    - **Solar data**: radio selector — PVGIS satellite (default, location-specific), CSV from inverter, or cos³ model. Tibber production auto-fetched if available.
    - Heating: calibrated from energy class OR manual Tibber Insights breakdown OR auto-fit from consumption
@@ -90,7 +90,7 @@ The app follows a 6-step flow:
 ### App & deployment
 - `app.py` — Streamlit web GUI (main user interface, ~2500 lines). Bilingual Swedish/English.
 - `translations.py` — i18n module: 150+ strings, `t(key)` lookup, `set_language("en"/"sv")`. **CRITICAL: never use `t` as a variable name in app.py — it shadows the translation function.**
-- `app_state.py` — Session persistence across page refreshes (SQLite-free, JSON in `.app_state/`)
+- `app_state.py` — Optional session persistence (JSON in `.app_state/`), only when `ENERGIKALKYL_PERSIST=1`
 - `setup.sh` — First-time setup: installs pip + deps, prompts for Tibber token, starts app
 - `.github/workflows/claude.yml` — Claude Code GitHub Action (PR review, @claude, issue implementation)
 - `Dockerfile` + `docker-compose.yml` — Container deployment
@@ -103,7 +103,9 @@ The app follows a 6-step flow:
 
 ### Simulation strategy (batteri.py simulate())
 - Day-ahead scheduling with perfect foresight (prices known at 13:00)
-- Multi-cycle: up to 3 charge/discharge cycles per day (5 with export arbitrage)
+- Daily plan in time order: charge->later-discharge pairs taken most profitable first, only if the battery can hold the energy in between; discharge split into own-load tranche (full price) and export tranche. No trading when the spread doesn't cover efficiency loss + 20 öre (10 with export arbitrage)
+- Prices are averaged to hourly (`to_hourly`) before simulating: quarter-hour prices since 2025-10-01
+- Spot prices are excl. VAT; buying adds 25% (`spot_vat_factor`), export is paid without VAT
 - Minimum 20 öre/kWh absolute spread required to cycle (10 öre for export arbitrage)
 - Solar-aware: estimates expected daily solar surplus, reduces grid charging to leave room for free solar
 - Priority chain: household load → battery charging → flex loads (pool/varmvatten) → grid export
@@ -207,7 +209,8 @@ The app follows a 6-step flow:
 - **EV is smart-scheduled**: wide availability window (18-07), picks cheapest hours day-ahead. Avoids effekttariff peak hours and tidstariff peak rates automatically. Pool + varmvatten are flexibla laster (solar surplus)
 - **Zero-export strategy**: default mode. Varmvatten element (3 kW, no daily cap) + luft-luft (pre-heat/cool) absorb surplus after battery. Solar surplus curtailed if no flex loads available. No export-capable inverter or microproducer registration needed. Export mode available as option with comparison showing it's typically worse than self-consumption.
 - **Export comparison**: expandable section in results shows zero-export vs export side by side, with tipping point analysis. Conclusion: export only viable with effekttariff operators (SEOM) and consistently high daily spreads (>60 öre).
-- **Session persistence**: consumption data, prices, calibration inputs survive page refreshes (`.app_state/session.json`)
+- **Session persistence**: opt-in via `ENERGIKALKYL_PERSIST=1` (`.app_state/session.json`); never on Streamlit Cloud
+- **Tibber token**: kept in session state and passed as `token=`; never `os.environ`. Server-side token fallback only on self-hosted installs
 - **Luft-luft is optional and separate**: shown outside main investment ROI, contribution reported as bonus
 - **Tibber auto-fill**: one click fetches address, city, grid operator, fuse size, house area, residents, heating type, price area — all auto-configured
 - **Tibber Insights calibration**: manual input of annual breakdown (heating/EV/active/always-on) for per-house h_loss fitting

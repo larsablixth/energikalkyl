@@ -588,6 +588,57 @@ class TestSimulate:
         assert len(result.slots) == 72
 
 
+    def test_quarter_hour_prices_averaged_to_hourly(self):
+        """15-min prices (from Oct 2025) must not count as full hours."""
+        from batteri import to_hourly, simulate, BatteryConfig
+        rows = []
+        for hour in range(24):
+            for q, p in enumerate((0.4, 0.6, 0.8, 1.0)):
+                rows.append({"date": "2025-12-01", "hour": f"{hour:02d}:{q * 15:02d}",
+                             "sek_per_kwh": p + (2.0 if hour == 18 else 0.0)})
+        hourly = to_hourly(rows)
+        assert len(hourly) == 24
+        assert hourly[0]["hour"] == "00:00"
+        assert abs(hourly[0]["sek_per_kwh"] - 0.7) < 1e-9
+        # Mixed series: an hourly day before the quarter-hour day
+        mixed = [{"date": "2025-09-30", "hour": f"{h:02d}:00", "sek_per_kwh": 0.5}
+                 for h in range(24)] + rows
+        config = BatteryConfig(capacity_kwh=32.0, max_charge_kw=5.0, max_discharge_kw=5.0)
+        r = simulate(mixed, config, None)
+        assert len(r.slots) == 48
+        assert max(s.energy_kwh for s in r.slots) <= 5.0 + 1e-6
+
+    def test_battery_saves_energy_for_evening_peak(self):
+        """Discharge must happen at the day's peak, not drain earlier."""
+        from batteri import simulate, BatteryConfig
+        prices = [{"date": "2026-01-07", "hour": f"{h:02d}:00",
+                   "sek_per_kwh": 0.2 if h < 4 else (3.0 if h == 18 else 1.0)}
+                  for h in range(24)]
+        config = BatteryConfig(capacity_kwh=32.0, max_charge_kw=15.0, max_discharge_kw=15.0,
+                               export_price_factor=0.0)
+        result = simulate(prices, config, None)
+        peak = [s for s in result.slots if s.hour == "18:00"][0]
+        assert peak.action == "discharge"
+        assert abs(peak.energy_kwh - 15.0) < 0.01
+
+    def test_no_loss_making_trades_on_small_spread(self):
+        """Tiny spreads below efficiency loss must not trigger cycling."""
+        from batteri import simulate, BatteryConfig
+        prices = [{"date": "2026-01-07", "hour": f"{h:02d}:00",
+                   "sek_per_kwh": 1.0 + h * 0.001} for h in range(24)]
+        result = simulate(prices, BatteryConfig(capacity_kwh=10.0), None)
+        assert result.total_charged_kwh == 0
+        assert result.net_profit_sek >= 0
+
+    def test_spot_price_includes_vat_when_buying(self):
+        from batteri import simulate, BatteryConfig
+        prices = [{"date": "2026-01-07", "hour": f"{h:02d}:00",
+                   "sek_per_kwh": 0.5 if h < 4 else 2.0} for h in range(24)]
+        result = simulate(prices, BatteryConfig(capacity_kwh=10.0), None)
+        charge = [s for s in result.slots if s.action == "charge"][0]
+        assert abs(charge.total_cost_ore - 62.5) < 0.01
+
+
 # ============================================================
 # Cross-module integration tests
 # ============================================================

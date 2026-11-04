@@ -91,6 +91,7 @@ def fetch_exchange_rates(start: date, end: date) -> dict[str, float]:
             for date_str, rate_dict in rates.items():
                 cache[date_str] = rate_dict["SEK"]
 
+            _forward_fill_rates(cache, missing_start, missing_end)
             _save_fx_cache(cache)
             print(f"  Hämtade {len(rates)} växelkurser (senaste: {max(rates.keys()) if rates else '?'})")
         except Exception as e:
@@ -98,6 +99,30 @@ def fetch_exchange_rates(start: date, end: date) -> dict[str, float]:
             print(f"  Använder fallback-kurs {FALLBACK_EUR_SEK} SEK/EUR")
 
     return cache
+
+
+def _forward_fill_rates(cache: dict[str, float], start: date, end: date):
+    """Fill weekends/holidays (no ECB fixing) with the previous business day's rate.
+
+    Only past dates are filled — today's/future rates may simply not be
+    published yet. Without this, non-business days are never cached and the
+    range is re-fetched on every call.
+    """
+    from datetime import timedelta
+    last_rate = None
+    for i in range(1, 10):  # seed from the business day before the range
+        prev = (start - timedelta(days=i)).isoformat()
+        if prev in cache:
+            last_rate = cache[prev]
+            break
+    current = start
+    while current <= end and current < date.today():
+        key = current.isoformat()
+        if key in cache:
+            last_rate = cache[key]
+        elif last_rate is not None:
+            cache[key] = last_rate
+        current += timedelta(days=1)
 
 
 def _get_rate_for_date(fx_rates: dict[str, float], d: str) -> float:

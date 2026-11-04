@@ -8,7 +8,9 @@ Two pricing models:
 Höglasttid (peak): Weekdays 06-22, months Jan, Feb, Mar, Nov, Dec.
 Weekdays that are public holidays are NOT peak:
   nyårsdagen, trettondedag jul, långfredag, annandag påsk,
+  första maj, Kristi himmelsfärdsdag, nationaldagen, midsommarafton,
   julafton, juldagen, annandag jul, nyårsafton.
+(The May/June days only matter for operators with peak hours all year.)
 
 All other times are off-peak (övrig tid).
 
@@ -26,6 +28,8 @@ def _swedish_holidays(year: int) -> set[date]:
     holidays = {
         date(year, 1, 1),    # nyårsdagen
         date(year, 1, 6),    # trettondedag jul
+        date(year, 5, 1),    # första maj
+        date(year, 6, 6),    # nationaldagen
         date(year, 12, 24),  # julafton
         date(year, 12, 25),  # juldagen
         date(year, 12, 26),  # annandag jul
@@ -46,6 +50,10 @@ def _swedish_holidays(year: int) -> set[date]:
     easter = date(year, month, day)
     holidays.add(easter - timedelta(days=2))  # långfredag
     holidays.add(easter + timedelta(days=1))  # annandag påsk
+    holidays.add(easter + timedelta(days=39))  # Kristi himmelsfärdsdag
+    # Midsommarafton: Friday between 19 and 25 June
+    june19 = date(year, 6, 19)
+    holidays.add(june19 + timedelta(days=(4 - june19.weekday()) % 7))
     return holidays
 
 

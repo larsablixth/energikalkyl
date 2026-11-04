@@ -3,6 +3,10 @@ services:
     build: .
     ports:
       - "8501:8501"
+    environment:
+      # Self-hosted, single user: keep data across page refreshes and allow
+      # the mounted .tibber_token. Never set this on a shared/public server.
+      - ENERGIKALKYL_PERSIST=1
     volumes:
       # Mount API tokens (optional — needed for Tibber/ENTSO-E features)
       - ./.tibber_token:/app/.tibber_token:ro

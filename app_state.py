@@ -3,6 +3,12 @@ Persist app session state across Streamlit refreshes.
 
 Saves key data (consumption profiles, prices, house metadata, calibration)
 to a local JSON file so the app restores its last state on reload.
+
+PRIVACY: the file is shared by every visitor of the server process, so it is
+only used when explicitly enabled with ENERGIKALKYL_PERSIST=1 (single-user
+self-hosted / Docker installs). It is OFF by default — on a public deployment
+(e.g. Streamlit Community Cloud) data lives only in each visitor's own
+st.session_state and is never written to disk or shown to other visitors.
 """
 
 import json
@@ -11,6 +17,11 @@ import pandas as pd
 
 STATE_DIR = ".app_state"
 STATE_FILE = os.path.join(STATE_DIR, "session.json")
+
+
+def persistence_enabled() -> bool:
+    """Local-disk persistence is opt-in (single-user installs only)."""
+    return os.environ.get("ENERGIKALKYL_PERSIST", "").strip().lower() in ("1", "true", "yes")
 
 # Keys to persist and their types for serialization
 PERSIST_KEYS = {
@@ -41,7 +52,9 @@ PERSIST_KEYS = {
 
 
 def save_state(session_state):
-    """Save persistable session state to disk."""
+    """Save persistable session state to disk (no-op unless ENERGIKALKYL_PERSIST=1)."""
+    if not persistence_enabled():
+        return
     os.makedirs(STATE_DIR, exist_ok=True)
     data = {}
     for key, typ in PERSIST_KEYS.items():
@@ -63,8 +76,10 @@ def save_state(session_state):
 
 
 def load_state(session_state):
-    """Restore persisted state into session, without overwriting existing keys."""
-    if not os.path.exists(STATE_FILE):
+    """Restore persisted state into session, without overwriting existing keys.
+
+    No-op unless ENERGIKALKYL_PERSIST=1."""
+    if not persistence_enabled() or not os.path.exists(STATE_FILE):
         return False
 
     try:

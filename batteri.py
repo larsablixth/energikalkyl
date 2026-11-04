@@ -114,6 +114,10 @@ class BatteryConfig:
     # Grid export
     export_price_factor: float = 1.0  # fraction of spot price received for export (1.0 = full spot)
     export_fee_ore: float = 5.0       # provider fee per exported kWh (öre)
+    # Spot prices from Nord Pool / elprisetjustnu are excl. VAT, while grid fees
+    # and energy tax in tariff.py include it. Buying pays VAT on spot too;
+    # exported kWh are paid at spot without VAT (private producer).
+    spot_vat_factor: float = 1.25
     # Export arbitrage: reserve capacity beyond self-consumption for grid trading.
     # When > 0, the battery splits into self-consumption (up to this kWh) + export
     # (remaining capacity). The export portion cycles daily when spreads are profitable.
@@ -337,7 +341,11 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
     result = SimResult(config=config, tariff_name=tariff.name if tariff else "Ingen (enbart spotpris)")
     soc = config.capacity_kwh * config.min_soc  # start empty
 
-    slot_duration_h = _detect_slot_duration(prices)
+    # Since 2025-10-01 day-ahead prices are quarter-hourly. Mixed series
+    # (hourly history + 15-min) must not be treated as one resolution, so
+    # everything is simulated on hourly averages.
+    prices = to_hourly(prices)
+    slot_duration_h = 1.0
 
     # Solar production function
     if solar:
@@ -371,7 +379,7 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
                 for p in day_prices:
                     h = int(p["hour"].split(":")[0])
                     if load.is_in_window(h):
-                        spot_ore = float(p["sek_per_kwh"]) * 100
+                        spot_ore = float(p["sek_per_kwh"]) * 100 * config.spot_vat_factor
                         grid_ore = tariff.total_cost_ore(p["date"], p["hour"]) if tariff else 0
                         cost = spot_ore + grid_ore
                         # Effekttariff penalty: running a high-kW load during peak
@@ -401,7 +409,7 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
         for i, p in enumerate(day_prices):
             spot_ore = float(p["sek_per_kwh"]) * 100
             grid_ore = tariff.total_cost_ore(p["date"], p["hour"]) if tariff else 0
-            total_ore = spot_ore + grid_ore
+            total_ore = spot_ore * config.spot_vat_factor + grid_ore
             solar_kw = _solar_kw(p["date"], p["hour"])
             h = int(p["hour"].split(":")[0])
             month = int(p["date"].split("-")[1])
@@ -419,124 +427,99 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
         # Strategy: find profitable charge-discharge pairs where the spread
         # covers the round-trip efficiency loss.
 
-        n_slots = len(slot_costs)
         slot_cost_map = {idx: (total_ore, spot_ore, grid_ore) for idx, total_ore, spot_ore, grid_ore, _ in slot_costs}
 
-        # For discharge valuation: self-consumption saves total_ore,
-        # but export only earns (spot × factor - fee). Compute blended
-        # discharge value per slot based on how much the house consumes.
-        _can_export = config.export_price_factor > 0
-        slot_discharge_value = {}
-        for idx, total_ore, spot_ore, grid_ore, _ in slot_costs:
-            if _can_export:
-                h = int(day_prices[idx]["hour"].split(":")[0])
-                month = int(day_prices[idx]["date"].split("-")[1])
-                d_str = day_prices[idx]["date"]
-                load = config.total_load_kw(h, month, d_str)
-                discharge_kw = config.max_discharge_kw
-                self_frac = min(1.0, load / discharge_kw) if discharge_kw > 0 else 1.0
-                export_ore = max(0, spot_ore * config.export_price_factor - config.export_fee_ore)
-                # Blended value: self-consumption at total_ore + export at export_ore
-                blended = self_frac * total_ore + (1 - self_frac) * export_ore
-                slot_discharge_value[idx] = blended
-            else:
-                slot_discharge_value[idx] = total_ore
-
-        # Sort by charge cost (cheapest first) and discharge value (most valuable first)
-        sorted_by_cost = sorted(slot_costs, key=lambda x: x[1])
-        sorted_by_discharge_value = sorted(slot_costs, key=lambda x: slot_discharge_value[x[0]], reverse=True)
-
-        # Calculate break-even spread: need at least (1/efficiency - 1) margin
-        min_spread_factor = 1.0 / config.efficiency  # e.g. 1.075 for 93% efficiency
-
-        # Greedy multi-cycle: pair cheapest unused charge slot with most expensive
-        # unused discharge slot, as long as the spread is profitable
-        charge_indices = set()
-        discharge_indices = set()
-
-        cheap_slots = list(sorted_by_cost)  # cheapest first
-        expensive_slots = list(sorted_by_discharge_value)  # most valuable first (by blended value)
-
-        total_charge_possible = 0.0
-        total_discharge_possible = 0.0
-        # More cycles allowed when export arbitrage is active (idle capacity should trade)
+        # Plan the day's grid charging and discharging in time order.
+        # Every planned kWh is a (charge slot -> later discharge slot) pair, or
+        # a discharge of energy already in the battery (carried over from
+        # yesterday or expected free solar). Pairs are taken most profitable
+        # first, and only if the battery can actually hold the energy in
+        # between, so it is never empty when the day's top price arrives.
+        n_slots = len(slot_costs)
+        min_spread_factor = 1.0 / config.efficiency  # e.g. 1.11 for 90% efficiency
+        # Lower spread threshold for export arbitrage (idle capacity has zero opportunity cost)
         _has_arb = config.export_arbitrage_kwh > 0 and config.export_price_factor > 0
-        max_cycles = 5 if _has_arb else 3
+        min_absolute_spread = 10 if _has_arb else 20  # öre/kWh
+        usable = config.usable_kwh
 
-        # Estimate how much solar surplus will charge the battery today
-        # so we don't fill up with grid power and waste free solar
-        expected_solar_charge = sum(
-            min(surplus, config.max_charge_kw) * slot_duration_h
-            for _, _, _, _, surplus in slot_costs if surplus > 0.01
-        )
-        expected_solar_charge = min(expected_solar_charge, config.usable_kwh)
+        # Stored energy above min_soc at the end of each slot, before trading
+        level = []
+        solar_in = []
+        lvl = max(0.0, soc - config.capacity_kwh * config.min_soc)
+        for _, _, _, _, surplus in slot_costs:
+            s_in = 0.0
+            if surplus > 0.001:
+                s_in = max(0.0, min(min(surplus, config.max_charge_kw) * slot_duration_h, usable - lvl))
+            lvl += s_in
+            solar_in.append(s_in)
+            level.append(lvl)
 
-        for cycle in range(max_cycles):
-            # Find next batch of cheap slots to fill battery
-            cycle_charge = set()
-            cycle_charge_energy = 0.0
-            # Leave room for expected free solar charging
-            energy_needed = max(0, config.usable_kwh - expected_solar_charge) / config.efficiency
+        charge_room = []
+        for i, p in enumerate(day_prices):
+            h = int(p["hour"].split(":")[0])
+            month = int(p["date"].split("-")[1])
+            avail_kw = config.available_charge_kw(h, month, p["date"])
+            charge_room.append(max(0.0, avail_kw * slot_duration_h - solar_in[i]) if avail_kw > 0.1 else 0.0)
 
-            for idx, total_ore, spot_ore, grid_ore, solar_surplus in cheap_slots:
-                if idx in charge_indices or idx in discharge_indices:
-                    continue
-                if cycle_charge_energy >= energy_needed:
-                    break
-                h = int(day_prices[idx]["hour"].split(":")[0])
-                month = int(day_prices[idx]["date"].split("-")[1])
-                d_str = day_prices[idx]["date"]
-                avail_kw = config.available_charge_kw(h, month, d_str)
-                if avail_kw > 0.1:
-                    cycle_charge.add(idx)
-                    cycle_charge_energy += avail_kw * slot_duration_h
-
-            if not cycle_charge:
-                break
-
-            # Find matching expensive discharge slots
-            cycle_discharge = set()
-            cycle_discharge_energy = 0.0
-
-            for idx, total_ore, spot_ore, grid_ore, solar_surplus in expensive_slots:
-                if idx in charge_indices or idx in discharge_indices or idx in cycle_charge:
-                    continue
-                if cycle_discharge_energy >= config.usable_kwh:
-                    break
-                cycle_discharge.add(idx)
-                cycle_discharge_energy += config.max_discharge_kw * slot_duration_h
-
-            if not cycle_discharge:
-                break
-
-            # Check if this cycle is profitable
-            # Use blended discharge value (accounts for self-consumption vs export split)
-            avg_charge_price = sum(slot_cost_map[i][0] for i in cycle_charge) / len(cycle_charge)
-            avg_discharge_value = sum(slot_discharge_value[i] for i in cycle_discharge) / len(cycle_discharge)
-            absolute_spread = avg_discharge_value - avg_charge_price
-            # Lower spread threshold for export arbitrage (idle capacity has zero opportunity cost)
-            min_absolute_spread = 10 if _has_arb else 20  # öre/kWh
-
-            if (avg_discharge_value > avg_charge_price * min_spread_factor
-                    and absolute_spread > min_absolute_spread):
-                charge_indices.update(cycle_charge)
-                discharge_indices.update(cycle_discharge)
+        # Discharge capacity per slot, split into tranches by value: covering
+        # the house's own load saves the full price; with export enabled, the
+        # rest is sold at the export price. Zero-export: all at full price.
+        _can_export = config.export_price_factor > 0
+        discharge_tranches = []  # per slot: list of [value öre/kWh, room kWh]
+        for j, p in enumerate(day_prices):
+            total_ore, spot_ore, _ = slot_cost_map[j]
+            max_out = config.max_discharge_kw * slot_duration_h
+            if _can_export:
+                h = int(p["hour"].split(":")[0])
+                month = int(p["date"].split("-")[1])
+                own = min(max_out, config.total_load_kw(h, month, p["date"]) * slot_duration_h)
+                export_ore = max(0, spot_ore * config.export_price_factor - config.export_fee_ore)
+                tranches = [[total_ore, own], [export_ore, max_out - own]]
             else:
-                break  # No more profitable cycles
+                tranches = [[total_ore, max_out]]
+            discharge_tranches.append([tr for tr in tranches if tr[1] > 0.001])
 
-        # Fallback: if no profitable cycles found, use simple cheapest/expensive split
-        if not charge_indices:
-            for idx, total_ore, spot_ore, grid_ore, solar_surplus in sorted_by_cost[:n_slots // 4]:
-                h = int(day_prices[idx]["hour"].split(":")[0])
-                month = int(day_prices[idx]["date"].split("-")[1])
-                d_str = day_prices[idx]["date"]
-                if config.available_charge_kw(h, month, d_str) > 0.1:
-                    charge_indices.add(idx)
-            for idx, total_ore, spot_ore, grid_ore, solar_surplus in sorted_by_cost[-(n_slots // 4):]:
-                if idx not in charge_indices:
-                    discharge_indices.add(idx)
+        candidates = []  # (profit öre/kWh delivered, charge idx or -1, discharge idx, tranche)
+        for j in range(n_slots):
+            for t_idx, (v, _) in enumerate(discharge_tranches[j]):
+                candidates.append((v, -1, j, t_idx))
+                for i in range(j):
+                    if charge_room[i] <= 0:
+                        continue
+                    c = slot_cost_map[i][0]
+                    profit = v - c / config.efficiency
+                    if profit > min_absolute_spread and v > c * min_spread_factor:
+                        candidates.append((profit, i, j, t_idx))
+        candidates.sort(key=lambda x: x[0], reverse=True)
 
-        avg_total = sum(slot_discharge_value[idx] for idx, _, _, _, _ in slot_costs) / len(slot_costs) if slot_costs else 0
+        plan_charge = [0.0] * n_slots     # stored kWh from grid
+        plan_discharge = [0.0] * n_slots  # delivered kWh
+        for _, i, j, t_idx in candidates:
+            if plan_charge[j] > 0:
+                continue
+            tranche = discharge_tranches[j][t_idx]
+            dis_left = tranche[1]
+            if dis_left <= 0.001:
+                continue
+            if i < 0:
+                stored = min(level[j:])
+                e_out = min(dis_left, stored * config.efficiency)
+                if e_out > 0.001:
+                    plan_discharge[j] += e_out
+                    tranche[1] -= e_out
+                    for k in range(j, n_slots):
+                        level[k] -= e_out / config.efficiency
+                continue
+            if plan_discharge[i] > 0:
+                continue
+            room = usable - max(level[i:j])
+            e_in = min(charge_room[i] - plan_charge[i], room, dis_left / config.efficiency)
+            if e_in > 0.001:
+                plan_charge[i] += e_in
+                plan_discharge[j] += e_in * config.efficiency
+                tranche[1] -= e_in * config.efficiency
+                for k in range(i, j):
+                    level[k] += e_in
 
         # Track daily flexible load energy
         flex_daily_used: dict[str, float] = {fl.name: 0.0 for fl in config.flexible_loads}
@@ -544,7 +527,7 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
         for i, row in enumerate(day_prices):
             spot_ore = float(row["sek_per_kwh"]) * 100
             grid_ore = tariff.total_cost_ore(row["date"], row["hour"]) if tariff else 0
-            total_ore = spot_ore + grid_ore
+            total_ore = spot_ore * config.spot_vat_factor + grid_ore
             h = int(row["hour"].split(":")[0])
             month = int(row["date"].split("-")[1])
             date_str = row["date"]
@@ -590,12 +573,12 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
                 grid_export_kwh = 0.0
 
             # --- Step 2: Grid charge during cheap slots (if room left) ---
-            if i in charge_indices and total_ore < avg_total:
+            if plan_charge[i] > 0.001:
                 grid_charge_kw = config.available_charge_kw(h, month, date_str)
                 # Reduce grid charge by any solar already charging
                 if solar_charge_kwh > 0:
                     grid_charge_kw = max(0, grid_charge_kw - solar_charge_kwh / slot_duration_h)
-                max_energy = grid_charge_kw * slot_duration_h
+                max_energy = min(plan_charge[i], grid_charge_kw * slot_duration_h)
                 room = (config.capacity_kwh * config.max_soc) - soc
                 energy = min(max_energy, room)
                 if energy > 0.001:
@@ -622,8 +605,8 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
                     continue
 
             # --- Step 3: Discharge during expensive slots ---
-            if i in discharge_indices and slot_discharge_value.get(i, total_ore) > avg_total:
-                max_energy = config.max_discharge_kw * slot_duration_h
+            if plan_discharge[i] > 0.001:
+                max_energy = min(plan_discharge[i], config.max_discharge_kw * slot_duration_h)
                 available = soc - (config.capacity_kwh * config.min_soc)
                 deliverable = available * config.efficiency
                 energy_out = min(max_energy, deliverable)
@@ -687,6 +670,34 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
             ))
 
     return result
+
+
+def to_hourly(prices: list[dict]) -> list[dict]:
+    """Average sub-hourly (15-min) price rows to one row per hour.
+
+    Hourly rows pass through unchanged, so mixed series are handled per hour.
+    """
+    groups: dict[tuple[str, str], list[dict]] = {}
+    for row in prices:
+        key = (row["date"], row["hour"][:2])
+        groups.setdefault(key, []).append(row)
+    if len(groups) == len(prices):
+        return prices
+    out = []
+    for (d, hh), rows in groups.items():
+        if len(rows) == 1:
+            out.append(rows[0])
+            continue
+        merged = dict(rows[0])
+        merged["hour"] = f"{hh}:00"
+        for col in ("sek_per_kwh", "eur_per_kwh", "ore_per_kwh"):
+            if col in merged:
+                try:
+                    merged[col] = round(sum(float(r[col]) for r in rows) / len(rows), 5)
+                except (TypeError, ValueError):
+                    pass
+        out.append(merged)
+    return out
 
 
 def _detect_slot_duration(prices: list[dict]) -> float:

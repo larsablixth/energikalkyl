@@ -15,11 +15,13 @@ import io
 import json
 import os
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 PVGIS_API = "https://re.jrc.ec.europa.eu/api/v5_3/seriescalc"
 CACHE_DIR = Path(__file__).parent / ".pvgis_cache"
+_STOCKHOLM = ZoneInfo("Europe/Stockholm")
 
 
 def fetch_pvgis(lat: float, lon: float, peakpower: float = 10.0,
@@ -97,8 +99,10 @@ def _parse_pvgis_csv(raw: str) -> list[dict]:
         # Parse timestamp: YYYYMMDD:HHMM
         ts_str = parts[0]
         try:
-            # The :11 suffix means mid-point of hour — we use the hour start
-            dt = datetime.strptime(ts_str[:11], "%Y%m%d:%H")
+            # The :11 suffix means mid-point of hour — we use the hour start.
+            # PVGIS timestamps are UTC; prices and loads use Swedish local time.
+            dt = (datetime.strptime(ts_str[:11], "%Y%m%d:%H")
+                  .replace(tzinfo=timezone.utc).astimezone(_STOCKHOLM))
         except ValueError:
             continue
 
@@ -145,7 +149,8 @@ def pvgis_to_monthly_kwh(records: list[dict]) -> dict[int, float]:
 def _cache_path(lat, lon, peakpower, loss, angle, aspect, startyear, endyear) -> Path:
     """Generate cache filename from parameters."""
     key = f"{lat:.2f}_{lon:.2f}_{peakpower}kWp_{loss}loss_{angle}deg_{aspect}az_{startyear}-{endyear}"
-    return CACHE_DIR / f"pvgis_{key}.json"
+    # v2: hours converted from UTC to local time (older caches are UTC)
+    return CACHE_DIR / f"pvgis_v2_{key}.json"
 
 
 def _save_cache(path: Path, records: list[dict]):

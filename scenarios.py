@@ -29,6 +29,8 @@ from collections import defaultdict
 from statistics import median, mean
 from typing import Callable
 
+from batteri import to_hourly
+
 
 @dataclass
 class YearlyScenario:
@@ -110,7 +112,8 @@ def run_yearly_scenarios(
 
     results: list[YearlyScenario] = []
     for y in sorted(by_year):
-        year_prices = by_year[y]
+        # Hourly averages, so quarter-hour rows (from Oct 2025) don't weigh 4x
+        year_prices = to_hourly(by_year[y])
         unique_days = {p["date"] for p in year_prices}
         num_days = len(unique_days)
         if num_days < 180:

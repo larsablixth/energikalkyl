@@ -20,8 +20,8 @@ from pathlib import Path
 
 def detect_csv_format(content: str) -> dict:
     """Detect delimiter, decimal separator, and encoding of a CSV."""
-    first_lines = content.split("\n")[:5]
-    header = first_lines[0] if first_lines else ""
+    lines = content.split("\n")
+    header = lines[0] if lines else ""
 
     # Detect delimiter
     if ";" in header:
@@ -31,22 +31,60 @@ def detect_csv_format(content: str) -> dict:
     else:
         delimiter = ","
 
-    # Detect decimal separator (look for numbers with comma)
+    # Detect decimal separator (look for numbers with comma) — scan the whole
+    # file, a "1,5" row may appear far below rows of integers like "0" or "2".
     has_comma_decimal = False
-    for line in first_lines[1:]:
+    for line in lines[1:]:
         fields = line.split(delimiter)
         for f in fields:
             f = f.strip().strip('"')
+            for ch in (" ", "\xa0", "\u202f"):
+                f = f.replace(ch, "")
             # Pattern like "1,234" or "0,5" (not "1,234,567")
             if "," in f and f.replace(",", "").replace(".", "").replace("-", "").isdigit():
                 parts = f.split(",")
                 if len(parts) == 2 and len(parts[1]) <= 4:
                     has_comma_decimal = True
+                    break
+        if has_comma_decimal:
+            break
 
     return {
         "delimiter": delimiter,
         "comma_decimal": has_comma_decimal,
     }
+
+
+def parse_number(value: str, comma_decimal: bool = False, delimiter: str = ";") -> float | None:
+    """Parse a numeric CSV cell tolerantly. Returns None if not a number.
+
+    Handles Swedish formats: "1,5", "1 234,5" (space/nbsp thousands
+    separators), "1.234,5", as well as English "1,234.5" and "1.5".
+    A lone comma is treated as decimal separator when the file uses comma
+    decimals or when ',' is not the field delimiter.
+    """
+    s = value.strip().strip('"').strip()
+    for ch in (" ", "\xa0", "\u202f", "'"):
+        s = s.replace(ch, "")
+    if not s or s == "-":
+        return None
+    if "," in s and "." in s:
+        # Whichever separator comes last is the decimal separator
+        if s.rfind(",") > s.rfind("."):
+            s = s.replace(".", "").replace(",", ".")
+        else:
+            s = s.replace(",", "")
+    elif "," in s:
+        if comma_decimal or delimiter != "," or s.count(",") == 1 and len(s.split(",")[1]) != 3:
+            if s.count(",") > 1:
+                return None
+            s = s.replace(",", ".")
+        else:
+            s = s.replace(",", "")
+    try:
+        return float(s)
+    except ValueError:
+        return None
 
 
 def parse_consumption_csv(content: str, filename: str = "") -> list[dict]:
@@ -149,14 +187,8 @@ def parse_consumption_csv(content: str, filename: str = "") -> list[dict]:
             continue  # Skip unparseable rows
 
         # Parse consumption
-        cons_str = row[consumption_col].strip().strip('"')
-        if not cons_str or cons_str == "-":
-            continue
-        if comma_decimal:
-            cons_str = cons_str.replace(",", ".")
-        try:
-            consumption = float(cons_str)
-        except ValueError:
+        consumption = parse_number(row[consumption_col], comma_decimal, delimiter)
+        if consumption is None:
             continue
 
         results.append({

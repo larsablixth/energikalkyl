@@ -253,8 +253,8 @@ def main():
                        help="Tidstariff: övrig tid öre/kWh (default: 30.50)")
     p_bat.add_argument("--fast-avgift", type=float, default=44.50,
                        help="Enkeltariff överföringsavgift öre/kWh (default: 44.50)")
-    p_bat.add_argument("--energiskatt", type=float, default=54.88,
-                       help="Energiskatt inkl. moms öre/kWh (default: 54.88)")
+    p_bat.add_argument("--energiskatt", type=float, default=45.0,
+                       help="Energiskatt inkl. moms öre/kWh (default: 45.0, 2026)")
     p_bat.add_argument("--nuvarande-säkring", type=float, default=None, choices=[16, 20, 25, 35, 50, 63],
                        help="Nuvarande säkring innan uppgradering (för att beräkna merkostnad)")
 
@@ -361,7 +361,7 @@ def main():
                 consumption_to_load_profile, print_load_profile
             print(f"Hämtar {args.tibber} timmar förbrukningsdata från Tibber...")
             nodes = fetch_consumption(hours=args.tibber)
-            rows = consumption_to_rows(nodes)
+            rows = consumption_to_rows(nodes, zone=args.zon)
             profile = consumption_to_load_profile(nodes)
             print_load_profile(profile)
         else:

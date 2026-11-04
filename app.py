@@ -55,6 +55,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import json
+import math
 from datetime import date, timedelta
 from elpriser import fetch_range, load_csv, ZONES, ZONE_NAMES
 from batteri import BatteryConfig, LoadSchedule, FlexibleLoad, simulate
@@ -74,7 +75,7 @@ from weather import (
 )
 from report import generate_report
 from app_state import save_state, load_state
-from translations import t, set_language, get_language
+from translations import t, set_language, get_language, STRINGS
 
 st.set_page_config(page_title="Energikalkyl", page_icon="⚡", layout="wide")
 
@@ -84,14 +85,36 @@ _lang_options = {"Svenska": "sv", "English": "en"}
 _lang_display = list(_lang_options.keys())
 _saved_lang = st.session_state.get("app_language", "sv")
 _lang_default = 0 if _saved_lang == "sv" else 1
+
+# Choice widgets whose option LABELS are translated (format_func) store their value as the
+# formatted label in the browser, so a language switch would reset them to the default.
+# Re-assigning their (language-independent) values in the on_change callback keeps them.
+_LANG_STABLE_KEYS = ("price_src_key", "solar_source_key", "fuse_overcurrent", "energy_class",
+                     "aa_model_key", "pricing_mode_key", "finance")
+
+
+def _on_language_change():
+    for _k in list(st.session_state.keys()):
+        if _k in _LANG_STABLE_KEYS or str(_k).startswith("heating_type_"):
+            st.session_state[_k] = st.session_state[_k]
+    # The battery price table's translated column labels are part of its identity, so its
+    # edits would be lost: seed the editor with the last edited table instead.
+    if st.session_state.get("_bt_last") is not None:
+        st.session_state["_bt_seed"] = st.session_state["_bt_last"]
+        st.session_state["_bt_seed_eur"] = st.session_state.get("eur_sek_rate")
+        st.session_state.pop("battery_table", None)
+
+
 _selected_lang = st.selectbox(t("language"), _lang_display, index=_lang_default,
-                               key="lang_select", label_visibility="collapsed")
+                               key="lang_select", label_visibility="collapsed",
+                               on_change=_on_language_change)
 st.session_state["app_language"] = _lang_options[_selected_lang]
 set_language(st.session_state["app_language"])
 
-# Restore persisted state on first load.
-# This means your consumption data, prices, and settings survive page refreshes.
-# Data is saved as JSON files in the .app_state/ directory.
+# Restore persisted state on first load — ONLY when ENERGIKALKYL_PERSIST=1
+# (single-user self-hosted/Docker). On a public deployment every visitor has
+# their own st.session_state and nothing is written to or read from disk, so
+# one visitor can never see another visitor's data.
 if "_state_restored" not in st.session_state:
     if load_state(st.session_state):
         st.session_state["_state_restored"] = "loaded"
@@ -137,10 +160,19 @@ with col_consumption:
                                              placeholder=t("tibber_token_placeholder"),
                                              help=t("tibber_token_help"))
         st.caption(t("tibber_token_security"))
-        if _tibber_token_input:
-            import os
-            os.environ["TIBBER_TOKEN"] = _tibber_token_input
-        if st.button(t("fetch_data"), type="primary"):
+        # The token stays in this visitor's st.session_state only and is passed explicitly
+        # to every Tibber call. NEVER put it in os.environ or on disk: the process (and its
+        # environment) is shared by all concurrent visitors.
+        _tibber_token = _tibber_token_input.strip() or None
+        # Without an entered token, tibber_source falls back to TIBBER_TOKEN /
+        # .tibber_token on the server. Only allow that on a self-hosted
+        # install, never on the shared public deployment.
+        from app_state import persistence_enabled as _local_install
+        _token_missing = _tibber_token is None and not _local_install()
+        _fetch_pressed = st.button(t("fetch_data"), type="primary")
+        if _fetch_pressed and _token_missing:
+            st.error(t("tibber_token_required"))
+        if _fetch_pressed and not _token_missing:
             with st.spinner(t("fetching_tibber")):
                 try:
                     from tibber_source import (
@@ -150,7 +182,7 @@ with col_consumption:
                         production_to_hourly_dict, production_to_monthly_kwh,
                     )
                     # Fetch home info (address, grid company, fuse, house size, heating)
-                    homes = get_homes()
+                    homes = get_homes(token=_tibber_token)
                     if homes:
                         home = homes[0]
                         addr = home.get("address", {})
@@ -164,7 +196,7 @@ with col_consumption:
                         # Extended home data
                         try:
                             from tibber_source import _get_token, _query
-                            token = _get_token()
+                            token = _tibber_token or _get_token()
                             hq = ('{viewer{homes{'
                                   'meteringPointData{gridCompany priceAreaCode estimatedAnnualConsumption}'
                                   ' mainFuseSize size numberOfResidents primaryHeatingSource'
@@ -183,18 +215,19 @@ with col_consumption:
                             tibber_home["grid_company"] = ""
                         st.session_state["tibber_home"] = tibber_home
 
-                    nodes = fetch_consumption(hours=24*30)
+                    nodes = fetch_consumption(hours=24*30, token=_tibber_token)
                     profile = consumption_to_load_profile(nodes)
                     st.session_state["hourly_profile"] = profile
-                    monthly = fetch_monthly_consumption(months=36)
+                    monthly = fetch_monthly_consumption(months=36, token=_tibber_token)
                     if len(monthly) >= 6:
                         seasonal = build_seasonal_hourly_profile(nodes, monthly)
                         st.session_state["seasonal_profile"] = seasonal
 
                     # Fetch solar production data if available
                     try:
-                        prod_hourly = fetch_production(hours=24*30)
-                        prod_daily = fetch_daily_production(days=365*3) if prod_hourly else []
+                        prod_hourly = fetch_production(hours=24*30, token=_tibber_token)
+                        prod_daily = (fetch_daily_production(days=365*3, token=_tibber_token)
+                                      if prod_hourly else [])
                         if prod_hourly:
                             st.session_state["tibber_solar_hourly"] = production_to_hourly_dict(prod_hourly)
                             # Use daily data for monthly averages (longer history)
@@ -263,12 +296,20 @@ with col_consumption:
         st.caption(t("upload_caption"))
         cons_files = st.file_uploader(t("consumption_data"), type=["csv", "txt", "xlsx", "xls"],
                                        accept_multiple_files=True, key="cons_upload")
-        if cons_files:
+        # Parse each set of uploaded files only ONCE (not on every rerun): key on file ids.
+        _cons_sig = tuple((getattr(f, "file_id", None) or f.name, f.size) for f in cons_files) if cons_files else None
+        if not cons_files:
+            st.session_state.pop("_cons_upload_sig", None)
+        if cons_files and st.session_state.get("_cons_upload_sig") != _cons_sig:
+            st.session_state["_cons_upload_sig"] = _cons_sig
             try:
                 import tempfile, os
-                # Clear previous data to avoid mixing old + new
-                for _clear_key in ["seasonal_profile", "vattenfall_hourly", "hourly_profile"]:
-                    st.session_state.pop(_clear_key, None)
+                # Clear previous *uploaded* data to avoid mixing old + new uploads.
+                # Tibber data (hourly_profile / seasonal_profile from Tibber) is kept unless
+                # the new upload replaces it below.
+                st.session_state.pop("vattenfall_hourly", None)
+                if st.session_state.pop("_seasonal_from_upload", False):
+                    st.session_state.pop("seasonal_profile", None)
                 all_vf = []
                 all_csv = []
                 for f in cons_files:
@@ -314,6 +355,7 @@ with col_consumption:
                         # Use real hourly data — best quality
                         seasonal = vattenfall_hourly_to_seasonal_profile(all_hourly)
                         st.session_state["seasonal_profile"] = seasonal
+                        st.session_state["_seasonal_from_upload"] = True
                         st.session_state["vattenfall_hourly"] = all_hourly
                         days = len(set(h["date"] for h in all_hourly))
                         total = sum(h["kwh"] for h in all_hourly)
@@ -329,6 +371,7 @@ with col_consumption:
                         hourly_shape = st.session_state.get("hourly_profile")
                         seasonal = vattenfall_to_seasonal_profile(unique, hourly_shape)
                         st.session_state["seasonal_profile"] = seasonal
+                        st.session_state["_seasonal_from_upload"] = True
                         total = sum(r["consumption_kwh"] for r in unique)
                         avg = total / len(unique)
                         st.success(t("daily_data_loaded").format(
@@ -343,6 +386,7 @@ with col_consumption:
                         seasonal = {m: {h: profile[h] * (monthly[m]/base if base > 0 and monthly[m] > 0 else 1)
                                         for h in range(24)} for m in range(1, 13)}
                         st.session_state["seasonal_profile"] = seasonal
+                        st.session_state["_seasonal_from_upload"] = True
                     st.success(t("csv_data_loaded").format(count=len(all_csv)))
             except Exception as e:
                 st.error(t("import_error").format(error=e))
@@ -382,19 +426,37 @@ with col_prices:
     if _tibber_city.lower() in _se4_cities:
         _default_zone_idx = 3  # SE4
 
-    price_source = st.radio(t("source"), [t("fetch_api"), t("load_csv")], key="price_src",
+    # Language-independent option keys (labels via format_func) so the choice
+    # survives a language switch and comparisons don't depend on translated text.
+    _price_src_labels = {"api": "fetch_api", "csv": "load_csv"}
+    price_source = st.radio(t("source"), list(_price_src_labels), key="price_src_key",
+                             format_func=lambda k: t(_price_src_labels[k]),
                              help=t("price_source_help"))
 
-    if price_source == t("load_csv"):
+    df_prices = st.session_state.get("df_prices")
+    if price_source == "csv":
         price_file = st.file_uploader(t("price_csv_label"), type=["csv"], key="price_csv",
                                        help=t("price_csv_help"))
         if price_file:
-            df_prices = pd.read_csv(price_file)
-            st.session_state["df_prices"] = df_prices
-        else:
-            df_prices = st.session_state.get("df_prices")
+            try:
+                _df_up = pd.read_csv(price_file)
+                if "sek_per_kwh" not in _df_up.columns and "ore_per_kwh" in _df_up.columns:
+                    _df_up["sek_per_kwh"] = pd.to_numeric(_df_up["ore_per_kwh"], errors="coerce") / 100
+                if "ore_per_kwh" not in _df_up.columns and "sek_per_kwh" in _df_up.columns:
+                    _df_up["ore_per_kwh"] = pd.to_numeric(_df_up["sek_per_kwh"], errors="coerce") * 100
+                _missing = [c for c in ("date", "hour", "sek_per_kwh") if c not in _df_up.columns]
+                if _missing or len(_df_up) == 0:
+                    raise ValueError(t("price_csv_missing_cols").format(
+                        cols=", ".join(_missing) or "-"))
+                _df_up["date"] = _df_up["date"].astype(str)
+                _df_up["hour"] = _df_up["hour"].astype(str)
+                df_prices = _df_up
+                st.session_state["df_prices"] = df_prices
+            except Exception as e:
+                st.error(t("price_csv_error").format(error=e))
     else:
         zone = st.selectbox(t("price_zone"), ZONES, index=_default_zone_idx,
+                            key=f"price_zone_{_default_zone_idx}",
                             format_func=lambda z: f"{z} — {ZONE_NAMES[z]}")
         # Auto-detect date range from loaded consumption data
         _vf_hourly = st.session_state.get("vattenfall_hourly", [])
@@ -408,20 +470,31 @@ with col_prices:
             _default_end = date.today() - timedelta(days=1)
 
         col_d1, col_d2 = st.columns(2)
-        start_date = col_d1.date_input(t("from_date"), value=_default_start)
-        end_date = col_d2.date_input(t("to_date"), value=_default_end)
+        start_date = col_d1.date_input(t("from_date"), value=_default_start,
+                                        key=f"price_start_{_default_start}")
+        end_date = col_d2.date_input(t("to_date"), value=_default_end,
+                                      key=f"price_end_{_default_end}")
         if _vf_hourly:
             st.caption(t("date_range_synced").format(start=_vf_dates[0], end=_vf_dates[-1]))
         if st.button(t("fetch_prices"), type="primary"):
-            with st.spinner(t("fetching_prices")):
-                rows = fetch_range(start_date, end_date, zone)
-                if rows:
-                    df_prices = pd.DataFrame(rows)
-                    st.session_state["df_prices"] = df_prices
-                else:
-                    st.error(t("no_prices_found"))
-        else:
-            df_prices = st.session_state.get("df_prices")
+            # Day-ahead prices exist at most for tomorrow
+            _latest = date.today() + timedelta(days=1)
+            if start_date > end_date:
+                st.error(t("price_range_invalid"))
+            elif start_date > _latest:
+                st.error(t("price_range_future"))
+            else:
+                with st.spinner(t("fetching_prices")):
+                    try:
+                        rows = fetch_range(start_date, min(end_date, _latest), zone)
+                    except Exception as e:
+                        rows = []
+                        st.error(f"{t('no_prices_found')} ({e})")
+                    if rows:
+                        df_prices = pd.DataFrame(rows)
+                        st.session_state["df_prices"] = df_prices
+                    else:
+                        st.error(t("no_prices_found"))
 
     if df_prices is not None and len(df_prices) > 0:
         for col in ["sek_per_kwh", "ore_per_kwh"]:
@@ -434,7 +507,8 @@ with col_prices:
         st.warning(t("load_prices_warning"))
 
 # --- Data status summary ---
-# Persist loaded data so it survives page refresh (may fail on cloud deployments)
+# Persist loaded data to local disk ONLY when ENERGIKALKYL_PERSIST=1 (single-user
+# self-hosted). Off by default: on shared/public servers state lives in the session only.
 try:
     save_state(st.session_state)
 except (OSError, IOError):
@@ -550,16 +624,16 @@ col_sys1, col_sys2, col_sys3 = st.columns(3)
 
 with col_sys1:
     st.subheader(t("battery"))
-    efficiency = st.slider(t("efficiency"), 70, 100, 93, help=t("efficiency_help")) / 100
+    efficiency = st.slider(t("efficiency"), 70, 100, 93, key="efficiency", help=t("efficiency_help")) / 100
     cycle_life = st.number_input(t("cycle_life"), value=8000, min_value=100, step=500,
-                                  help=t("cycle_life_help"))
+                                  key="cycle_life", help=t("cycle_life_help"))
 
 with col_sys2:
     st.subheader(t("solar_panels"))
-    use_solar = st.checkbox(t("solar_panels"), value=True)
+    use_solar = st.checkbox(t("solar_panels"), value=True, key="use_solar")
     if use_solar:
-        solar_kwp = st.number_input(t("system_kwp"), value=15.0, min_value=0.0, step=0.5)
-        _zero_export = st.checkbox(t("zero_export_label"), value=True,
+        solar_kwp = st.number_input(t("system_kwp"), value=15.0, min_value=0.0, step=0.5, key="solar_kwp")
+        _zero_export = st.checkbox(t("zero_export_label"), value=True, key="zero_export",
                                     help=t("zero_export_help"))
         if _zero_export:
             export_factor = 0.0
@@ -567,19 +641,22 @@ with col_sys2:
             _export_arb_kwh = 0.0
         else:
             export_factor = st.number_input(t("export_price"), value=1.0, min_value=0.0, max_value=1.5, step=0.05,
-                                            help=t("export_price_help"))
+                                            key="export_factor", help=t("export_price_help"))
             export_fee = st.number_input(t("export_fee"), value=5.0, min_value=0.0, step=1.0,
-                                          help=t("export_fee_help"))
+                                          key="export_fee", help=t("export_fee_help"))
             _export_arb_kwh = st.number_input(
-                t("export_arb_label"), value=0.0, min_value=0.0, step=10.0,
+                t("export_arb_label"), value=0.0, min_value=0.0, step=10.0, key="export_arb_kwh",
                 help=t("export_arb_help"))
         # --- Solar production data sources ---
-        _solar_source = st.radio(t("solar_data"), [t("solar_model"), t("solar_pvgis"), t("solar_csv")],
+        _solar_src_labels = {"model": "solar_model", "pvgis": "solar_pvgis", "csv": "solar_csv"}
+        _solar_source = st.radio(t("solar_data"), list(_solar_src_labels),
+                                  format_func=lambda k: t(_solar_src_labels[k]),
                                   index=1 if not st.session_state.get("tibber_solar_monthly") else 0,
-                                  horizontal=True, key="solar_source",
+                                  horizontal=True, key="solar_source_key",
                                   help=t("solar_data_help"))
+        _pvgis_tilt, _pvgis_aspect = None, None
 
-        if _solar_source == t("solar_pvgis"):
+        if _solar_source == "pvgis":
             from weather import SWEDISH_CITIES
             _th = st.session_state.get("tibber_home", {})
             _pvgis_lat = _th.get("latitude", 0)
@@ -612,7 +689,7 @@ with col_sys2:
                     except Exception as e:
                         st.error(t("pvgis_error").format(error=e))
 
-        elif _solar_source == t("solar_csv"):
+        elif _solar_source == "csv":
             solar_csv = st.file_uploader(t("solar_production_csv"), type=["csv", "txt"],
                                           key="solar_csv_upload",
                                           help=t("solar_csv_help"))
@@ -640,7 +717,7 @@ with col_sys2:
                     st.error(t("solar_import_error").format(error=e))
 
         _has_real_solar = bool(st.session_state.get("tibber_solar_monthly"))
-        _use_real_solar = _has_real_solar and _solar_source != t("solar_model")
+        _use_real_solar = _has_real_solar and _solar_source != "model"
         if solar_kwp > 0:
             solar_config = SolarConfig(capacity_kwp=solar_kwp)
             if _use_real_solar:
@@ -648,8 +725,7 @@ with col_sys2:
                 solar_config.real_monthly_kwh = st.session_state.get("tibber_solar_monthly")
                 monthly_kwh = solar_config.real_monthly_kwh
                 yearly = sum(monthly_kwh.values())
-                _src_label = {t("solar_pvgis"): "PVGIS", t("solar_csv"): "CSV"}.get(
-                    _solar_source, "Tibber")
+                _src_label = {"pvgis": "PVGIS", "csv": "CSV"}.get(_solar_source, "Tibber")
                 st.caption(t("solar_source_comparison").format(
                     src=_src_label, yearly=f"{yearly:,.0f}",
                     model=f"{sum(MONTHLY_KWH_PER_KWP.values()) * solar_kwp * 0.85:,.0f}"))
@@ -658,6 +734,8 @@ with col_sys2:
     else:
         solar_config = None
         solar_kwp = 0
+        _solar_source = None
+        _pvgis_tilt, _pvgis_aspect = None, None
         export_factor = 0.0
         export_fee = 0.0
         _export_arb_kwh = 0.0
@@ -675,7 +753,7 @@ with col_sys3:
                 _op_default = i
                 break
     grid_operator = st.selectbox(t("grid_operator"), _op_names, index=_op_default,
-                                  help=t("grid_operator_help"))
+                                  key=f"grid_operator_{_op_default}", help=t("grid_operator_help"))
     op_info = GRID_OPERATORS[grid_operator]
     op_fuse_fees = get_operator_fuse_fees(grid_operator)
     fuse_options = sorted(op_fuse_fees.keys())
@@ -687,19 +765,20 @@ with col_sys3:
     fuse_amps = st.selectbox(t("fuse_size"), fuse_options,
                               index=fuse_options.index(_fuse_default) if _fuse_default in fuse_options else 0,
                               format_func=lambda a: f"{a:.0f}A — {op_fuse_fees[a]:,.0f} kr/år",
-                              help=t("fuse_help"))
-    phases = st.selectbox(t("phases"), [3, 1], index=0)
+                              key=f"fuse_amps_{grid_operator}_{_fuse_default}", help=t("fuse_help"))
+    phases = st.selectbox(t("phases"), [3, 1], index=0, key="phases")
     with st.expander(t("fuse_overcurrent_header"), expanded=False):
         st.caption(t("fuse_overcurrent_caption"))
         _overcurrent_options = {
-            t("fuse_oc_nominal"): 0.0,
-            t("fuse_oc_safe"): 0.25,
-            t("fuse_oc_aggressive"): 0.60,
+            "fuse_oc_nominal": 0.0,
+            "fuse_oc_safe": 0.25,
+            "fuse_oc_aggressive": 0.60,
         }
         _oc_label = st.radio(
             t("fuse_overcurrent_label"),
             list(_overcurrent_options.keys()),
-            index=0,
+            format_func=t,
+            index=0, key="fuse_overcurrent",
             help=t("fuse_overcurrent_help"),
         )
         fuse_overcurrent_factor = _overcurrent_options[_oc_label]
@@ -707,7 +786,7 @@ with col_sys3:
             _eff_amps = fuse_amps * (1.0 + fuse_overcurrent_factor)
             st.warning(t("fuse_overcurrent_warning").format(
                 fuse=fuse_amps, factor=1.0 + fuse_overcurrent_factor, effective=_eff_amps))
-    energy_tax = st.number_input(t("energy_tax"), value=45.0, step=0.1,
+    energy_tax = st.number_input(t("energy_tax"), value=45.0, step=0.1, key="energy_tax",
                                   help=t("energy_tax_help"))
     available_tariffs = op_info["tariffs"]
     has_effekt = "Effekttariff" in available_tariffs and op_info.get("effekttariff")
@@ -723,8 +802,10 @@ with col_sys3:
             _tid = op_info["tidstariff"]
             st.markdown(t("tidstariff_label"))
             st.caption(t("tidstariff_caption"))
-            peak_rate = st.number_input(t("peak_rate_label"), value=_tid["peak"], step=0.5)
-            offpeak_rate = st.number_input(t("offpeak_rate_label"), value=_tid["offpeak"], step=0.5)
+            peak_rate = st.number_input(t("peak_rate_label"), value=_tid["peak"], step=0.5,
+                                        key=f"peak_rate_{grid_operator}")
+            offpeak_rate = st.number_input(t("offpeak_rate_label"), value=_tid["offpeak"], step=0.5,
+                                           key=f"offpeak_rate_{grid_operator}")
         else:
             peak_rate = 76.5
             offpeak_rate = 30.5
@@ -732,7 +813,8 @@ with col_sys3:
             _enkel = op_info["enkeltariff"]
             st.markdown(t("enkeltariff_label"))
             st.caption(t("enkeltariff_caption"))
-            flat_rate = st.number_input(t("flat_rate_label"), value=_enkel["flat_rate"], step=0.5)
+            flat_rate = st.number_input(t("flat_rate_label"), value=_enkel["flat_rate"], step=0.5,
+                                        key=f"flat_rate_{grid_operator}")
         else:
             flat_rate = 44.5
         if has_effekt:
@@ -743,9 +825,12 @@ with col_sys3:
                 if eff.get("peak_weekday_only") else t("effekt_peak_alldays"))
             _night_desc = t("effekt_night_discount").format(pct=eff.get('night_discount', 1)*100) if eff.get("night_discount", 1) < 1 else ""
             st.caption(t("effekt_caption").format(top_n=eff['top_n_peaks'], peak_desc=_peak_desc, night_desc=_night_desc))
-            effekt_rate = st.number_input(t("effekt_rate_label"), value=eff["effekt_rate"], step=1.0)
-            effekt_energy = st.number_input(t("effekt_energy_label"), value=eff["energy_rate"], step=0.5)
-            effekt_top_n = st.number_input(t("effekt_top_n_label"), value=eff["top_n_peaks"], min_value=1, max_value=10)
+            effekt_rate = st.number_input(t("effekt_rate_label"), value=eff["effekt_rate"], step=1.0,
+                                          key=f"effekt_rate_{grid_operator}")
+            effekt_energy = st.number_input(t("effekt_energy_label"), value=eff["energy_rate"], step=0.5,
+                                            key=f"effekt_energy_{grid_operator}")
+            effekt_top_n = st.number_input(t("effekt_top_n_label"), value=eff["top_n_peaks"], min_value=1, max_value=10,
+                                           key=f"effekt_top_n_{grid_operator}")
         st.markdown("---")
         monthly_fee = op_fuse_fees.get(fuse_amps, 0) / 12
         st.caption(t("tariff_summary").format(tax=energy_tax, fuse=f"{fuse_amps:.0f}", monthly=f"{monthly_fee:,.0f}", yearly=f"{op_fuse_fees.get(fuse_amps, 0):,.0f}"))
@@ -769,7 +854,7 @@ col_l1, col_l2 = st.columns(2)
 
 with col_l1:
     if not (seasonal_load_profile or hourly_load_profile):
-        base_load = st.number_input(t("base_load"), value=1.5, min_value=0.0, step=0.5,
+        base_load = st.number_input(t("base_load"), value=1.5, min_value=0.0, step=0.5, key="base_load",
                                     help=t("base_load_help"))
     else:
         base_load = 1.5  # overridden by profile or heating model
@@ -869,7 +954,7 @@ if st.session_state.get("use_aa", False):
 # auto-calibrates h_loss (heat loss coefficient) to match your actual usage.
 # This is much more accurate than estimating from energy class + house area.
 st.subheader(t("heating_header"))
-use_heating_model = st.checkbox(t("heating_checkbox"), value=True,
+use_heating_model = st.checkbox(t("heating_checkbox"), value=True, key="use_heating_model",
                                  help=t("heating_checkbox_help"))
 daily_load_override = None
 heating_config = None
@@ -894,7 +979,7 @@ if use_heating_model:
     col_loc1, col_loc2 = st.columns([2, 3])
     with col_loc1:
         selected_city = st.selectbox(t("city_label"), city_names, index=_city_default,
-                                      help=t("city_help"))
+                                      key=f"city_{_city_default}", help=t("city_help"))
 
     # Use exact Tibber coordinates if available, otherwise city center
     if _tibber_lat and _tibber_lon and selected_city.lower() == _tibber_city.lower():
@@ -919,7 +1004,8 @@ if use_heating_model:
             default_key = f"{station_name} ({station_id})"
             selected_station = st.selectbox(t("station_label"), list(station_options.keys()),
                                              index=list(station_options.keys()).index(default_key)
-                                             if default_key in station_options else 0)
+                                             if default_key in station_options else 0,
+                                             key=f"station_{default_key}")
             station_id = station_options[selected_station]
             station_name = selected_station.split(" (")[0]
 
@@ -946,25 +1032,19 @@ if use_heating_model:
         _DHW_ANNUAL = 2190
         _VENT_ANNUAL = 750
 
-        _ENERGY_CLASSES = {
-            t("eclass_a"): 50,
-            t("eclass_b"): 63,
-            t("eclass_c"): 88,
-            t("eclass_d"): 115,
-            t("eclass_e"): 145,
-            t("eclass_f"): 175,
-            t("eclass_g"): 220,
-        }
+        # Keys are language-independent energy class letters; labels via format_func
+        _ENERGY_CLASSES = {"A": 50, "B": 63, "C": 88, "D": 115, "E": 145, "F": 175, "G": 220}
 
         col_house1, col_house2 = st.columns(2)
         with col_house1:
             energy_class = st.selectbox(t("energy_class_label"),
                                          list(_ENERGY_CLASSES.keys()), index=2,
-                                         help=t("energy_class_help"))
+                                         format_func=lambda k: t(f"eclass_{k.lower()}"),
+                                         key="energy_class", help=t("energy_class_help"))
             _tibber_size = st.session_state.get("tibber_home", {}).get("house_size", 0)
             _area_default = _tibber_size if _tibber_size > 0 else 150
             house_area = st.number_input(t("house_area_label"), value=_area_default, min_value=30, max_value=500, step=10,
-                                          help=t("house_area_help"))
+                                          key=f"house_area_{_area_default}", help=t("house_area_help"))
 
         # Derive h_loss: calibrated data wins over energy class estimate
         kwh_m2 = _ENERGY_CLASSES[energy_class]
@@ -994,19 +1074,21 @@ if use_heating_model:
                 _calibrated = True
 
         with col_house2:
-            _heating_options = [t("heating_ground"), t("heating_airsource"), t("heating_district"), t("heating_electric")]
+            # Language-independent option keys (translation keys), labels via format_func
+            _heating_options = ["heating_ground", "heating_airsource", "heating_district", "heating_electric"]
             _tibber_heat = st.session_state.get("tibber_home", {}).get("heating_source", "")
             _heat_map = {"GROUND": 0, "AIR2AIR": 1, "AIR2WATER": 1,
                           "DISTRICT": 2, "ELECTRIC": 3}
             _heat_default = _heat_map.get(_tibber_heat, 0)
             heating_type = st.selectbox(t("heating_label"), _heating_options, index=_heat_default,
+                                         format_func=t, key=f"heating_type_{_heat_default}",
                                          help=t("heating_type_help"))
 
-            if heating_type == t("heating_ground"):
+            if heating_type == "heating_ground":
                 cop_info = t("cop_ground")
-            elif heating_type == t("heating_airsource"):
+            elif heating_type == "heating_airsource":
                 cop_info = t("cop_airsource")
-            elif heating_type == t("heating_district"):
+            elif heating_type == "heating_district":
                 cop_info = t("cop_district")
             else:
                 cop_info = t("cop_electric")
@@ -1019,18 +1101,21 @@ if use_heating_model:
             if use_aa:
                 # Preset models
                 _AA_PRESETS = {
-                    "Mitsubishi Hero 2.0 LN25 (SCOP 5.2, A+++)": {
+                    "hero": {
+                        "label": "Mitsubishi Hero 2.0 LN25 (SCOP 5.2, A+++)",
                         "heat_kw": 3.2, "cool_kw": 2.5, "price": 30000,
                         "info": t("aa_preset_hero_info"),
                     },
-                    t("aa_preset_custom"): {
+                    "custom": {
+                        "label": t("aa_preset_custom"),
                         "heat_kw": 3.0, "cool_kw": 2.5, "price": 25000,
                         "info": t("aa_preset_custom_info"),
                     },
                 }
-                aa_model = st.selectbox(t("aa_model_label"), list(_AA_PRESETS.keys()), index=0, key="aa_model")
+                aa_model = st.selectbox(t("aa_model_label"), list(_AA_PRESETS.keys()), index=0,
+                                        format_func=lambda k: _AA_PRESETS[k]["label"], key="aa_model_key")
                 _aa_preset = _AA_PRESETS[aa_model]
-                _aa_custom = aa_model == t("aa_preset_custom")
+                _aa_custom = aa_model == "custom"
 
                 col_aa1, col_aa2, col_aa3 = st.columns(3)
                 with col_aa1:
@@ -1100,33 +1185,35 @@ if use_heating_model:
                 _hloss_help = (t("hloss_calibrated").format(value=h_loss_default)
                                if _calibrated else
                                t("hloss_estimated").format(value=h_loss_default))
+                # Default in the key: a new calibration must still override the widget
+                # (see CLAUDE.md "Calibrated h_loss must override energy class")
                 h_loss = st.number_input(t("hloss_label"), value=h_loss_default,
                                           min_value=0.01, max_value=1.5, step=0.001, format="%.3f",
-                                          help=_hloss_help)
+                                          key=f"h_loss_{h_loss_default}", help=_hloss_help)
                 if _calibrated:
                     st.caption(t("calibration_note"))
                 hp_max = st.number_input(t("hp_max_label"), value=_hp_max_default, min_value=1.0, step=0.5,
-                                          help=t("hp_max_help").format(hp_max=_hp_max_default, area=house_area))
+                                          key=f"hp_max_{_hp_max_default}", help=t("hp_max_help").format(hp_max=_hp_max_default, area=house_area))
             with col_h2:
                 elpatron_kw = st.number_input(t("elpatron_label"), value=3.0, min_value=0.0, step=0.5,
-                                               help=t("elpatron_help"))
+                                               key="elpatron_kw", help=t("elpatron_help"))
                 dhw_kwh = st.number_input(t("dhw_label"), value=_dhw_default, min_value=0.0, step=1.0,
-                                           help=t("dhw_help").format(dhw=_dhw_default, area=house_area))
+                                           key=f"dhw_kwh_{_dhw_default}", help=t("dhw_help").format(dhw=_dhw_default, area=house_area))
             with col_h3:
                 non_heat_base = st.number_input(t("base_no_heat_label"), value=_base_default, min_value=0.0,
-                                                 step=0.01, format="%.2f",
+                                                 step=0.01, format="%.2f", key=f"non_heat_base_{_base_default}",
                                                  help=t("base_no_heat_help").format(base=_base_default, area=house_area))
 
         st.caption(t("heating_summary_caption").format(
-            eclass=energy_class.split()[0], area=house_area, hloss=f"{h_loss:.3f}",
+            eclass=energy_class, area=house_area, hloss=f"{h_loss:.3f}",
             days=len(temps_data), start=min(temps_data.keys()), end=max(temps_data.keys())))
 
         # Adjust COP model for heating type
-        if heating_type == t("heating_airsource"):
+        if heating_type == "heating_airsource":
             cop_base, cop_slope = 2.8, 0.08  # worse at cold temps
-        elif heating_type == t("heating_district"):
+        elif heating_type == "heating_district":
             cop_base, cop_slope = 99.0, 0.0  # essentially free heating (no compressor)
-        elif heating_type == t("heating_electric"):
+        elif heating_type == "heating_electric":
             cop_base, cop_slope = 1.0, 0.0
         else:
             cop_base, cop_slope = 3.4, 0.056  # ground source default
@@ -1328,10 +1415,12 @@ st.header(t("step3_header"))
 
 # Battery pricing mode
 st.subheader(t("battery_prices"))
-_pricing_mode = st.radio(t("pricing_mode"), [t("specific_batteries"), t("sek_per_kwh_mode")],
-                          key="pricing_mode", horizontal=True)
+_pricing_mode_labels = {"table": "specific_batteries", "sek_kwh": "sek_per_kwh_mode"}
+_pricing_mode = st.radio(t("pricing_mode"), list(_pricing_mode_labels),
+                          format_func=lambda k: t(_pricing_mode_labels[k]),
+                          key="pricing_mode_key", horizontal=True)
 
-if _pricing_mode == t("sek_per_kwh_mode"):
+if _pricing_mode == "sek_kwh":
     st.caption(t("sek_kwh_caption"))
     col_sek1, col_sek2, col_sek3 = st.columns(3)
     with col_sek1:
@@ -1359,6 +1448,7 @@ if _pricing_mode == t("sek_per_kwh_mode"):
 
 else:
     st.caption(t("edit_table_caption"))
+    st.caption(t("nkon_vat_note"))
 
     EUR_SEK = st.number_input(t("eur_sek_rate"), value=11.5, min_value=5.0, max_value=20.0, step=0.1,
                                key="eur_sek_rate")
@@ -1374,23 +1464,28 @@ else:
         {"Namn": "3x32 kWh",    "Kapacitet_kWh": 96.45,  "Max_kW": 15.0, "Pris_SEK": round(2857 * 3 * EUR_SEK)},
     ])
 
+    if (st.session_state.get("_bt_seed") is not None
+            and st.session_state.get("_bt_seed_eur") == EUR_SEK):
+        default_batteries = st.session_state["_bt_seed"]  # edits kept across a language switch
+
     battery_table = st.data_editor(
         default_batteries,
         num_rows="dynamic",
         use_container_width=True,
         column_config={
-            "Namn": st.column_config.TextColumn("Namn"),
-            "Kapacitet_kWh": st.column_config.NumberColumn("Kapacitet (kWh)", min_value=0.1, format="%.2f"),
-            "Max_kW": st.column_config.NumberColumn("Max effekt (kW)", min_value=0.1, format="%.1f"),
-            "Pris_SEK": st.column_config.NumberColumn("Pris (SEK)", min_value=0, format="%d"),
+            "Namn": st.column_config.TextColumn(t("bt_col_name")),
+            "Kapacitet_kWh": st.column_config.NumberColumn(t("bt_col_capacity"), min_value=0.1, format="%.2f"),
+            "Max_kW": st.column_config.NumberColumn(t("bt_col_max_kw"), min_value=0.1, format="%.1f"),
+            "Pris_SEK": st.column_config.NumberColumn(t("bt_col_price"), min_value=0, format="%d"),
         },
         key="battery_table",
     )
+    st.session_state["_bt_last"] = battery_table[["Namn", "Kapacitet_kWh", "Max_kW", "Pris_SEK"]].copy()
 
     # Show kr/kWh for each row
     if len(battery_table) > 0:
         battery_table["kr_per_kWh"] = (battery_table["Pris_SEK"] / battery_table["Kapacitet_kWh"]).round(0)
-        st.caption("Pris per kWh: " + " | ".join(
+        st.caption(t("price_per_kwh_caption") + " " + " | ".join(
             f"{r['Namn']}: {r['kr_per_kWh']:.0f} kr/kWh" for _, r in battery_table.iterrows()
             if r["Kapacitet_kWh"] > 0))
 
@@ -1398,31 +1493,80 @@ else:
 col_i1, col_i2, col_i3 = st.columns(3)
 with col_i1:
     bat_install = st.number_input(t("battery_install"), value=10000, min_value=0, step=1000,
-                                   help=t("install_same_cost_help"))
+                                   key="bat_install", help=t("install_same_cost_help"))
 with col_i2:
     if use_solar:
         sol_price = st.number_input(t("solar_material"), value=48000, min_value=0, step=5000,
-                                    help=t("solar_material_help"))
+                                    key="sol_price", help=t("solar_material_help"))
         sol_install = st.number_input(t("solar_install"), value=0, min_value=0, step=5000,
-                                      help=t("solar_install_help"))
+                                      key="sol_install", help=t("solar_install_help"))
     else:
         sol_price = 0
         sol_install = 0
 with col_i3:
-    finance = st.radio(t("financing"), [t("own_capital"), t("mortgage"), t("other_loan")])
-    if finance == t("mortgage"):
-        loan_rate = st.number_input(t("mortgage_rate"), value=3.0, min_value=0.0, max_value=10.0, step=0.25)
-        loan_years = st.number_input(t("loan_term"), value=50, min_value=1, max_value=100, step=5)
+    # Option keys are translation keys (language-independent); labels via format_func
+    finance = st.radio(t("financing"), ["own_capital", "mortgage", "other_loan"],
+                       format_func=t, key="finance")
+    if finance == "mortgage":
+        loan_rate = st.number_input(t("mortgage_rate"), value=3.0, min_value=0.0, max_value=10.0, step=0.25,
+                                    key="mortgage_rate")
+        loan_years = st.number_input(t("loan_term"), value=50, min_value=1, max_value=100, step=5,
+                                     key="mortgage_years")
         st.caption(t("mortgage_caption"))
-    elif finance == t("other_loan"):
-        loan_rate = st.number_input(t("interest_rate"), value=5.0, min_value=0.0, step=0.5)
-        loan_years = st.number_input(t("loan_years"), value=10, min_value=1, step=1)
+    elif finance == "other_loan":
+        loan_rate = st.number_input(t("interest_rate"), value=5.0, min_value=0.0, step=0.5, key="loan_rate")
+        loan_years = st.number_input(t("loan_years"), value=10, min_value=1, step=1, key="loan_years")
         st.caption(t("loan_caption"))
     else:
         loan_rate = 0
         loan_years = 0
 
 sol_invest_total = sol_price + sol_install
+
+# --- Grön teknik tax deduction (skattereduktion för grön teknik, 2026 rates) ---
+# 50% of labour+material for storage of self-produced electricity (battery),
+# 15% for solar panels (20% for installs in 2025, 15% from 2026).
+# Cap: 50,000 kr per person and year; max 2 persons can share (100,000 kr).
+# Requires installation by a company with F-skatt (not DIY) and, for the battery,
+# that it stores self-produced (solar) electricity.
+GREEN_RATE_BATTERY = 0.50
+GREEN_RATE_SOLAR = 0.15
+GREEN_CAP_PER_PERSON = 50000
+SOLAR_LIFETIME_YEARS = 25  # solar investment is prorated to the battery-lifetime horizon
+
+col_g1, col_g2 = st.columns([3, 1])
+with col_g1:
+    use_green_deduction = st.checkbox(t("green_deduction_label"), value=True, key="green_deduction",
+                                      help=t("green_deduction_help"))
+with col_g2:
+    green_owners = st.selectbox(t("green_owners_label"), [1, 2], index=0, key="green_owners",
+                                disabled=not use_green_deduction, help=t("green_owners_help"))
+
+
+def _green_deduction(bat_gross, sol_gross):
+    """Return (battery_deduction, solar_deduction) in SEK, capped per owner.
+
+    The battery part only applies when it stores self-produced (solar) electricity.
+    """
+    if not use_green_deduction:
+        return 0.0, 0.0
+    bat_d = GREEN_RATE_BATTERY * bat_gross if use_solar and solar_kwp > 0 else 0.0
+    sol_d = GREEN_RATE_SOLAR * sol_gross
+    cap = GREEN_CAP_PER_PERSON * green_owners
+    raw = bat_d + sol_d
+    if raw > cap > 0:
+        bat_d, sol_d = bat_d * cap / raw, sol_d * cap / raw
+    return bat_d, sol_d
+
+
+def _profit_over_life(benefit_yr, lifetime, bat_invest_net, sol_invest_net):
+    """Net result over the battery lifetime (the horizon used everywhere).
+
+    The battery investment is written off over its own lifetime; the solar investment
+    lives SOLAR_LIFETIME_YEARS, so only the share belonging to this horizon is charged.
+    """
+    return (benefit_yr * lifetime - bat_invest_net
+            - sol_invest_net * min(1.0, lifetime / SOLAR_LIFETIME_YEARS))
 
 # ================================================================
 # STEP 4: SIMULATE ALL SIZES — find optimal battery
@@ -1451,6 +1595,40 @@ sol_invest_total = sol_price + sol_install
 st.divider()
 st.header(t("step4_header"))
 st.caption(t("step4_caption"))
+
+
+def _inputs_signature():
+    """Fingerprint of every input that affects the simulation results (language-independent).
+
+    Used to detect when shown results are stale (inputs changed after the last run).
+    """
+    import hashlib
+    _hc = heating_config
+    _parts = [
+        efficiency, cycle_life, use_solar, solar_kwp, export_factor, export_fee, _export_arb_kwh,
+        _solar_source, sorted((solar_config.real_monthly_kwh or {}).items()) if solar_config else None,
+        grid_operator, fuse_amps, phases, fuse_overcurrent_factor, energy_tax,
+        peak_rate, offpeak_rate, flat_rate,
+        (effekt_rate, effekt_energy, effekt_top_n) if has_effekt else None,
+        base_load, st.session_state.get("scheduled_loads"), st.session_state.get("flexible_loads"),
+        st.session_state.get("use_aa", False),
+        use_heating_model, (_hc.h_loss, _hc.hp_max_heat_kw, _hc.elpatron_kw, _hc.dhw_kwh_per_day,
+                            _hc.cop_base, _hc.cop_slope, _hc.aa_enabled) if _hc else None,
+        non_heat_base if daily_load_override else None,
+        (len(daily_load_override), round(sum(sum(p.values()) for p in daily_load_override.values()), 3))
+        if daily_load_override else None,
+        sorted(hourly_load_profile.items()) if hourly_load_profile else None,
+        repr(seasonal_load_profile) if seasonal_load_profile else None,
+        battery_table[["Namn", "Kapacitet_kWh", "Max_kW", "Pris_SEK"]].to_csv(index=False),
+        bat_install, sol_price, sol_install, finance, loan_rate, loan_years,
+        use_green_deduction, green_owners,
+        len(df_prices), str(df_prices["date"].min()), str(df_prices["date"].max()),
+        float(pd.to_numeric(df_prices["sek_per_kwh"], errors="coerce").sum()),
+    ]
+    return hashlib.md5(repr(_parts).encode()).hexdigest()
+
+
+_current_sig = _inputs_signature()
 
 def _estimate_effekt_savings(result, eff_tariff, cfg, num_days):
     """Estimate annual savings from peak demand reduction with effekttariff.
@@ -1524,16 +1702,85 @@ def _estimate_effekt_savings(result, eff_tariff, cfg, num_days):
     return total_saving / years if years > 0 else 0
 
 
+def scale_vol(rows, factor):
+    """Scale price volatility while keeping the daily average unchanged.
+
+    Example with factor=2.0 and daily average 1.00 kr:
+      Hour at 0.50 kr → 1.00 + (0.50 - 1.00) × 2.0 = 0.00 → clamped to 0.001
+      Hour at 1.50 kr → 1.00 + (1.50 - 1.00) × 2.0 = 2.00
+
+    The spread doubled (from 1.00 to 2.00), but the average stayed ~1.00.
+    This is what happens when more wind/solar enters the grid:
+    sunny/windy hours get cheaper, calm/dark hours get more expensive.
+    """
+    days_map = {}
+    for r in rows:
+        days_map.setdefault(r["date"], []).append(r)
+    out = []
+    for d, drs in days_map.items():
+        mean = sum(float(r["sek_per_kwh"]) for r in drs) / len(drs)
+        for r in drs:
+            nr = dict(r)
+            nr["sek_per_kwh"] = round(max(0.001, mean + (float(r["sek_per_kwh"]) - mean) * factor), 4)
+            nr["ore_per_kwh"] = round(nr["sek_per_kwh"] * 100, 2)
+            out.append(nr)
+    return out
+
+
+# Future-scenario volatility levels (target factors + intermediate points for interpolation)
+FUTURE_SCENARIOS = [("conservative", 1.5), ("likely", 2.5), ("high_volatility", 4.0)]
+ALL_VOL_LEVELS = [1.0, 1.5, 2.0, 2.5, 3.0, 4.0]
+
+
+def _compute_vol_benefits(best, price_rows, solar_cfg):
+    """Simulate the recommended battery at each volatility level (once, after a simulation).
+
+    Returns {factor: yearly benefit} with the SAME benefit definition as the main
+    recommendation: arbitrage + effekt savings + solar self-consumption − fuse fee delta.
+    Factor 1.0 is the main result itself (no re-simulation).
+    """
+    ref_cfg = best["config"]
+    _extra = (best["total_benefit_yr"] - best["arb_yr"]) - best["fuse_fee_delta_yr"]
+    out = {1.0: best["net_benefit_yr"]}
+    for vf in ALL_VOL_LEVELS:
+        if vf == 1.0:
+            continue
+        scaled = scale_vol(price_rows, vf)
+        fc_cfg = BatteryConfig(
+            capacity_kwh=best["capacity"], max_charge_kw=best["max_kw"],
+            max_discharge_kw=best["max_kw"],
+            efficiency=ref_cfg.efficiency, fuse_amps=ref_cfg.fuse_amps, phases=ref_cfg.phases,
+            base_load_kw=ref_cfg.base_load_kw, scheduled_loads=ref_cfg.scheduled_loads,
+            hourly_load_profile=ref_cfg.hourly_load_profile,
+            seasonal_load_profile=ref_cfg.seasonal_load_profile,
+            daily_load_override=ref_cfg.daily_load_override,
+            flexible_loads=ref_cfg.flexible_loads,
+            export_price_factor=ref_cfg.export_price_factor, export_fee_ore=ref_cfg.export_fee_ore,
+            export_arbitrage_kwh=ref_cfg.export_arbitrage_kwh,
+            purchase_price=round(best["bat_cost"]), installation_cost=ref_cfg.installation_cost,
+            cycle_life=ref_cfg.cycle_life, calendar_life_years=15,
+            fuse_overcurrent_factor=ref_cfg.fuse_overcurrent_factor,
+        )
+        r = simulate(scaled, fc_cfg, tariff=best["tariff"], solar=solar_cfg)
+        d = len(set(s.date for s in r.slots))
+        ay = r.net_profit_sek / d * 365.25 if d > 0 else 0
+        if d > 0 and isinstance(best["tariff"], EffektTariff):
+            ay += _estimate_effekt_savings(r, best["tariff"], fc_cfg, d)
+        out[vf] = ay + _extra
+    return out
+
+
 if st.button(t("run_simulation"), type="primary", use_container_width=True):
     # Clear old results
-    for key in ["all_results", "solar_cfg", "price_rows", "shared_config", "fuse_variants"]:
+    for key in ["all_results", "solar_cfg", "price_rows", "shared_config", "fuse_variants",
+                "scenario_results", "vol_arb", "sim_inputs", "sim_sig", "export_cmp", "_pdf_cache"]:
         st.session_state.pop(key, None)
 
     # Validate battery table
     valid_rows = battery_table.dropna(subset=["Kapacitet_kWh", "Max_kW", "Pris_SEK"])
     valid_rows = valid_rows[valid_rows["Kapacitet_kWh"] > 0]
     if len(valid_rows) == 0:
-        st.error("Ange minst ett batteri i pristabellen.")
+        st.error(t("no_battery_rows"))
         st.stop()
 
     if solar_config:
@@ -1656,12 +1903,15 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
 
             total_benefit_yr = arb_yr + (solar_self_yr if sol_invest_total > 0 else 0)
             net_benefit_yr = total_benefit_yr - _fuse_fee_delta_yr
-            invest = bat_cost + bat_install
-            total_invest = invest + sol_invest_total
+            # Investments are net of the grön teknik deduction (when enabled)
+            _bat_ded, _sol_ded = _green_deduction(bat_cost + bat_install, sol_invest_total)
+            invest = bat_cost + bat_install - _bat_ded
+            sol_invest_net = sol_invest_total - _sol_ded
+            total_invest = invest + sol_invest_net
             cycles_yr = result.num_cycles / (num_days / 365.25) if num_days > 0 else 0
             lifetime = min(cycle_life / cycles_yr if cycles_yr > 0 else 15, 15)
-            payback = total_invest / net_benefit_yr if net_benefit_yr > 0 else 999
-            profit_life = net_benefit_yr * lifetime - total_invest
+            payback = total_invest / net_benefit_yr if net_benefit_yr > 0 else None
+            profit_life = _profit_over_life(net_benefit_yr, lifetime, invest, sol_invest_net)
 
             # Track grid export for self-consumption optimization
             _yrs = num_days / 365.25 if num_days > 0 else 1
@@ -1679,6 +1929,10 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
             _all_raw_results.append({
                 "label": label, "capacity": cap, "max_kw": max_kw,
                 "bat_cost": bat_cost, "invest": invest, "total_invest": total_invest,
+                "sol_invest_net": sol_invest_net,
+                "green_bat": _bat_ded, "green_sol": _sol_ded,
+                "gross_invest": bat_cost + bat_install + sol_invest_total,
+                "effekt_saving_yr": effekt_saving_yr,
                 "arb_yr": arb_yr, "solar_self_yr": solar_self_yr,
                 "total_benefit_yr": total_benefit_yr,
                 "net_benefit_yr": net_benefit_yr,
@@ -1710,6 +1964,36 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
     st.session_state["fuse_variants"] = _fuse_variants
     # Store a reference config for volatility section
     st.session_state["shared_config"] = all_results[0]["config"] if all_results else None
+    st.session_state["sim_sig"] = _current_sig
+
+    # Snapshot of the inputs these results were computed with (PDF + result texts use it,
+    # so changing a widget afterwards can't make the report mix old results with new inputs)
+    _th_snap = st.session_state.get("tibber_home", {})
+    if _th_snap.get("address") and _th_snap.get("city"):
+        _addr_snap = f"{_th_snap['address']}, {_th_snap['city']}"
+    else:
+        _addr_snap = selected_city if use_heating_model else ""
+    st.session_state["sim_inputs"] = {
+        "grid_operator": grid_operator, "fuse_amps": fuse_amps, "phases": phases,
+        "fuse_overcurrent_factor": fuse_overcurrent_factor,
+        "use_solar": use_solar, "solar_kwp": solar_kwp if use_solar else 0,
+        "solar_source": _solar_source, "solar_tilt": _pvgis_tilt, "solar_aspect": _pvgis_aspect,
+        "bat_install": bat_install, "sol_price": sol_price if use_solar else 0,
+        "sol_install": sol_install if use_solar else 0, "sol_invest_total": sol_invest_total,
+        "finance": finance, "loan_rate": loan_rate, "loan_years": loan_years,
+        "efficiency": efficiency, "cycle_life": cycle_life, "energy_tax": energy_tax,
+        "green_deduction": use_green_deduction, "green_owners": green_owners,
+        "price_range": f"{df_prices['date'].min()} — {df_prices['date'].max()}",
+        "price_days": int(df_prices["date"].nunique()),
+        "address": _addr_snap,
+        "weather_station": station_name if (use_heating_model and temps_data) else "",
+    }
+
+    # Future scenarios: computed ONCE here (not on every widget interaction)
+    if all_results:
+        _best_sim = max(all_results, key=lambda r: r["profit_life"])
+        with st.spinner(t("computing_scenarios")):
+            st.session_state["vol_arb"] = _compute_vol_benefits(_best_sim, price_rows, solar_config)
 
 # ================================================================
 # RESULTS — show comparison and recommendation
@@ -1727,6 +2011,54 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
 #   - FUSE COMPARISON: "should I upgrade my fuse?"
 #   - DETAIL VIEW: monthly breakdown for selected battery
 #   - FUTURE SCENARIOS: what happens if price volatility increases?
+def _payback_text(payback):
+    """Payback phrase; None (never pays back) gets its own text instead of '999 år'."""
+    return t("payback_never") if payback is None else t("payback_text").format(years=payback)
+
+
+def _fmt_payback(payback):
+    return "—" if payback is None else f"{payback:.1f} {t('yr')}"
+
+
+def _annual_cost(res):
+    """Annualized investment cost: battery over its lifetime, solar over SOLAR_LIFETIME_YEARS.
+
+    net_benefit_yr − _annual_cost(res), times the lifetime, equals profit_life.
+    """
+    sol_net = res.get("sol_invest_net", res["total_invest"] - res["invest"])
+    life = max(res["lifetime"], 1e-9)
+    return (res["invest"] + sol_net * min(1.0, life / SOLAR_LIFETIME_YEARS)) / life
+
+
+def _vol_benefit_at(vol_arb, vol):
+    """Yearly benefit at a volatility factor, interpolated between simulated levels."""
+    levels = sorted(vol_arb)
+    below = [v for v in levels if v <= vol]
+    above = [v for v in levels if v > vol]
+    if below and above:
+        b, a = below[-1], above[0]
+        frac = (vol - b) / (a - b)
+        return vol_arb[b] * (1 - frac) + vol_arb[a] * frac
+    return vol_arb[below[-1]] if below else vol_arb[levels[0]]
+
+
+def _scenario_year_benefit(vol_arb, target_vol, yr):
+    """Benefit in year `yr`: volatility ramps linearly from today to target over 10 years."""
+    return _vol_benefit_at(vol_arb, 1.0 + (target_vol - 1.0) * min(yr, 10) / 10)
+
+
+def _scenario_net(vol_arb, target_vol, res):
+    """Net over the battery lifetime for a scenario — same accounting as profit_life."""
+    life = res["lifetime"]
+    total = 0.0
+    yr = 1
+    while yr - 1 < life:
+        total += _scenario_year_benefit(vol_arb, target_vol, yr) * min(1.0, life - (yr - 1))
+        yr += 1
+    sol_net = res.get("sol_invest_net", res["total_invest"] - res["invest"])
+    return _profit_over_life(0, life, res["invest"], sol_net) + total
+
+
 if "all_results" in st.session_state:
     all_results = st.session_state["all_results"]
     solar_cfg = st.session_state.get("solar_cfg")
@@ -1735,6 +2067,25 @@ if "all_results" in st.session_state:
     if not all_results:
         st.warning(t("no_results"))
         st.stop()
+
+    # Results were computed with the inputs snapshotted at simulation time. Use those
+    # here (and in the PDF) so the shown numbers and the stated assumptions match.
+    _si = st.session_state.get("sim_inputs", {})
+    grid_operator = _si.get("grid_operator", grid_operator)
+    fuse_amps = _si.get("fuse_amps", fuse_amps)
+    phases = _si.get("phases", phases)
+    fuse_overcurrent_factor = _si.get("fuse_overcurrent_factor", fuse_overcurrent_factor)
+    use_solar = _si.get("use_solar", use_solar)
+    solar_kwp = _si.get("solar_kwp", solar_kwp)
+    bat_install = _si.get("bat_install", bat_install)
+    sol_price = _si.get("sol_price", sol_price)
+    sol_install = _si.get("sol_install", sol_install)
+    sol_invest_total = _si.get("sol_invest_total", sol_invest_total)
+    finance = _si.get("finance", finance)
+    loan_rate = _si.get("loan_rate", loan_rate)
+    loan_years = _si.get("loan_years", loan_years)
+    if st.session_state.get("sim_sig") != _current_sig:
+        st.warning(t("results_outdated"))
 
     # === RECOMMENDATION ===
     best_idx = max(range(len(all_results)), key=lambda i: all_results[i]["profit_life"])
@@ -1752,10 +2103,22 @@ if "all_results" in st.session_state:
         t("rec_success").format(
             label=best['label'], fuse_label=_rec_fuse_label,
             benefit=_rec_benefit, benefit_mo=_rec_benefit / 12,
-            invest=best['total_invest'], payback=best['payback'],
+            invest=best['total_invest'], payback_text=_payback_text(best['payback']),
             profit=best['profit_life'], lifetime=best['lifetime'],
         )
     )
+    if best["profit_life"] <= 0:
+        st.warning(t("rec_not_profitable"))
+    if _si.get("green_deduction"):
+        _gd_total = best.get("green_bat", 0) + best.get("green_sol", 0)
+        if _gd_total > 0:
+            st.info(t("green_deduction_info").format(
+                total=f"{_gd_total:,.0f}", bat=f"{best.get('green_bat', 0):,.0f}",
+                sol=f"{best.get('green_sol', 0):,.0f}", net=f"{best['total_invest']:,.0f}",
+                gross=f"{best.get('gross_invest', best['total_invest']):,.0f}"))
+        if not (use_solar and solar_kwp > 0):
+            st.caption(t("green_no_battery_without_solar"))
+    st.caption(t("horizon_note").format(solar_life=SOLAR_LIFETIME_YEARS))
     if _rec_fuse != fuse_amps:
         _fv = st.session_state.get("fuse_variants", {}).get(best["label"], [])
         _current_fuse_result = next((r for r in _fv if r["fuse_amps"] == fuse_amps), None)
@@ -1786,53 +2149,72 @@ if "all_results" in st.session_state:
     _alt_label = t("export_compare_with") if _alt_export > 0 else t("export_compare_without")
     _alt_fee = 5.0 if _alt_export > 0 else 0.0
 
+    def _run_export_comparison():
+        """Simulate the recommended battery with the opposite export setting."""
+        from batteri import BatteryConfig as _BC
+        _alt_cfg = _BC(
+            capacity_kwh=best["config"].capacity_kwh,
+            max_charge_kw=best["config"].max_charge_kw,
+            max_discharge_kw=best["config"].max_discharge_kw,
+            efficiency=best["config"].efficiency,
+            fuse_amps=best["config"].fuse_amps,
+            phases=best["config"].phases,
+            base_load_kw=best["config"].base_load_kw,
+            scheduled_loads=best["config"].scheduled_loads,
+            hourly_load_profile=best["config"].hourly_load_profile,
+            seasonal_load_profile=best["config"].seasonal_load_profile,
+            daily_load_override=best["config"].daily_load_override,
+            flexible_loads=best["config"].flexible_loads,
+            purchase_price=best["config"].purchase_price,
+            installation_cost=best["config"].installation_cost,
+            cycle_life=best["config"].cycle_life,
+            calendar_life_years=best["config"].calendar_life_years,
+            export_price_factor=_alt_export,
+            export_fee_ore=_alt_fee,
+            fuse_overcurrent_factor=best["config"].fuse_overcurrent_factor,
+        )
+        _alt_result = simulate(price_rows, _alt_cfg, tariff=best["tariff"],
+                                solar=solar_cfg)
+        _alt_d = len(set(s.date for s in _alt_result.slots))
+        _alt_yrs = _alt_d / 365.25
+        _alt_arb = _alt_result.net_profit_sek / _alt_d * 365.25 if _alt_d > 0 else 0
+        if _alt_d > 0 and isinstance(best["tariff"], EffektTariff):
+            _alt_arb += _estimate_effekt_savings(_alt_result, best["tariff"], _alt_cfg, _alt_d)
+        _alt_cycles = _alt_result.num_cycles / _alt_yrs if _alt_yrs > 0 else 0
+
+        # Solar self-consumption for alt (counted only when solar is part of the investment,
+        # exactly like the main recommendation)
+        _alt_solar_self = 0
+        if solar_cfg and _alt_d > 0 and sol_invest_total > 0:
+            _sh = 24 / (len(_alt_result.slots) / _alt_d)
+            _tp = sum(s.solar_kw for s in _alt_result.slots) * _sh
+            _sc = max(0, _tp - _alt_result.total_solar_charge_kwh
+                      - _alt_result.total_flex_consumed_kwh - _alt_result.total_grid_export_kwh)
+            _ao = sum(s.total_cost_ore for s in _alt_result.slots) / len(_alt_result.slots)
+            _alt_solar_self = (_sc * _ao / 100) / _alt_yrs
+        _alt_life = min(best["config"].cycle_life / _alt_cycles if _alt_cycles > 0 else 15, 15)
+        _alt_benefit = _alt_arb + _alt_solar_self - best["fuse_fee_delta_yr"]
+        return {
+            "benefit": _alt_benefit,
+            "cycles": _alt_cycles,
+            "life": _alt_life,
+            "profit": _profit_over_life(_alt_benefit, _alt_life, best["invest"],
+                                        best.get("sol_invest_net", best["total_invest"] - best["invest"])),
+            "export_kwh": _alt_result.total_grid_export_kwh / _alt_yrs if _alt_yrs > 0 else 0,
+            "export_rev": _alt_result.total_export_revenue / _alt_yrs if _alt_yrs > 0 else 0,
+        }
+
     with st.expander(t("export_compare_expander").format(label=_alt_label)):
-        with st.spinner(t("export_simulating")):
-            from batteri import BatteryConfig as _BC
-            _alt_cfg = _BC(
-                capacity_kwh=best["config"].capacity_kwh,
-                max_charge_kw=best["config"].max_charge_kw,
-                max_discharge_kw=best["config"].max_discharge_kw,
-                efficiency=best["config"].efficiency,
-                fuse_amps=best["config"].fuse_amps,
-                phases=best["config"].phases,
-                base_load_kw=best["config"].base_load_kw,
-                scheduled_loads=best["config"].scheduled_loads,
-                hourly_load_profile=best["config"].hourly_load_profile,
-                seasonal_load_profile=best["config"].seasonal_load_profile,
-                daily_load_override=best["config"].daily_load_override,
-                flexible_loads=best["config"].flexible_loads,
-                purchase_price=best["config"].purchase_price,
-                installation_cost=best["config"].installation_cost,
-                cycle_life=best["config"].cycle_life,
-                calendar_life_years=best["config"].calendar_life_years,
-                export_price_factor=_alt_export,
-                export_fee_ore=_alt_fee,
-                fuse_overcurrent_factor=best["config"].fuse_overcurrent_factor,
-            )
-            _alt_result = simulate(price_rows, _alt_cfg, tariff=best["tariff"],
-                                    solar=solar_cfg)
-            _alt_d = len(set(s.date for s in _alt_result.slots))
-            _alt_yrs = _alt_d / 365.25
-            _alt_arb = _alt_result.net_profit_sek / _alt_d * 365.25 if _alt_d > 0 else 0
-            _alt_export_kwh = _alt_result.total_grid_export_kwh / _alt_yrs if _alt_yrs > 0 else 0
-            _alt_export_rev = _alt_result.total_export_revenue / _alt_yrs if _alt_yrs > 0 else 0
-            _alt_cycles = _alt_result.num_cycles / _alt_yrs if _alt_yrs > 0 else 0
-            _alt_life = min(best["config"].cycle_life / _alt_cycles if _alt_cycles > 0 else 15, 15)
-
-            # Solar self-consumption for alt
-            _alt_solar_self = 0
-            if solar_cfg and _alt_d > 0:
-                _sh = 24 / (len(_alt_result.slots) / _alt_d)
-                _tp = sum(s.solar_kw for s in _alt_result.slots) * _sh
-                _sc = max(0, _tp - _alt_result.total_solar_charge_kwh
-                          - _alt_result.total_flex_consumed_kwh - _alt_result.total_grid_export_kwh)
-                _ao = sum(s.total_cost_ore for s in _alt_result.slots) / len(_alt_result.slots)
-                _alt_solar_self = (_sc * _ao / 100) / _alt_yrs
-
-            _alt_benefit = _alt_arb + (_alt_solar_self if sol_invest_total > 0 or (solar_cfg and solar_cfg.purchase_price == 0) else 0)
-            _alt_profit = _alt_benefit * _alt_life - best["total_invest"]
-
+        # Only simulated on request (and cached until the next simulation run) —
+        # not re-run on every widget interaction.
+        _ec = st.session_state.get("export_cmp")
+        if _ec is None and st.button(t("export_compare_button"), key="export_cmp_btn"):
+            with st.spinner(t("export_simulating")):
+                _ec = _run_export_comparison()
+            st.session_state["export_cmp"] = _ec
+        if _ec is not None:
+            _alt_benefit, _alt_cycles, _alt_life = _ec["benefit"], _ec["cycles"], _ec["life"]
+            _alt_profit = _ec["profit"]
             _cur_label = t("export_mode_zero") if _current_export == 0 else t("export_mode_with")
             _alt_mode_label = t("export_mode_with") if _alt_export > 0 else t("export_mode_zero")
 
@@ -1855,35 +2237,35 @@ if "all_results" in st.session_state:
 
             if _alt_export > 0:
                 st.caption(t("export_revenue_caption").format(
-                    kwh=_alt_export_kwh, rev=_alt_export_rev))
+                    kwh=_ec["export_kwh"], rev=_ec["export_rev"]))
             _diff = _alt_profit - best["profit_life"]
             if _diff > 0:
                 st.success(t("export_better").format(label=_alt_mode_label, diff=_diff))
             else:
                 st.info(t("export_worse").format(label=_cur_label, diff=-_diff))
 
-            # Tipping point analysis
-            _eff = best["config"].efficiency
-            _fee = 5.0  # öre export fee
-            _tax_grid = 50.0  # öre (energiskatt + nätavgift, approximate)
-            # Break-even: buy_spot + tax_grid = (sell_spot - fee) × efficiency
-            # buy_spot + tax_grid = sell_spot × eff - fee × eff
-            # For arbitrage export to break even: sell/buy ratio must exceed threshold
-            # buy at (spot_low + tax_grid), sell at (spot_high × factor - fee)
-            # break-even when: (spot_high - fee) × eff > spot_low + tax_grid
-            # minimum spread: spot_high - spot_low > (spot_low + tax_grid) / eff - spot_low + fee
-            _typical_low = 30  # öre, typical night price
-            _min_high = (_typical_low + _tax_grid) / _eff + _fee
-            _min_spread = _min_high - _typical_low
-            st.caption(
-                t("tipping_point_caption").format(
-                    low_kr=_typical_low / 100, min_high_kr=_min_high / 100,
-                    eff=_eff, spread_kr=_min_spread / 100,
-                )
+        # Tipping point analysis
+        _eff = best["config"].efficiency
+        _fee = 5.0  # öre export fee
+        _tax_grid = 50.0  # öre (energiskatt + nätavgift, approximate)
+        # Break-even: buy_spot + tax_grid = (sell_spot - fee) × efficiency
+        # buy_spot + tax_grid = sell_spot × eff - fee × eff
+        # For arbitrage export to break even: sell/buy ratio must exceed threshold
+        # buy at (spot_low + tax_grid), sell at (spot_high × factor - fee)
+        # break-even when: (spot_high - fee) × eff > spot_low + tax_grid
+        # minimum spread: spot_high - spot_low > (spot_low + tax_grid) / eff - spot_low + fee
+        _typical_low = 30  # öre, typical night price
+        _min_high = (_typical_low + _tax_grid) / _eff + _fee
+        _min_spread = _min_high - _typical_low
+        st.caption(
+            t("tipping_point_caption").format(
+                low_kr=_typical_low / 100, min_high_kr=_min_high / 100,
+                eff=_eff, spread_kr=_min_spread / 100,
             )
+        )
 
     # Self-consumption optimization (when using SEK/kWh mode)
-    if st.session_state.get("pricing_mode", "") == t("sek_per_kwh_mode"):
+    if _pricing_mode == "sek_kwh":
         # Find smallest battery where grid export is near zero
         _sorted_by_cap = sorted(all_results, key=lambda r: r["capacity"])
         _zero_export = None
@@ -1962,75 +2344,89 @@ if "all_results" in st.session_state:
         _report_loan_cost = best["total_invest"] * _mr / (1 - (1 + _mr) ** -_np) if _mr > 0 else best["total_invest"] / _np
         _report_net = best["net_benefit_yr"] / 12 - _report_loan_cost
 
-    # Gather scenario data if available (computed below, but we can peek at price_rows)
-    _normal_yrs = []
-    _high_yrs = []
-    _normal_save = 0
-    _high_save = 0
+    # Future scenarios (simulated once at simulation time, see _compute_vol_benefits)
+    _vol_arb = st.session_state.get("vol_arb") or {1.0: best["net_benefit_yr"]}
+    scenario_results = {}
+    for _sk, _svf in FUTURE_SCENARIOS:
+        scenario_results[t(_sk)] = {
+            "arb_yr": _vol_benefit_at(_vol_arb, _svf), "vol": _svf, "desc": t(f"{_sk}_desc"),
+            "lifetime_profit": _scenario_net(_vol_arb, _svf, best),
+        }
 
-    try:
-        _th = st.session_state.get("tibber_home", {})
-        if _th.get("address") and _th.get("city"):
-            _pdf_address = f"{_th['address']}, {_th['city']}"
-        elif 'selected_city' in dir():
-            _pdf_address = selected_city
-        else:
-            _pdf_address = ""
-    except Exception:
-        _pdf_address = ""
-    try:
-        _pdf_weather = station_name if 'station_name' in dir() and temps_data else ""
-    except Exception:
-        _pdf_weather = ""
-
-    try:
-        pdf_bytes = generate_report(
-        address=_pdf_address,
-        grid_operator=grid_operator,
-        fuse_amps=best.get("fuse_amps", fuse_amps),
-        solar_kwp=solar_kwp if use_solar else 0,
-        battery_label=best["label"],
-        battery_capacity=best["capacity"],
-        battery_price=best["bat_cost"],
-        installation_cost=bat_install,
-        solar_price=sol_price if use_solar else 0,
-        solar_install=sol_install if use_solar else 0,
-        total_investment=best["total_invest"],
-        savings_per_year=best["net_benefit_yr"],
-        savings_per_month=best["net_benefit_yr"] / 12,
-        payback_years=best["payback"],
-        lifetime_years=best["lifetime"],
-        lifetime_profit=best["profit_life"],
-        cycles_per_year=best["cycles_yr"],
-        best_tariff=best["best_tariff"],
-        loan_rate=loan_rate,
-        loan_years=loan_years,
-        monthly_loan_cost=_report_loan_cost,
-        monthly_net=_report_net,
-        price_data_range=f"{df_prices['date'].min()} — {df_prices['date'].max()}" if df_prices is not None else "",
-        price_data_days=df_prices["date"].nunique() if df_prices is not None else 0,
-        weather_station=_pdf_weather,
-        all_results=[{"label": r["label"], "total_benefit_yr": r["net_benefit_yr"],
-                       "total_invest": r["total_invest"], "payback": r["payback"],
-                       "profit_life": r["profit_life"]} for r in all_results],
-        future_scenarios=st.session_state.get("scenario_results"),
-    )
+    # PDF is generated once per simulation (cached), with the inputs snapshotted at
+    # simulation time (_si) — not with whatever the widgets show now.
+    _pdf_bytes = st.session_state.get("_pdf_cache")
+    if _pdf_bytes is None:
+        try:
+            # The PDF report is always in Swedish (bank document): use Swedish scenario labels
+            _pdf_scen = {STRINGS[_sk]["sv"]: dict(scenario_results[t(_sk)], desc=STRINGS[f"{_sk}_desc"]["sv"])
+                         for _sk, _svf in FUTURE_SCENARIOS}
+            _pdf_bytes = bytes(generate_report(
+                address=_si.get("address", ""),
+                grid_operator=grid_operator,
+                fuse_amps=best.get("fuse_amps", fuse_amps),
+                solar_kwp=solar_kwp if use_solar else 0,
+                battery_label=best["label"],
+                battery_capacity=best["capacity"],
+                battery_price=best["bat_cost"],
+                installation_cost=bat_install,
+                solar_price=sol_price if use_solar else 0,
+                solar_install=sol_install if use_solar else 0,
+                total_investment=best["total_invest"],
+                savings_per_year=best["net_benefit_yr"],
+                savings_per_month=best["net_benefit_yr"] / 12,
+                payback_years=best["payback"],
+                lifetime_years=best["lifetime"],
+                lifetime_profit=best["profit_life"],
+                cycles_per_year=best["cycles_yr"],
+                best_tariff=best["best_tariff"],
+                loan_rate=loan_rate,
+                loan_years=loan_years,
+                monthly_loan_cost=_report_loan_cost,
+                monthly_net=_report_net,
+                price_data_range=_si.get("price_range", ""),
+                price_data_days=_si.get("price_days", 0),
+                weather_station=_si.get("weather_station", ""),
+                all_results=[{"label": r["label"], "total_benefit_yr": r["net_benefit_yr"],
+                               "total_invest": r["total_invest"], "payback": r["payback"],
+                               "profit_life": r["profit_life"]} for r in all_results],
+                future_scenarios=_pdf_scen,
+                phases=phases,
+                efficiency=_si.get("efficiency"),
+                cycle_life=_si.get("cycle_life", 8000),
+                energy_tax=_si.get("energy_tax", 45.0),
+                solar_source=_si.get("solar_source") or "",
+                solar_tilt=_si.get("solar_tilt"),
+                solar_aspect=_si.get("solar_aspect"),
+                location=_si.get("address", ""),
+                green_deduction_battery=best.get("green_bat", 0),
+                green_deduction_solar=best.get("green_sol", 0),
+                solar_lifetime_years=SOLAR_LIFETIME_YEARS,
+            ))
+            st.session_state["_pdf_cache"] = _pdf_bytes
+        except Exception as e:
+            st.warning(t("pdf_error").format(error=e))
+    if _pdf_bytes is not None:
         st.download_button(
             t("download_pdf"),
-            data=bytes(pdf_bytes),
+            data=_pdf_bytes,
             file_name=f"energikalkyl_{date.today().isoformat()}.pdf",
             mime="application/pdf",
         )
-    except Exception as e:
-        st.warning(t("pdf_error").format(error=e))
 
     # === EXPORT FOR SIMULATOR ===
+    # Snapshot session values now (in the script thread): the export is built lazily by
+    # the download button in a separate thread, where st.session_state isn't available.
+    _exp_ss = {k: st.session_state.get(k) for k in (
+        "vattenfall_hourly", "df_prices", "tibber_solar_hourly", "scheduled_loads",
+        "flexible_loads", "tibber_home")}
+
     def _build_simulator_export():
         """Build JSON export dict for energy-scheduler-sim."""
         export = {"source": "energikalkyl", "exported": date.today().isoformat()}
 
         # Consumption: hourly data grouped by date
-        vf_hourly = st.session_state.get("vattenfall_hourly", [])
+        vf_hourly = (_exp_ss["vattenfall_hourly"] or [])
         if vf_hourly:
             cons = {}
             for rec in vf_hourly:
@@ -2042,7 +2438,7 @@ if "all_results" in st.session_state:
             export["consumption"] = dict(sorted(cons.items()))
 
         # Prices: hourly SEK/kWh grouped by date
-        _df = st.session_state.get("df_prices")
+        _df = _exp_ss["df_prices"]
         if _df is not None and len(_df) > 0:
             prices = {}
             for _, row in _df.iterrows():
@@ -2070,7 +2466,7 @@ if "all_results" in st.session_state:
             export["weather"] = dict(sorted(weather.items()))
 
         # Solar: hourly kW grouped by date
-        solar_hourly = st.session_state.get("tibber_solar_hourly", {})
+        solar_hourly = (_exp_ss["tibber_solar_hourly"] or {})
         if solar_hourly:
             solar = {}
             for key, kw in solar_hourly.items():
@@ -2100,7 +2496,7 @@ if "all_results" in st.session_state:
             }
 
         # EV (from scheduled loads)
-        for _sl in st.session_state.get("scheduled_loads", []):
+        for _sl in (_exp_ss["scheduled_loads"] or []):
             if _sl.get("power", 0) > 0 and ("bil" in _sl["name"].lower() or "ev" in _sl["name"].lower()):
                 _start_h, _end_h = _sl["start"], _sl["end"]
                 if _start_h > _end_h:  # wraps midnight: e.g. 18→7 means home 18-24 + 0-7
@@ -2129,11 +2525,11 @@ if "all_results" in st.session_state:
                 "hp_max_heat_kw": round(_hc.hp_max_heat_kw, 1),
                 "ev_annual_kwh": round(_ev_annual),
             }
-        except NameError:
-            pass
+        except (NameError, AttributeError):
+            pass  # heating model not used
 
         # Flexible loads
-        _fl_raw = st.session_state.get("flexible_loads", [])
+        _fl_raw = (_exp_ss["flexible_loads"] or [])
         if _fl_raw:
             export["flex_loads"] = [
                 {
@@ -2147,7 +2543,7 @@ if "all_results" in st.session_state:
             ]
 
         # Location
-        home = st.session_state.get("tibber_home", {})
+        home = (_exp_ss["tibber_home"] or {})
         if home.get("latitude") and home.get("longitude"):
             export["location"] = {
                 "lat": round(home["latitude"], 2),
@@ -2165,11 +2561,10 @@ if "all_results" in st.session_state:
 
         return export
 
-    _export_data = _build_simulator_export()
-    _export_json = json.dumps(_export_data, ensure_ascii=False, indent=2)
     st.download_button(
         t("export_simulator_json"),
-        data=_export_json,
+        # Built only when clicked (callable), not on every rerun
+        data=lambda: json.dumps(_build_simulator_export(), ensure_ascii=False, indent=2),
         file_name=f"energikalkyl-export-{date.today().isoformat()}.json",
         mime="application/json",
     )
@@ -2288,7 +2683,7 @@ if "all_results" in st.session_state:
     fig_annual = go.Figure()
     fig_annual.add_trace(go.Bar(
         x=labels,
-        y=[r["total_invest"] / r["lifetime"] for r in all_results],
+        y=[_annual_cost(r) for r in all_results],
         name=t("invest_cost_trace"),
         marker_color="#e74c3c",
         hovertemplate="%{x}<br>" + t("cost_hover") + ": %{y:,.0f} " + t("kr_yr") + "<extra></extra>",
@@ -2312,9 +2707,9 @@ if "all_results" in st.session_state:
     st.dataframe(pd.DataFrame([{
         t("col_battery"): r["label"] + _fuse_label(r),
         t("col_savings_yr"): f"{r['net_benefit_yr']:,.0f} kr",
-        t("col_cost_yr"): f"{r['total_invest'] / r['lifetime']:,.0f} kr",
-        t("col_net_yr"): f"{r['net_benefit_yr'] - r['total_invest'] / r['lifetime']:,.0f} kr",
-        t("col_net_mo"): f"{(r['net_benefit_yr'] - r['total_invest'] / r['lifetime']) / 12:,.0f} kr",
+        t("col_cost_yr"): f"{_annual_cost(r):,.0f} kr",
+        t("col_net_yr"): f"{r['net_benefit_yr'] - _annual_cost(r):,.0f} kr",
+        t("col_net_mo"): f"{(r['net_benefit_yr'] - _annual_cost(r)) / 12:,.0f} kr",
         t("col_investment"): f"{r['total_invest']:,.0f} kr",
         t("col_lifetime"): f"{r['lifetime']:.0f} {t('yr')}",
         t("col_tariff"): r["best_tariff"],
@@ -2367,8 +2762,8 @@ if "all_results" in st.session_state:
     st.divider()
     st.subheader(t("financing_header"))
 
-    if finance in (t("mortgage"), t("other_loan")) and loan_rate > 0 and loan_years > 0:
-        loan_label = t("mortgage") if finance == t("mortgage") else t("fin_loan_label")
+    if finance in ("mortgage", "other_loan") and loan_rate > 0 and loan_years > 0:
+        loan_label = t("mortgage") if finance == "mortgage" else t("fin_loan_label")
         st.caption(t("fin_caption").format(loan=loan_label.lower(), rate=loan_rate, years=loan_years))
 
         m_rate = loan_rate / 100 / 12
@@ -2459,7 +2854,7 @@ if "all_results" in st.session_state:
             fig_cf.add_trace(go.Scatter(
                 x=years, y=cf, mode="lines+markers", name=r["label"],
                 line=dict(width=2, color=colors[i % len(colors)]),
-                hovertemplate=f"{r['label']}<br>År %{{x}}: %{{y:,.0f}} kr<extra></extra>",
+                hovertemplate=f"{r['label']}<br>{t('xaxis_year')} %{{x}}: %{{y:,.0f}} kr<extra></extra>",
             ))
         fig_cf.add_hline(y=0, line_color="gray", line_width=1)
         fig_cf.update_layout(xaxis_title=t("xaxis_year"), yaxis_title=t("yaxis_cum_sek"), height=400,
@@ -2580,9 +2975,9 @@ if "all_results" in st.session_state:
     per_year = sel["net_benefit_yr"]
 
     col_d1, col_d2, col_d3, col_d4 = st.columns(4)
-    col_d1.metric(t("lower_cost"), f"{per_year/12:,.0f} kr/mån")
-    col_d2.metric(t("per_year"), f"{per_year:,.0f} kr/år")
-    col_d3.metric(t("payback"), f"{sel['payback']:.1f} år")
+    col_d1.metric(t("lower_cost"), f"{per_year/12:,.0f} {t('kr_month')}")
+    col_d2.metric(t("per_year"), f"{per_year:,.0f} {t('kr_yr')}")
+    col_d3.metric(t("payback"), _fmt_payback(sel['payback']))
     col_d4.metric(t("cycles_yr"), f"{sel['cycles_yr']:.0f}")
 
     with st.expander(t("detail_expander")):
@@ -2596,7 +2991,9 @@ if "all_results" in st.session_state:
             st.text(f"{_lbl('detail_of_which_battery')} {sel['arb_yr']:>10,.0f} {t('kr_yr')}")
         if sel["solar_self_yr"] > 0:
             st.text(f"{_lbl('detail_of_which_solar')} {sel['solar_self_yr']:>10,.0f} {t('kr_yr')}")
-        st.text(f"{_lbl('detail_payback')} {sel['payback']:>10.1f} {t('yr')}")
+        if sel.get("green_bat", 0) + sel.get("green_sol", 0) > 0:
+            st.text(f"{_lbl('detail_green_deduction')} {-(sel['green_bat'] + sel['green_sol']):>10,.0f} kr")
+        st.text(f"{_lbl('detail_payback')} {_fmt_payback(sel['payback']):>13}")
         _net_lbl = (t('detail_net_over').format(lifetime=f"{sel['lifetime']:.0f}") + ":").ljust(_w)
         st.text(f"{_net_lbl} {sel['profit_life']:>10,.0f} kr")
         _life_lbl = (t('detail_battery_life') + ":").ljust(_w)
@@ -2705,134 +3102,38 @@ if "all_results" in st.session_state:
     st.header(t("step6_header"))
     st.caption(t("step6_caption"))
 
-    def scale_vol(rows, factor):
-        """Scale price volatility while keeping the daily average unchanged.
 
-        Example with factor=2.0 and daily average 1.00 kr:
-          Hour at 0.50 kr → 1.00 + (0.50 - 1.00) × 2.0 = 0.00 → clamped to 0.001
-          Hour at 1.50 kr → 1.00 + (1.50 - 1.00) × 2.0 = 2.00
-
-        The spread doubled (from 1.00 to 2.00), but the average stayed ~1.00.
-        This is what happens when more wind/solar enters the grid:
-        sunny/windy hours get cheaper, calm/dark hours get more expensive.
-        """
-        days_map = {}
-        for r in rows:
-            days_map.setdefault(r["date"], []).append(r)
-        out = []
-        for d, drs in days_map.items():
-            mean = sum(float(r["sek_per_kwh"]) for r in drs) / len(drs)
-            for r in drs:
-                nr = dict(r)
-                nr["sek_per_kwh"] = round(max(0.001, mean + (float(r["sek_per_kwh"]) - mean) * factor), 4)
-                nr["ore_per_kwh"] = round(nr["sek_per_kwh"] * 100, 2)
-                out.append(nr)
-        return out
-
-    # Three scenarios for the recommended battery
-    scenarios = [
-        (t("conservative"), 1.5, t("conservative_desc")),
-        (t("likely"), 2.5, t("likely_desc")),
-        (t("high_volatility"), 4.0, t("high_volatility_desc")),
-    ]
-    vol_levels = [1.0, 1.5, 2.5]
-
-    ref_cfg = st.session_state.get("shared_config") or all_results[0]["config"]
-    ref_tariff = best["tariff"]
-    bl = best["label"]
-    bp = round(best["bat_cost"])
+    # Three scenarios for the recommended battery. Simulated ONCE right after the main
+    # simulation (_compute_vol_benefits); here we only read the cached numbers.
+    # Benefit and net use the same definitions as the main recommendation.
+    scenarios = [(t(_sk), _svf, t(f"{_sk}_desc")) for _sk, _svf in FUTURE_SCENARIOS]
     inv = best["total_invest"]
-
-    with st.spinner(t("computing_scenarios")):
-        scenario_results = {}
-        for label, vf, desc in scenarios:
-            scaled = scale_vol(price_rows, vf)
-            fc_cfg = BatteryConfig(
-                capacity_kwh=best["capacity"], max_charge_kw=best["max_kw"],
-                max_discharge_kw=best["max_kw"],
-                efficiency=ref_cfg.efficiency, fuse_amps=ref_cfg.fuse_amps, phases=ref_cfg.phases,
-                base_load_kw=ref_cfg.base_load_kw, scheduled_loads=ref_cfg.scheduled_loads,
-                hourly_load_profile=ref_cfg.hourly_load_profile,
-                seasonal_load_profile=ref_cfg.seasonal_load_profile,
-                daily_load_override=ref_cfg.daily_load_override,
-                flexible_loads=ref_cfg.flexible_loads,
-                export_price_factor=ref_cfg.export_price_factor, export_fee_ore=ref_cfg.export_fee_ore,
-                purchase_price=bp, installation_cost=ref_cfg.installation_cost,
-                cycle_life=ref_cfg.cycle_life, calendar_life_years=15,
-                fuse_overcurrent_factor=ref_cfg.fuse_overcurrent_factor,
-            )
-            r = simulate(scaled, fc_cfg, tariff=ref_tariff, solar=solar_cfg)
-            d = len(set(s.date for s in r.slots))
-            ay = r.net_profit_sek / d * 365.25 if d > 0 else 0
-            scenario_results[label] = {"arb_yr": ay, "vol": vf, "desc": desc}
+    _horizon = best["lifetime"]
 
     # Summary metrics
     col_s1, col_s2, col_s3 = st.columns(3)
     for col, (label, vf, desc) in zip([col_s1, col_s2, col_s3], scenarios):
         sr = scenario_results[label]
-        lifetime_profit = sr["arb_yr"] * best["lifetime"] - inv
         col.metric(label, f"{sr['arb_yr']:,.0f} {t('kr_yr')}",
-                    delta=t("net_lifetime_delta").format(value=f"{lifetime_profit:+,.0f}", lifetime=f"{best['lifetime']:.0f}"))
+                    delta=t("net_lifetime_delta").format(value=f"{sr['lifetime_profit']:+,.0f}",
+                                                         lifetime=f"{_horizon:.0f}"))
         col.caption(desc)
 
-    # 15-year cumulative cashflow for each scenario
+    # Cumulative cashflow over the battery lifetime for each scenario
     st.subheader(t("forecast_15yr_header").format(label=best['label']))
     st.caption(t("forecast_15yr_caption"))
 
     fig_15 = go.Figure()
     scenario_colors = {t("conservative"): "#3498db", t("likely"): "#2ecc71", t("high_volatility"): "#e74c3c"}
-
-    # Also compute results at intermediate levels for smooth interpolation
-    all_vol_levels = [1.0, 1.5, 2.0, 2.5, 3.0, 4.0]
-    vol_arb = {}
-    with st.spinner(t("computing_15yr")):
-        for vf in all_vol_levels:
-            if vf in [s[1] for s in scenarios]:
-                # Already computed
-                for label, svf, _ in scenarios:
-                    if svf == vf:
-                        vol_arb[vf] = scenario_results[label]["arb_yr"]
-            else:
-                scaled = scale_vol(price_rows, vf)
-                fc_cfg = BatteryConfig(
-                    capacity_kwh=best["capacity"], max_charge_kw=best["max_kw"],
-                    max_discharge_kw=best["max_kw"],
-                    efficiency=ref_cfg.efficiency, fuse_amps=ref_cfg.fuse_amps, phases=ref_cfg.phases,
-                    base_load_kw=ref_cfg.base_load_kw, scheduled_loads=ref_cfg.scheduled_loads,
-                    hourly_load_profile=ref_cfg.hourly_load_profile,
-                    seasonal_load_profile=ref_cfg.seasonal_load_profile,
-                    daily_load_override=ref_cfg.daily_load_override,
-                    flexible_loads=ref_cfg.flexible_loads,
-                    export_price_factor=ref_cfg.export_price_factor, export_fee_ore=ref_cfg.export_fee_ore,
-                    purchase_price=bp, installation_cost=ref_cfg.installation_cost,
-                    cycle_life=ref_cfg.cycle_life, calendar_life_years=15,
-                    fuse_overcurrent_factor=ref_cfg.fuse_overcurrent_factor,
-                )
-                r = simulate(scaled, fc_cfg, tariff=ref_tariff, solar=solar_cfg)
-                d = len(set(s.date for s in r.slots))
-                vol_arb[vf] = r.net_profit_sek / d * 365.25 if d > 0 else 0
-
+    _n_years = int(math.ceil(_horizon))
     for label, target_vol, desc in scenarios:
         cum = [-inv]
-        for yr in range(1, 16):
-            vol = 1.0 + (target_vol - 1.0) * min(yr, 10) / 10
-            # Interpolate from precomputed volatility levels
-            below = [v for v in all_vol_levels if v <= vol]
-            above = [v for v in all_vol_levels if v > vol]
-            if below and above:
-                b, a = below[-1], above[0]
-                _frac = (vol - b) / (a - b)
-                yr_profit = vol_arb[b] * (1-_frac) + vol_arb[a] * _frac
-            elif below:
-                yr_profit = vol_arb[below[-1]]
-            else:
-                yr_profit = vol_arb[all_vol_levels[0]]
-            cum.append(cum[-1] + yr_profit)
-
+        for yr in range(1, _n_years + 1):
+            cum.append(cum[-1] + _scenario_year_benefit(_vol_arb, target_vol, yr))
         fig_15.add_trace(go.Scatter(
-            x=list(range(16)), y=cum, mode="lines",
+            x=list(range(_n_years + 1)), y=cum, mode="lines",
             name=label, line=dict(width=3, color=scenario_colors[label]),
-            hovertemplate=f"{label}<br>År %{{x}}: %{{y:,.0f}} kr<extra></extra>",
+            hovertemplate=f"{label}<br>{t('xaxis_year')} %{{x}}: %{{y:,.0f}} kr<extra></extra>",
         ))
 
     fig_15.add_hline(y=0, line_color="gray", line_width=1,
@@ -2847,14 +3148,6 @@ if "all_results" in st.session_state:
         t("scenario_col_volatility"): t("scenario_vol_desc").format(vf=vf),
         t("scenario_col_savings_yr"): f"{scenario_results[label]['arb_yr']:,.0f} kr",
         t("scenario_col_savings_mo"): f"{scenario_results[label]['arb_yr']/12:,.0f} kr",
-        t("scenario_col_net_15yr"): f"{scenario_results[label]['arb_yr'] * best['lifetime'] - inv:+,.0f} kr",
+        t("scenario_col_net_15yr").format(lifetime=f"{_horizon:.0f}"):
+            f"{scenario_results[label]['lifetime_profit']:+,.0f} kr",
     } for label, vf, desc in scenarios]), use_container_width=True, hide_index=True)
-
-    # Store scenario data for PDF report
-    st.session_state["scenario_results"] = {
-        label: {"arb_yr": scenario_results[label]["arb_yr"],
-                "vol": vf, "desc": desc,
-                "lifetime_profit": scenario_results[label]["arb_yr"] * best["lifetime"] - inv}
-        for label, vf, desc in scenarios
-    }
-

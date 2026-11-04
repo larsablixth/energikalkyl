@@ -15,6 +15,7 @@ import os
 import json
 from datetime import datetime, date
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -22,6 +23,7 @@ API_BASE = "https://navigator-api.eon.se"
 TOKEN_URL = f"{API_BASE}/connect/token"
 API_PREFIX = f"{API_BASE}/api"
 CRED_FILE = Path(__file__).parent / ".eon_credentials"
+TZ = ZoneInfo("Europe/Stockholm")
 
 
 def _get_credentials() -> tuple[str, str]:
@@ -121,16 +123,26 @@ def fetch_consumption(installation_id: str, start_date: date, end_date: date,
     if not data:
         return []
 
-    # Parse response
+    nodes = _parse_measurements(data)
+    print(f"  Hamtade {len(nodes)} matpunkter fran E.ON ({resolution})")
+    return nodes
+
+
+def _parse_measurements(data) -> list[dict]:
+    """Parse E.ON measurement response into [{date, hour, kwh}] in local time."""
     nodes = []
     values = data if isinstance(data, list) else data.get("values", data.get("data", []))
     for v in values:
         if isinstance(v, dict):
             ts_str = v.get("timestamp") or v.get("from") or v.get("date")
-            value = v.get("value") or v.get("consumption")
+            value = v.get("value")
+            if value is None:
+                value = v.get("consumption")
             if ts_str and value is not None:
                 try:
                     ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                    if ts.tzinfo is not None:
+                        ts = ts.astimezone(TZ)  # UTC → svensk lokaltid
                     nodes.append({
                         "date": ts.strftime("%Y-%m-%d"),
                         "hour": ts.hour,
@@ -138,8 +150,6 @@ def fetch_consumption(installation_id: str, start_date: date, end_date: date,
                     })
                 except (ValueError, TypeError):
                     continue
-
-    print(f"  Hamtade {len(nodes)} matpunkter fran E.ON ({resolution})")
     return nodes
 
 
