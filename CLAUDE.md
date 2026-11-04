@@ -232,6 +232,7 @@ The app follows a 6-step flow:
 | **Total** | **22,200** | | **61 kWh/day** |
 
 ## NKON ESS Pro prices (EUR excl. VAT, ~Q1 2025)
+The app adds 25% Swedish VAT to these (`BATTERY_VAT` in app.py), so default table prices are incl. VAT.
 - 5.12 kWh: €600, 10.24 kWh: €1177, 16.1 kWh: €1512, 32.15 kWh: €2857
 - Max charge/discharge: 15 kW (32 kWh), 11 kW (16 kWh) — per unit
 - LiFePO4, 8000 cycles, Seplos 300A BMS

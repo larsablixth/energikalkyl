@@ -1453,15 +1453,17 @@ else:
     EUR_SEK = st.number_input(t("eur_sek_rate"), value=11.5, min_value=5.0, max_value=20.0, step=0.1,
                                key="eur_sek_rate")
 
+    # NKON list prices are in EUR excl. Swedish VAT; a private buyer pays 25% on top
+    BATTERY_VAT = 1.25
     default_batteries = pd.DataFrame([
-        {"Namn": "5 kWh",       "Kapacitet_kWh": 5.12,   "Max_kW": 3.8,  "Pris_SEK": round(600 * EUR_SEK)},
-        {"Namn": "10 kWh",      "Kapacitet_kWh": 10.24,  "Max_kW": 7.5,  "Pris_SEK": round(1177 * EUR_SEK)},
-        {"Namn": "16 kWh",      "Kapacitet_kWh": 16.10,  "Max_kW": 11.0, "Pris_SEK": round(1512 * EUR_SEK)},
-        {"Namn": "32 kWh",      "Kapacitet_kWh": 32.15,  "Max_kW": 15.0, "Pris_SEK": round(2857 * EUR_SEK)},
-        {"Namn": "32+16 kWh",   "Kapacitet_kWh": 48.25,  "Max_kW": 15.0, "Pris_SEK": round((2857+1512) * EUR_SEK)},
-        {"Namn": "2x32 kWh",    "Kapacitet_kWh": 64.30,  "Max_kW": 15.0, "Pris_SEK": round(2857 * 2 * EUR_SEK)},
-        {"Namn": "2x32+16 kWh", "Kapacitet_kWh": 80.40,  "Max_kW": 15.0, "Pris_SEK": round((2857*2+1512) * EUR_SEK)},
-        {"Namn": "3x32 kWh",    "Kapacitet_kWh": 96.45,  "Max_kW": 15.0, "Pris_SEK": round(2857 * 3 * EUR_SEK)},
+        {"Namn": "5 kWh",       "Kapacitet_kWh": 5.12,   "Max_kW": 3.8,  "Pris_SEK": round(600 * EUR_SEK * BATTERY_VAT)},
+        {"Namn": "10 kWh",      "Kapacitet_kWh": 10.24,  "Max_kW": 7.5,  "Pris_SEK": round(1177 * EUR_SEK * BATTERY_VAT)},
+        {"Namn": "16 kWh",      "Kapacitet_kWh": 16.10,  "Max_kW": 11.0, "Pris_SEK": round(1512 * EUR_SEK * BATTERY_VAT)},
+        {"Namn": "32 kWh",      "Kapacitet_kWh": 32.15,  "Max_kW": 15.0, "Pris_SEK": round(2857 * EUR_SEK * BATTERY_VAT)},
+        {"Namn": "32+16 kWh",   "Kapacitet_kWh": 48.25,  "Max_kW": 15.0, "Pris_SEK": round((2857+1512) * EUR_SEK * BATTERY_VAT)},
+        {"Namn": "2x32 kWh",    "Kapacitet_kWh": 64.30,  "Max_kW": 15.0, "Pris_SEK": round(2857 * 2 * EUR_SEK * BATTERY_VAT)},
+        {"Namn": "2x32+16 kWh", "Kapacitet_kWh": 80.40,  "Max_kW": 15.0, "Pris_SEK": round((2857*2+1512) * EUR_SEK * BATTERY_VAT)},
+        {"Namn": "3x32 kWh",    "Kapacitet_kWh": 96.45,  "Max_kW": 15.0, "Pris_SEK": round(2857 * 3 * EUR_SEK * BATTERY_VAT)},
     ])
 
     if (st.session_state.get("_bt_seed") is not None

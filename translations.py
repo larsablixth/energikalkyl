@@ -2193,8 +2193,8 @@ STRINGS = {
         "en": "Enter price per kWh and max charge rate. The simulation tests sizes from 5 to 100 kWh and finds the size that maximizes self-consumption.",
     },
     "sek_kwh_typical_help": {
-        "sv": "Typiskt 800-1500 SEK/kWh för LiFePO4.",
-        "en": "Typically 800-1500 SEK/kWh for LiFePO4.",
+        "sv": "Typiskt 800-1500 SEK/kWh för LiFePO4. Ange pris inkl. moms.",
+        "en": "Typically 800-1500 SEK/kWh for LiFePO4. Enter the price incl. VAT.",
     },
     "max_kw_help": {
         "sv": "Begränsas av inverter. NKON: 11 kW (16 kWh), 15 kW (32 kWh).",
@@ -2290,8 +2290,8 @@ STRINGS = {
     "bt_col_price": {"sv": "Pris (SEK)", "en": "Price (SEK)"},
     "price_per_kwh_caption": {"sv": "Pris per kWh:", "en": "Price per kWh:"},
     "nkon_vat_note": {
-        "sv": "Obs: standardpriserna är NKON:s listpriser i EUR **exkl. moms** (25 %) och exkl. frakt. Ange gärna ditt faktiska pris inkl. moms.",
-        "en": "Note: default prices are NKON list prices in EUR **excl. VAT** (25%) and shipping. Enter your actual price incl. VAT if you can.",
+        "sv": "Standardpriserna är NKON:s listpriser i EUR omräknade till SEK **inkl. 25 % moms**, exkl. frakt. Ange gärna ditt faktiska pris.",
+        "en": "Default prices are NKON list prices in EUR converted to SEK **incl. 25% VAT**, excl. shipping. Enter your actual price if you can.",
     },
     "green_deduction_label": {
         "sv": "Skattereduktion för grön teknik",
