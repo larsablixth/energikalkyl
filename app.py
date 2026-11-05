@@ -2425,7 +2425,7 @@ if "all_results" in st.session_state:
     # the download button in a separate thread, where st.session_state isn't available.
     _exp_ss = {k: st.session_state.get(k) for k in (
         "vattenfall_hourly", "df_prices", "tibber_solar_hourly", "scheduled_loads",
-        "flexible_loads", "tibber_home")}
+        "flexible_loads", "tibber_home", "price_rows", "solar_cfg")}
 
     def _build_simulator_export():
         """Build JSON export dict for energy-scheduler-sim."""
@@ -2443,16 +2443,21 @@ if "all_results" in st.session_state:
                 cons[d][h] = round(rec["kwh"], 4)
             export["consumption"] = dict(sorted(cons.items()))
 
-        # Prices: hourly SEK/kWh grouped by date
+        # Prices: hourly SEK/kWh (excl. VAT) grouped by date. Quarter-hour rows
+        # (since 2025-10-01) are averaged per hour, like simulate()'s to_hourly
+        # (previously the last quarter of each hour overwrote the others).
         _df = _exp_ss["df_prices"]
         if _df is not None and len(_df) > 0:
-            prices = {}
+            _psum, _pcnt = {}, {}
             for _, row in _df.iterrows():
                 d = str(row["date"])
-                if d not in prices:
-                    prices[d] = [0.0] * 24
+                if d not in _psum:
+                    _psum[d], _pcnt[d] = [0.0] * 24, [0] * 24
                 h = int(str(row["hour"]).split(":")[0])
-                prices[d][h] = round(float(row["sek_per_kwh"]), 4)
+                _psum[d][h] += float(row["sek_per_kwh"])
+                _pcnt[d][h] += 1
+            prices = {d: [round(_psum[d][h] / _pcnt[d][h], 4) if _pcnt[d][h] else 0.0 for h in range(24)]
+                      for d in _psum}
             export["prices"] = dict(sorted(prices.items()))
             # Zone from price data
             if "zone" in _df.columns:
@@ -2492,6 +2497,8 @@ if "all_results" in st.session_state:
             export["battery"] = {
                 "capacity_kwh": _bcfg.capacity_kwh,
                 "max_charge_kw": _bcfg.max_charge_kw,
+                "max_discharge_kw": _bcfg.max_discharge_kw,
+                "efficiency": _bcfg.efficiency,
                 "min_soc": round(_bcfg.min_soc * 100),
                 "max_soc": round(_bcfg.max_soc * 100),
             }
@@ -2563,6 +2570,82 @@ if "all_results" in st.session_state:
                     "lat": round(_city_coords[0], 2),
                     "lon": round(_city_coords[1], 2),
                     "city": home["city"],
+                }
+
+        # Calculator result + the exact hourly inputs it was computed from, for
+        # the simulator's "Validate calculator" panel (energy-scheduler-sim runs
+        # the same hours through the controller firmware). One simulate() call:
+        # it refreshes the config's smart-load (EV) schedule for the chosen
+        # tariff — the tariff sweep leaves the last tariff's schedule behind.
+        _price_rows = _exp_ss.get("price_rows")
+        if _bcfg is not None and _price_rows:
+            _tf = best.get("tariff")
+            _r = simulate(_price_rows, _bcfg, tariff=_tf, solar=_exp_ss.get("solar_cfg"))
+            _keys = ("hour", "spot", "buy_ore", "load_kw", "ev_kw", "solar_kw", "room_kw",
+                     "in_kwh", "out_kwh", "solar_in_kwh", "export_kwh", "net_sek")
+            _hourly = {}
+            for _s in _r.slots:
+                _h = int(_s.hour.split(":")[0])
+                _m = int(_s.date.split("-")[1])
+                _ev = sum(_sl.power_kw for _i, _sl in enumerate(_bcfg.scheduled_loads)
+                          if _bcfg._is_scheduled_active(_i, _sl, _h, _s.date))
+                _row = (_h, round(_s.sek_per_kwh, 5), round(_s.total_cost_ore, 3),
+                        round(_bcfg.total_load_kw(_h, _m, _s.date), 4), round(_ev, 4),
+                        round(_s.solar_kw, 4), round(_bcfg.available_charge_kw(_h, _m, _s.date), 4),
+                        round(_s.energy_kwh, 4) if _s.action == "charge" else 0.0,
+                        round(_s.energy_kwh, 4) if _s.action == "discharge" else 0.0,
+                        round(_s.solar_charge_kwh, 4), round(_s.grid_export_kwh, 4),
+                        round(_s.saving_sek - _s.cost_sek + _s.export_revenue_sek, 4))
+                _d = _hourly.setdefault(_s.date, {k: [] for k in _keys})
+                for _k, _v in zip(_keys, _row):
+                    _d[_k].append(_v)
+            _days = len(_hourly)
+            if _days:
+                _dates = sorted(_hourly)
+                export["calculator"] = {
+                    "version": 1,
+                    "label": best.get("label"),
+                    "tariff": best.get("best_tariff"),
+                    "fuse_amps": _bcfg.fuse_amps,
+                    "phases": _bcfg.phases,
+                    "phase_balance_factor": _bcfg.phase_balance_factor,
+                    "grid_max_kw": round(_bcfg.grid_max_kw, 4),
+                    "battery": {
+                        "capacity_kwh": _bcfg.capacity_kwh,
+                        "max_charge_kw": _bcfg.max_charge_kw,
+                        "max_discharge_kw": _bcfg.max_discharge_kw,
+                        "efficiency": _bcfg.efficiency,
+                        "min_soc": round(_bcfg.min_soc * 100, 2),
+                        "max_soc": round(_bcfg.max_soc * 100, 2),
+                    },
+                    "export": {
+                        "enabled": _bcfg.export_price_factor > 0,
+                        "price_factor": _bcfg.export_price_factor,
+                        "fee_ore": _bcfg.export_fee_ore,
+                    },
+                    "spot_vat_factor": _bcfg.spot_vat_factor,
+                    # EV/scheduled loads are inside load_kw (ev_kw = their part);
+                    # with a measured hourly/seasonal profile they are part of
+                    # the profile and ev_kw is 0.
+                    "ev_in_profile": not _bcfg.scheduled_loads,
+                    "period": {"first": _dates[0], "last": _dates[-1], "days": _days},
+                    "result": {
+                        "net_sek": round(_r.net_profit_sek, 2),
+                        "net_sek_per_year": round(_r.net_profit_sek / _days * 365.25, 2),
+                        "charged_kwh": round(_r.total_charged_kwh, 2),
+                        "discharged_kwh": round(_r.total_discharged_kwh, 2),
+                        "charge_cost_sek": round(_r.total_charge_cost, 2),
+                        "discharge_value_sek": round(_r.total_discharge_value, 2),
+                        "export_revenue_sek": round(_r.total_export_revenue, 2),
+                        "solar_charge_kwh": round(_r.total_solar_charge_kwh, 2),
+                        "grid_export_kwh": round(_r.total_grid_export_kwh, 2),
+                        "cycles": round(_r.num_cycles, 1),
+                        "arb_yr": round(best.get("arb_yr", 0), 2),
+                        "effekt_saving_yr": round(best.get("effekt_saving_yr", 0), 2),
+                        "solar_self_yr": round(best.get("solar_self_yr", 0), 2),
+                        "net_benefit_yr": round(best.get("net_benefit_yr", 0), 2),
+                    },
+                    "hourly": _hourly,
                 }
 
         return export
