@@ -154,6 +154,8 @@ def generate_report(
     loan_years: int = 50,
     monthly_loan_cost: float = 0,
     monthly_net: float = 0,
+    debt_at_battery_end: float = None,    # loan balance left when the battery is worn out
+    financed_lifetime_net: float = None,  # net over battery lifetime incl. interest paid
     # Data info
     price_data_range: str = "",
     price_data_days: int = 0,
@@ -221,6 +223,12 @@ def generate_report(
                 f"Vid lånefinansiering ({loan_rate}%, {loan_years} år) överstiger lånekostnaden "
                 f"({monthly_loan_cost:,.0f} kr/mån) besparingen ({savings_per_month:,.0f} kr/mån) "
                 f"med {-monthly_net:,.0f} kr/mån, dvs. investeringen är inte kassaflödespositiv."
+            )
+        if debt_at_battery_end is not None and loan_years > lifetime_years and debt_at_battery_end > 0:
+            pdf.body_text(
+                f"Observera att lånet ({loan_years} år) löper längre än batteriets livslängd "
+                f"({lifetime_years:.0f} år): när batteriet är förbrukat återstår "
+                f"{debt_at_battery_end:,.0f} kr av lånet att betala."
             )
     pdf.ln(3)
 
@@ -291,6 +299,11 @@ def generate_report(
         pdf.key_value("Lånekostnad:", f"{monthly_loan_cost:,.0f} kr/mån")
         pdf.key_value("Elbesparing:", f"{savings_per_month:,.0f} kr/mån")
         pdf.key_value("Netto kassaflöde:", f"{monthly_net:+,.0f} kr/mån", bold_value=True)
+        if debt_at_battery_end is not None:
+            pdf.key_value(f"Kvar av lånet efter {lifetime_years:.0f} år:", f"{debt_at_battery_end:,.0f} kr")
+        if financed_lifetime_net is not None:
+            pdf.key_value(f"Netto under {lifetime_years:.0f} år inkl. ränta:",
+                          f"{financed_lifetime_net:+,.0f} kr", bold_value=True)
         if monthly_net > 0:
             pdf.body_text(
                 f"Lånekostnaden ({monthly_loan_cost:,.0f} kr/mån) understiger elbesparingen "

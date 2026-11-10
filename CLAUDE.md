@@ -57,6 +57,7 @@ The app follows a 6-step flow:
 
 ### Core simulation
 - `batteri.py` — Battery simulation engine. `BatteryConfig` dataclass, `simulate()` function. Multi-cycle scheduling, solar-aware, fuse headroom-limited. Supports `daily_load_override` for temperature-dependent load profiles. `LoadSchedule` supports smart mode: picks cheapest N hours within availability window, with effekttariff peak penalty.
+- `economics.py` — Pure (no Streamlit) evaluation of simulation results, called by app.py: `solar_direct_use()`, `effekt_savings()`, `baseline_export_revenue()`, `loan_schedule()`. Tested in `test_energikalkyl.py`.
 - `solar.py` — Solar production model. Three-tier: real hourly data → model scaled to real monthly totals → cos³ curve fallback. `SolarConfig` with `real_production` (hourly dict) and `real_monthly_kwh` (monthly scaling). `get_solar_for_slot()` transparently picks best available source.
 
 ### Tariffs & grid operators
@@ -136,11 +137,12 @@ The app follows a 6-step flow:
 
 ### Effekttariff (power demand tariff)
 - `EffektTariff` class: charges based on peak kW demand per month
-- `_estimate_effekt_savings()` in app.py: compares monthly peak demand WITH vs WITHOUT battery
+- `effekt_savings()` in economics.py: compares monthly peak demand WITH vs WITHOUT the investment. Not clamped: a higher peak is a cost. `solar_in_baseline=True` for existing panels
+- `simulate()` is peak-aware under an EffektTariff: grid charging in measured hours is capped per month at the N-th highest no-battery daily peak (load − solar, × kw_factor), so charging never raises the top-N average. Hours with 0 kr/kW (Göteborg summer) are not capped
 - Each operator has different measurement rules (top-N peaks from different days, peak hours, night discount)
 - **Seasonal rates**: `low_season_rate` field for operators with different summer/winter effekt rates (e.g. SEOM: 72.5 kr/kW Apr-Oct, 145 kr/kW Nov-Mar). `get_effekt_rate(month)` returns correct rate.
 - Battery peak shaving: discharge during high-load hours to reduce measured peak
-- For SEOM/Ellevio customers: this is often the LARGEST savings component (400-900 kr/mån)
+- Simulated peak shaving is small: the scheduler only discharges for price arbitrage (no dedicated peak-shaving strategy). Default house, 32 kWh battery only: SEOM ~120 kr/yr, Ellevio ~0, Mälarenergi ~20, Göteborg ~90. With 15 kWp solar in the investment most of it is solar's own peak reduction (SEOM ~950, of which ~600 is the battery). The old "400-900 kr/mån" claim came from an accounting that dropped months where charging raised the peak
 
 ### Heating model (heating.py)
 - COP model for ground-source: COP = 3.4 + 0.056 × T_outdoor (bergvärme — near-constant, brine temp stable year-round)
@@ -253,6 +255,10 @@ The app adds 25% Swedish VAT to these (`BATTERY_VAT` in app.py), so default tabl
 - **Zero-export discharge IS capped at net load** (owner decision, Nov 2026). This makes very large batteries less profitable when the load profile is only a flat base load: realistic load data (Tibber/Vattenfall/heating model) matters for big sizes
 - **Export split is separate from zero-export** — zero-export values all discharge as self-consumption. Export mode splits into self-consumption + export at different prices. Mixing the two broke profitability
 - **Phase imbalance matters for fuse sizing** — 70% derating for 3-phase. 3× Victron MultiPlus-II with per-phase compensation is the only 48V option that eliminates this
+- **Solar direct use = min(solar, load) per hour at that hour's price** (`solar_direct_use`). The old "production − battery − flex − export" counted curtailed solar as used, at the all-hours average price (9-15k kr/yr reported vs 6.7k true)
+- **Effekt savings must not be clamped at 0, and charging must respect the peak** — the clamp hid up to −5,500 kr/yr (SEOM, 32 kWh) of extra demand charge caused by midday grid charging
+- **Loan financing over battery lifetime = profit_life − interest paid in that period** (`loan_schedule`). Counting only loan payments ignored the ~84% of a 50-year loan still owed when the battery is worn out
+- **Existing panels + export: subtract the no-battery export revenue** (`baseline_export_revenue`), and smart loads run exactly `daily_kwh` (last chosen hour at partial power; the EV was simulated as 33 kWh/day instead of 30)
 - **Smart load scheduling needs effekttariff penalty** — without it, EV charges during SEOM peak hours (07-19), increasing effektavgift. Penalty scales by kw_factor for Ellevio night discount
 
 ## Verified simulation results (2026-03-21)

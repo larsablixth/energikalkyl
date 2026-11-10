@@ -74,6 +74,7 @@ from weather import (
     fetch_station_data, SWEDISH_CITIES,
 )
 from report import generate_report
+from economics import solar_direct_use, effekt_savings, baseline_export_revenue, loan_schedule
 from app_state import save_state, load_state
 from translations import t, set_language, get_language, STRINGS
 
@@ -1636,78 +1637,6 @@ def _inputs_signature():
 
 _current_sig = _inputs_signature()
 
-def _estimate_effekt_savings(result, eff_tariff, cfg, num_days):
-    """Estimate annual savings from peak demand reduction with effekttariff.
-
-    Compares peak demand WITH battery (discharge reduces grid draw)
-    vs WITHOUT battery (raw household load).
-
-    WHAT IS EFFEKTTARIFF?
-    Some grid operators (Ellevio, SEOM, Göteborg Energi) charge you based on
-    your PEAK power demand each month — not just total kWh. If your house
-    draws 15 kW for one hour (e.g., EV + heating + cooking), you pay for
-    that peak all month. A battery can discharge during high-demand hours
-    to reduce the peak the grid sees. This can save 400-900 kr/month.
-
-    The measurement varies by operator: Ellevio uses top-3 peaks from
-    different days, SEOM uses a single peak, etc.
-    """
-    from collections import defaultdict
-
-    monthly_slots = defaultdict(list)
-    for s in result.slots:
-        ym = s.date[:7]
-        monthly_slots[ym].append(s)
-
-    total_saving = 0
-    for ym, slots in monthly_slots.items():
-        daily_peaks_with = defaultdict(float)
-        daily_peaks_without = defaultdict(float)
-
-        for s in slots:
-            h = int(s.hour.split(":")[0])
-            month = int(s.date.split("-")[1])
-            date_str = s.date
-
-            load_kw = cfg.total_load_kw(h, month, date_str)
-
-            without_kw = load_kw
-            factor = eff_tariff.kw_factor(date_str, s.hour)
-            if eff_tariff.is_peak_hour(date_str, s.hour):
-                weighted_without = without_kw * factor
-                if weighted_without > daily_peaks_without[date_str]:
-                    daily_peaks_without[date_str] = weighted_without
-
-            if s.action == "discharge":
-                with_kw = max(0, load_kw - s.power_kw)
-            elif s.action in ("charge", "solar_charge"):
-                with_kw = load_kw + (s.power_kw if s.action == "charge" else 0)
-            else:
-                with_kw = load_kw
-            if s.solar_kw > 0:
-                with_kw = max(0, with_kw - s.solar_kw)
-
-            if eff_tariff.is_peak_hour(date_str, s.hour):
-                weighted_with = with_kw * factor
-                if weighted_with > daily_peaks_with[date_str]:
-                    daily_peaks_with[date_str] = weighted_with
-
-        n = eff_tariff.top_n_peaks
-        peaks_without = sorted(daily_peaks_without.values(), reverse=True)[:n]
-        peaks_with = sorted(daily_peaks_with.values(), reverse=True)[:n]
-
-        avg_without = sum(peaks_without) / len(peaks_without) if peaks_without else 0
-        avg_with = sum(peaks_with) / len(peaks_with) if peaks_with else 0
-
-        month = int(ym.split("-")[1])
-        rate = eff_tariff.get_effekt_rate(month) if hasattr(eff_tariff, 'get_effekt_rate') else eff_tariff.effekt_rate
-        saving = (avg_without - avg_with) * rate
-        total_saving += max(0, saving)
-
-    years = num_days / 365.25
-    return total_saving / years if years > 0 else 0
-
-
 def scale_vol(rows, factor):
     """Scale price volatility while keeping the daily average unchanged.
 
@@ -1742,7 +1671,8 @@ def _compute_vol_benefits(best, price_rows, solar_cfg):
     """Simulate the recommended battery at each volatility level (once, after a simulation).
 
     Returns {factor: yearly benefit} with the SAME benefit definition as the main
-    recommendation: arbitrage + effekt savings + solar self-consumption − fuse fee delta.
+    recommendation: arbitrage + effekt savings + solar self-consumption − fuse fee delta
+    (and, for existing panels with export, minus the export they earn without a battery).
     Factor 1.0 is the main result itself (no re-simulation).
     """
     ref_cfg = best["config"]
@@ -1771,7 +1701,11 @@ def _compute_vol_benefits(best, price_rows, solar_cfg):
         d = len(set(s.date for s in r.slots))
         ay = r.net_profit_sek / d * 365.25 if d > 0 else 0
         if d > 0 and isinstance(best["tariff"], EffektTariff):
-            ay += _estimate_effekt_savings(r, best["tariff"], fc_cfg, d)
+            ay += effekt_savings(r, best["tariff"], fc_cfg, d,
+                                 solar_in_baseline=bool(solar_cfg) and sol_invest_total == 0)
+        if d > 0 and solar_cfg and sol_invest_total == 0 and fc_cfg.export_price_factor > 0:
+            # Existing panels: their export without a battery (at these prices) isn't battery value
+            ay -= baseline_export_revenue(scaled, fc_cfg, best["tariff"], solar_cfg) / d * 365.25
         out[vf] = ay + _extra
     return out
 
@@ -1828,6 +1762,9 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
         return tariffs
 
     price_rows = df_prices.to_dict("records")
+    # Panels the household already has (solar enabled, no solar investment)
+    _existing_solar = bool(solar_config) and sol_invest_total == 0
+    _baseline_export_cache = {}  # (fuse, tariff name) -> export SEK/yr without battery
 
     # Simulate ALL battery sizes × tariffs × fuse sizes
     _all_raw_results = []
@@ -1868,6 +1805,8 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
             best_tariff = ""
             num_days = 0
             effekt_saving_yr = 0
+            solar_self_yr = 0
+            baseline_export_yr = 0
 
             for _tf in _fuse_tariffs:
                 r = simulate(price_rows, cfg, tariff=_tf, solar=solar_config)
@@ -1876,11 +1815,28 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
                     continue
                 p = r.net_profit_sek / d * 365.25
 
-                # For effekttariff: estimate demand charge savings from battery
+                # For effekttariff: demand charge change caused by the investment (can be negative).
+                # Computed right after simulate(): cfg's smart-load schedule belongs to this tariff.
                 eff_save = 0
                 if isinstance(_tf, EffektTariff):
-                    eff_save = _estimate_effekt_savings(r, _tf, cfg, d)
+                    eff_save = effekt_savings(r, _tf, cfg, d, solar_in_baseline=_existing_solar)
                     p += eff_save
+
+                # Existing panels + export: the export they earn without any battery is not
+                # battery value (doesn't depend on battery size → cached per fuse and tariff)
+                base_exp = 0
+                if _existing_solar and export_factor > 0:
+                    _bk = (_fuse, _tf.name)
+                    if _bk not in _baseline_export_cache:
+                        _baseline_export_cache[_bk] = baseline_export_revenue(
+                            price_rows, cfg, _tf, solar_config) / d * 365.25
+                    base_exp = _baseline_export_cache[_bk]
+                    p -= base_exp
+
+                # Solar used directly by the house (also needs this tariff's schedule in cfg)
+                sol_self = 0
+                if solar_config:
+                    sol_self = solar_direct_use(r, cfg)[1] / d * 365.25
 
                 if p > best_profit:
                     best_profit = p
@@ -1889,23 +1845,14 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
                     best_tariff = _tf.name
                     num_days = d
                     effekt_saving_yr = eff_save
+                    solar_self_yr = sol_self
+                    baseline_export_yr = base_exp
 
             if result is None:
                 continue
 
-            arb_yr = result.net_profit_sek / num_days * 365.25 + effekt_saving_yr if num_days > 0 else 0
-
-            # Solar self-consumption benefit
-            solar_self_yr = 0
-            if solar_config and num_days > 0:
-                yrs = num_days / 365.25
-                slots_per_day = len(result.slots) / num_days
-                sh = 24 / slots_per_day
-                total_prod = sum(s.solar_kw for s in result.slots) * sh
-                self_consumed = max(0, total_prod - result.total_solar_charge_kwh
-                                    - result.total_flex_consumed_kwh - result.total_grid_export_kwh)
-                avg_ore = sum(s.total_cost_ore for s in result.slots) / len(result.slots)
-                solar_self_yr = (self_consumed * avg_ore / 100) / yrs
+            arb_yr = (result.net_profit_sek / num_days * 365.25 + effekt_saving_yr
+                      - baseline_export_yr) if num_days > 0 else 0
 
             total_benefit_yr = arb_yr + (solar_self_yr if sol_invest_total > 0 else 0)
             net_benefit_yr = total_benefit_yr - _fuse_fee_delta_yr
@@ -1939,6 +1886,7 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
                 "green_bat": _bat_ded, "green_sol": _sol_ded,
                 "gross_invest": bat_cost + bat_install + sol_invest_total,
                 "effekt_saving_yr": effekt_saving_yr,
+                "baseline_export_yr": baseline_export_yr,
                 "arb_yr": arb_yr, "solar_self_yr": solar_self_yr,
                 "total_benefit_yr": total_benefit_yr,
                 "net_benefit_yr": net_benefit_yr,
@@ -2184,20 +2132,21 @@ if "all_results" in st.session_state:
         _alt_d = len(set(s.date for s in _alt_result.slots))
         _alt_yrs = _alt_d / 365.25
         _alt_arb = _alt_result.net_profit_sek / _alt_d * 365.25 if _alt_d > 0 else 0
+        _alt_existing_solar = bool(solar_cfg) and sol_invest_total == 0
         if _alt_d > 0 and isinstance(best["tariff"], EffektTariff):
-            _alt_arb += _estimate_effekt_savings(_alt_result, best["tariff"], _alt_cfg, _alt_d)
+            _alt_arb += effekt_savings(_alt_result, best["tariff"], _alt_cfg, _alt_d,
+                                       solar_in_baseline=_alt_existing_solar)
         _alt_cycles = _alt_result.num_cycles / _alt_yrs if _alt_yrs > 0 else 0
 
         # Solar self-consumption for alt (counted only when solar is part of the investment,
         # exactly like the main recommendation)
         _alt_solar_self = 0
         if solar_cfg and _alt_d > 0 and sol_invest_total > 0:
-            _sh = 24 / (len(_alt_result.slots) / _alt_d)
-            _tp = sum(s.solar_kw for s in _alt_result.slots) * _sh
-            _sc = max(0, _tp - _alt_result.total_solar_charge_kwh
-                      - _alt_result.total_flex_consumed_kwh - _alt_result.total_grid_export_kwh)
-            _ao = sum(s.total_cost_ore for s in _alt_result.slots) / len(_alt_result.slots)
-            _alt_solar_self = (_sc * _ao / 100) / _alt_yrs
+            _alt_solar_self = solar_direct_use(_alt_result, _alt_cfg)[1] / _alt_yrs
+        # Existing panels + export: export they'd earn without a battery isn't battery value
+        if _alt_d > 0 and _alt_existing_solar and _alt_export > 0:
+            _alt_arb -= baseline_export_revenue(price_rows, _alt_cfg, best["tariff"],
+                                                solar_cfg) / _alt_yrs
         _alt_life = min(best["config"].cycle_life / _alt_cycles if _alt_cycles > 0 else 15, 15)
         _alt_benefit = _alt_arb + _alt_solar_self - best["fuse_fee_delta_yr"]
         return {
@@ -2344,11 +2293,14 @@ if "all_results" in st.session_state:
     # Calculate financing for report
     _report_loan_cost = 0
     _report_net = best["net_benefit_yr"] / 12
+    _report_debt_left = None
+    _report_net_life_fin = None
     if loan_rate > 0 and loan_years > 0:
-        _mr = loan_rate / 100 / 12
-        _np = loan_years * 12
-        _report_loan_cost = best["total_invest"] * _mr / (1 - (1 + _mr) ** -_np) if _mr > 0 else best["total_invest"] / _np
+        _ls_rep = loan_schedule(best["total_invest"], loan_rate, loan_years, best["lifetime"])
+        _report_loan_cost = _ls_rep["monthly_payment"]
         _report_net = best["net_benefit_yr"] / 12 - _report_loan_cost
+        _report_debt_left = _ls_rep["balance_at_horizon"]
+        _report_net_life_fin = best["profit_life"] - _ls_rep["interest_in_horizon"]
 
     # Future scenarios (simulated once at simulation time, see _compute_vol_benefits)
     _vol_arb = st.session_state.get("vol_arb") or {1.0: best["net_benefit_yr"]}
@@ -2390,6 +2342,8 @@ if "all_results" in st.session_state:
                 loan_years=loan_years,
                 monthly_loan_cost=_report_loan_cost,
                 monthly_net=_report_net,
+                debt_at_battery_end=_report_debt_left,
+                financed_lifetime_net=_report_net_life_fin,
                 price_data_range=_si.get("price_range", ""),
                 price_data_days=_si.get("price_days", 0),
                 weather_station=_si.get("weather_station", ""),
@@ -2587,8 +2541,8 @@ if "all_results" in st.session_state:
             for _s in _r.slots:
                 _h = int(_s.hour.split(":")[0])
                 _m = int(_s.date.split("-")[1])
-                _ev = sum(_sl.power_kw for _i, _sl in enumerate(_bcfg.scheduled_loads)
-                          if _bcfg._is_scheduled_active(_i, _sl, _h, _s.date))
+                _ev = sum(_bcfg._scheduled_kw(_i, _sl, _h, _s.date)
+                          for _i, _sl in enumerate(_bcfg.scheduled_loads))
                 _row = (_h, round(_s.sek_per_kwh, 5), round(_s.total_cost_ore, 3),
                         round(_bcfg.total_load_kw(_h, _m, _s.date), 4), round(_ev, 4),
                         round(_s.solar_kw, 4), round(_bcfg.available_charge_kw(_h, _m, _s.date), 4),
@@ -2855,26 +2809,23 @@ if "all_results" in st.session_state:
         loan_label = t("mortgage") if finance == "mortgage" else t("fin_loan_label")
         st.caption(t("fin_caption").format(loan=loan_label.lower(), rate=loan_rate, years=loan_years))
 
-        m_rate = loan_rate / 100 / 12
-        n_payments = loan_years * 12
         fin_data = []
         for r in all_results:
             total = r["total_invest"]
-            if m_rate > 0:
-                m_cost = total * m_rate / (1 - (1 + m_rate) ** -n_payments)
-            else:
-                m_cost = total / n_payments
+            lifetime = r["lifetime"]
+            _ls = loan_schedule(total, loan_rate, loan_years, lifetime)
+            m_cost = _ls["monthly_payment"]
             m_saving = r["net_benefit_yr"] / 12
             net = m_saving - m_cost
-            # True lifetime profit: savings during battery life - loan payments during same period
-            lifetime = r["lifetime"]
-            total_savings_life = r["net_benefit_yr"] * lifetime
-            total_loan_life = m_cost * 12 * lifetime
-            net_lifetime = total_savings_life - total_loan_life
+            # Net over the battery lifetime: profit_life already charges the whole investment
+            # (solar pro rata), so financing only adds the interest paid in that period. The
+            # debt still owed when the battery is worn out is part of that investment.
+            net_lifetime = r["profit_life"] - _ls["interest_in_horizon"]
             fin_data.append({"label": r["label"], "total": total,
                              "monthly_cost": m_cost, "monthly_saving": m_saving,
                              "net": net, "net_lifetime": net_lifetime,
-                             "lifetime": lifetime})
+                             "lifetime": lifetime,
+                             "debt_left": _ls["balance_at_horizon"]})
 
         # Chart
         fig_fin = go.Figure()
@@ -2910,8 +2861,11 @@ if "all_results" in st.session_state:
             t("col_savings_mo"): f"{d['monthly_saving']:,.0f} kr",
             t("col_cashflow_mo"): f"{d['net']:+,.0f} kr",
             t("col_lifetime"): f"{d['lifetime']:.0f} {t('yr')}",
+            t("col_debt_left"): f"{d['debt_left']:,.0f} kr",
             t("col_net_lifetime"): f"{d['net_lifetime']:+,.0f} kr",
         } for d in fin_data]), use_container_width=True, hide_index=True)
+        if loan_years > min(d["lifetime"] for d in fin_data):
+            st.caption(t("fin_debt_caption").format(years=loan_years))
 
         best_fin = max(fin_data, key=lambda d: d["net_lifetime"])
         profitable = [d for d in fin_data if d["net_lifetime"] > 0]

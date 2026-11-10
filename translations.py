@@ -1783,6 +1783,14 @@ STRINGS = {
         "sv": "Netto livslängd",
         "en": "Net lifetime",
     },
+    "col_debt_left": {
+        "sv": "Kvar att betala när batteriet är slut",
+        "en": "Debt left when battery is worn out",
+    },
+    "fin_debt_caption": {
+        "sv": "Lånet löper i {years} år men batteriet håller kortare. Kassaflödet per månad blir därför delvis positivt för att amorteringen sprids över fler år än batteriet varar: skulden i kolumnen ovan återstår att betala när batteriet är slut. Netto livslängd räknar med hela investeringen plus räntan under batteriets livslängd.",
+        "en": "The loan runs for {years} years but the battery lasts shorter. The monthly cash flow is therefore positive partly because repayment is spread over more years than the battery lasts: the debt in the column above is still owed when the battery is worn out. Net lifetime counts the full investment plus the interest paid during the battery lifetime.",
+    },
     "fin_all_profitable": {
         "sv": "**Alla storlekar lönsamma under batteriets livslängd.** Bäst: **{label}** — +{net_mo} kr/mån kassaflöde, +{net_life} kr netto under {lifetime} år.",
         "en": "**All sizes profitable over battery lifetime.** Best: **{label}** — +{net_mo} SEK/mo cash flow, +{net_life} SEK net over {lifetime} years.",
