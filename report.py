@@ -47,6 +47,11 @@ def _fmt_payback(payback_years) -> str:
     return f"{payback_years:.1f} år"
 
 
+def _pct(value) -> str:
+    """1.0 -> '1,0' (Swedish decimal comma)."""
+    return f"{value:.1f}".replace(".", ",")
+
+
 def _aspect_text(aspect) -> str:
     """PVGIS aspect (0=south, -90=east, 90=west) to Swedish text."""
     if aspect is None:
@@ -177,6 +182,11 @@ def generate_report(
     green_deduction_battery: float = 0,
     green_deduction_solar: float = 0,
     solar_lifetime_years: int = 25,
+    # Wear and standby assumptions used in all yearly/lifetime numbers (None = not stated)
+    battery_fade_pct: float = None,       # battery capacity (value) loss, % per year
+    standby_w: float = None,              # inverter + BMS standby draw, W
+    standby_cost_yr: float = None,        # its cost, kr per year
+    solar_degradation_pct: float = None,  # panel production loss, % per year (when counted)
 ) -> bytes:
     """Generate a PDF report and return it as bytes."""
 
@@ -330,13 +340,16 @@ def generate_report(
 
     # Future scenarios
     if future_scenarios:
-        pdf.sub_title("Framtidsprognos - tre scenarier")
+        pdf.sub_title(f"Framtida prisskillnader - {len(future_scenarios)} antaganden")
         pdf.body_text(
             "Batteriets lönsamhet beror på prisskillnaderna mellan dyra och billiga timmar. "
-            "Utbyggnaden av vindkraft och solel i det nordiska elsystemet förväntas öka dessa "
-            "prisskillnader under de kommande 10-15 åren. Tre scenarier har simulerats:"
+            "Hur de utvecklas är osäkert: fler batterier och flexibla laster kan jämna ut priserna, "
+            "mer väderberoende produktion kan öka skillnaderna. Scenarierna nedan skalar de historiska "
+            "prisskillnaderna (dygnets medelpris oförändrat) linjärt under 10 år till angiven nivå, "
+            "med samma slitage och standbykostnad som huvudkalkylen. De är antaganden, inte prognoser; "
+            "inget av dem anges som mer sannolikt. Besparing/år avser första året vid scenariots nivå."
         )
-        widths = [35, 30, 30, 30, 35]
+        widths = [58, 27, 27, 33, 35]
         pdf.table_row(["Scenario", "Besparing/år", "Besparing/mån", f"Netto {lifetime_years:.0f} år",
                        "Antagande"], header=True, widths=widths)
         for label, data in future_scenarios.items():
@@ -355,14 +368,10 @@ def generate_report(
             verdict = "Investeringen är inte lönsam i något av scenarierna."
         else:
             verdict = (f"Investeringen är lönsam i {n_profitable} av {len(future_scenarios)} scenarier "
-                       f"- lönsamheten är beroende av att prissvängningarna ökar.")
-        pdf.body_text(
-            "Konservativt: prissvängningarna ökar 50% under 10 år (måttlig utbyggnad av förnybart). "
-            "Sannolikt: prissvängningarna 2-3x under 10 år. Fortsatt utbyggnad av vind/sol, "
-            "fler elbilar, elektrifiering av industri. De flesta energianalytiker förväntar sig detta. "
-            "Hög volatilitet: prissvängningarna 4x (massiv förnybar utbyggnad, kärnkraft fasas ut). "
-            + verdict
-        )
+                       f"- lönsamheten beror på hur prisskillnaderna utvecklas.")
+        descs = " ".join(f"{label}: {data['desc']}" for label, data in future_scenarios.items()
+                         if data.get("desc"))
+        pdf.body_text((descs + " " if descs else "") + verdict)
         pdf.ln(3)
 
     # === BATTERY COMPARISON TABLE ===
@@ -447,6 +456,18 @@ def generate_report(
         f"Energiskatt ({f'{energy_tax:.1f}'.replace('.', ',')} öre/kWh inkl. moms) och abonnemangsavgift ingår i beräkningen."
     )
 
+    wear_parts = []
+    if battery_fade_pct is not None:
+        wear_parts.append(f"batteriets kapacitet, och därmed dess värde, minskar "
+                          f"{_pct(battery_fade_pct)} % per år")
+    if solar_degradation_pct is not None:
+        wear_parts.append(f"solcellernas produktion minskar {_pct(solar_degradation_pct)} % per år")
+    if standby_w is not None:
+        cost = f" (ca {standby_cost_yr:,.0f} kr/år)" if standby_cost_yr else ""
+        wear_parts.append(f"växelriktare och BMS drar {standby_w:.0f} W dygnet runt{cost}")
+    wear_text = (" Alla belopp per år och över livslängden räknar med att "
+                 + ", ".join(wear_parts) + ". Besparing per år avser första året.") if wear_parts else ""
+
     pdf.sub_title("Batteri")
     pdf.body_text(
         f"Batteriet modelleras med "
@@ -454,6 +475,7 @@ def generate_report(
         f"och urladdning). Laddeffekten begränsas av säkringens kapacitet minus hushållets "
         f"momentana last. Batteriets livslängd beräknas från antal cykler per år (max {cycle_life:,.0f} cykler "
         f"eller 15 års kalenderlivslängd)."
+        + wear_text
     )
 
     # === ASSUMPTIONS & RISKS ===
@@ -467,15 +489,19 @@ def generate_report(
     else:
         green_text = (
             "- Beräkningen inkluderar inte skattereduktion för grön teknik "
-            "(50% för batteri, 15% för solceller vid installation av företag), "
-            "som kan förbättra lönsamheten."
+            "(50% för batteri, 15% för solceller vid installation av företag med F-skatt; "
+            "gäller inte egen installation)."
         )
     pdf.section_title("Antaganden och risker")
     pdf.body_text(
         "- Framtida elpriser antas följa samma mönster som historiska priser. "
         "Faktiska priser kan variera.\n"
-        "- Batteriets verkningsgrad antas vara konstant över livslängden. "
-        "I verkligheten minskar kapaciteten gradvis (degradering).\n"
+        + ("- Batteriets verkningsgrad antas vara konstant över livslängden. "
+           "I verkligheten minskar kapaciteten gradvis (degradering).\n"
+           if battery_fade_pct is None else
+           f"- Verkningsgraden antas konstant; kapacitetsförlusten antas linjär "
+           f"({_pct(battery_fade_pct)} %/år). Verklig åldring beror på temperatur och användning.\n")
+        + 
         "- Solproduktionen baseras på statistiska medelvärden och varierar år från år.\n"
         "- Nättariffer och energiskatt kan ändras av myndighetsbeslut.\n"
         "- Elbilens laddmönster modelleras som schemalagd nattladdning. "

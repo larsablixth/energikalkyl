@@ -48,7 +48,8 @@ For bast resultat, fyll i din arsforbrukning uppdelad per kategori (uppvarmning,
 - **Alla tariffer** for din nätägare (Tidstariff, Enkeltariff, Effekttariff)
 - **Sakringsuppgradering** — behover du storre sakring?
 - **Uppvarmningsmodell** — temperaturanpassad fran SMHI väderdata (230 stationer)
-- **Tre framtidsscenarier** — konservativt, sannolikt, hog volatilitet
+- **Fem antaganden om framtida prisskillnader** — 0,7x (mindre), 1,0x (oforandrat), 1,5x, 2,5x och 4x (storre). Antaganden, inte prognoser
+- **Slitage och standby** — batteriets kapacitetsforlust (1 %/ar), solcellernas aldring (0,5 %/ar) och standbyforbrukning (45 W) ingar i alla resultat och visas som antaganden
 - **PDF-rapport** for banken med metodik och kassaflodesanalys
 
 ## Natägare som stods

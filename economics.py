@@ -3,10 +3,11 @@ Economic evaluation of simulation results (pure functions, no Streamlit).
 
 app.py runs the simulations and calls these to turn a SimResult into the
 headline numbers: solar direct use, effekttariff (peak demand) savings,
-export revenue the panels would earn without a battery, and loan cost
-over the battery lifetime.
+export revenue the panels would earn without a battery, wear and standby
+over the years, and loan cost over the battery lifetime.
 """
 
+import math
 from collections import defaultdict
 from dataclasses import replace
 
@@ -31,6 +32,106 @@ def solar_direct_use(result, cfg) -> tuple[float, float]:
         kwh += direct
         sek += direct * s.total_cost_ore / 100
     return kwh, sek
+
+
+def solar_flows(result, direct_kwh) -> dict:
+    """Where the solar production went (kWh over the whole result).
+
+    direct_kwh comes from solar_direct_use(). Battery = solar charged into the
+    battery, flex = flexible loads (they only run on solar surplus), exported =
+    solar sent to the grid (battery export in discharge slots is excluded),
+    curtailed = what is left: produced but never used (zero-export inverter
+    throttling).
+    """
+    produced = battery = flex = exported = 0.0
+    for s in result.slots:
+        produced += s.solar_kw  # hourly slots: kW == kWh
+        battery += s.solar_charge_kwh
+        flex += s.flex_consumed_kwh
+        bat_export = s.energy_kwh if s.action == "discharge" else 0.0
+        exported += max(0.0, s.grid_export_kwh - bat_export)
+    curtailed = max(0.0, produced - direct_kwh - battery - flex - exported)
+    return {"produced": produced, "direct": direct_kwh, "battery": battery,
+            "flex": flex, "exported": exported, "curtailed": curtailed}
+
+
+def standby_cost_per_year(standby_w, avg_price_ore) -> float:
+    """SEK/yr for a constant standby draw (inverter + BMS) at an average price.
+
+    standby_w × 8,760 h = standby_w × 8.76 kWh per year.
+    """
+    return standby_w * 8.76 * avg_price_ore / 100
+
+
+def yearly_benefit(bat_part, solar_part, fixed_part, year, bat_fade, solar_deg) -> float:
+    """Benefit (SEK) in year `year` (1-based), with wear evaluated mid-year.
+
+    bat_part: battery value per year when new; it falls linearly by bat_fade
+    (fraction of capacity per year). solar_part: solar direct use counted as
+    value when new; panels degrade geometrically by solar_deg per year.
+    fixed_part: unaffected by wear (−fuse fee delta − standby cost).
+    """
+    age = year - 0.5
+    return (bat_part * max(0.0, 1.0 - bat_fade * age)
+            + solar_part * (1.0 - solar_deg) ** age
+            + fixed_part)
+
+
+def lifetime_benefit(bat_part, solar_part, fixed_part, lifetime, bat_fade, solar_deg) -> float:
+    """Sum of yearly_benefit over the lifetime; the last partial year is weighted
+    by its fraction.
+
+    bat_part may be a number or a function year -> battery value when new (used
+    by the future scenarios, where the battery value changes from year to year).
+    """
+    bat_at = bat_part if callable(bat_part) else (lambda _yr: bat_part)
+    total = 0.0
+    for yr in range(1, int(math.ceil(lifetime)) + 1):
+        weight = min(1.0, lifetime - (yr - 1))
+        total += yearly_benefit(bat_at(yr), solar_part, fixed_part, yr, bat_fade, solar_deg) * weight
+    return total
+
+
+def payback_years(investment, bat_part, solar_part, fixed_part, bat_fade, solar_deg,
+                  horizon=25, lifetime=None):
+    """Years until the cumulative (worn) benefit equals the investment.
+
+    Interpolated within the year. None if it isn't reached within `horizon`
+    years (the solar lifetime).
+
+    lifetime: battery lifetime in years. After it the battery is worn out, so
+    its value and everything tied to it (standby cost, fuse fee delta) stop;
+    only the panels keep paying. None = the battery never wears out.
+    """
+    if investment <= 0:
+        return 0.0
+    cum = 0.0
+    for yr in range(1, horizon + 1):
+        alive = 1.0 if lifetime is None else max(0.0, min(1.0, lifetime - (yr - 1)))
+        b = (alive * yearly_benefit(bat_part, solar_part, fixed_part, yr, bat_fade, solar_deg)
+             + (1.0 - alive) * yearly_benefit(0.0, solar_part, 0.0, yr, bat_fade, solar_deg))
+        if b > 0 and cum + b >= investment:
+            return yr - 1 + (investment - cum) / b
+        cum += b
+    return None
+
+
+def value_at_level(values, level) -> float:
+    """Value at `level`, linearly interpolated in {level: value} (clamped at the ends)."""
+    levels = sorted(values)
+    below = [v for v in levels if v <= level]
+    above = [v for v in levels if v > level]
+    if below and above:
+        b, a = below[-1], above[0]
+        frac = (level - b) / (a - b)
+        return values[b] * (1 - frac) + values[a] * frac
+    return values[below[-1]] if below else values[levels[0]]
+
+
+def scenario_bat_part(bat_by_vol, target_vol, year, ramp_years=10) -> float:
+    """Battery value (when new) in `year` of a future scenario: volatility moves
+    linearly from today's (1.0) to target_vol over ramp_years, then stays there."""
+    return value_at_level(bat_by_vol, 1.0 + (target_vol - 1.0) * min(year, ramp_years) / ramp_years)
 
 
 def effekt_savings(result, tariff, cfg, num_days, solar_in_baseline=False) -> float:

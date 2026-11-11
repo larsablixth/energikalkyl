@@ -25,9 +25,9 @@ The app has 6 steps that run top-to-bottom:
   5. DETAIL VIEW — Deep-dive into a specific battery: monthly cost/savings breakdown,
      solar charging, and export revenue.
 
-  6. FUTURE SCENARIOS — "What if electricity price swings increase?" Three scenarios
-     (conservative, likely, high volatility) show how the investment performs
-     as the energy market evolves.
+  6. FUTURE SCENARIOS — "What if electricity price swings change?" Five assumed levels
+     (0.7x smaller, 1.0x unchanged, 1.5x, 2.5x, 4x larger) show how the investment
+     performs. They are assumptions, not forecasts.
 
 KEY CONCEPTS:
 - "Arbitrage" = buy cheap electricity at night, use it during expensive peak hours
@@ -74,7 +74,9 @@ from weather import (
     fetch_station_data, SWEDISH_CITIES,
 )
 from report import generate_report
-from economics import solar_direct_use, effekt_savings, baseline_export_revenue, loan_schedule
+from economics import (solar_direct_use, effekt_savings, baseline_export_revenue, loan_schedule,
+                       solar_flows, standby_cost_per_year, yearly_benefit, lifetime_benefit,
+                       payback_years, value_at_level, scenario_bat_part)
 from app_state import save_state, load_state
 from translations import t, set_language, get_language, STRINGS
 
@@ -632,6 +634,10 @@ with col_sys1:
     efficiency = st.slider(t("efficiency"), 70, 100, 93, key="efficiency", help=t("efficiency_help")) / 100
     cycle_life = st.number_input(t("cycle_life"), value=8000, min_value=100, step=500,
                                   key="cycle_life", help=t("cycle_life_help"))
+    bat_fade_pct = st.number_input(t("bat_fade"), value=1.0, min_value=0.0, max_value=10.0, step=0.1,
+                                   format="%.1f", key="bat_fade", help=t("bat_fade_help"))
+    standby_w = st.number_input(t("standby_w"), value=45, min_value=0, max_value=1000, step=5,
+                                key="standby_w", help=t("standby_w_help"))
 
 with col_sys2:
     st.subheader(t("solar_panels"))
@@ -894,7 +900,7 @@ with col_l2:
     if "flexible_loads" not in st.session_state:
         st.session_state["flexible_loads"] = [
             {"name": "Poolpump", "power": 3.0, "daily": 20.0, "sm": 5, "em": 9},
-            {"name": "Varmvatten", "power": 3.0, "daily": 99.0, "sm": 1, "em": 12},
+            {"name": "Varmvatten", "power": 3.0, "daily": 10.0, "sm": 1, "em": 12},
         ]
 
     _month_names = t("month_names")
@@ -1543,7 +1549,7 @@ SOLAR_LIFETIME_YEARS = 25  # solar investment is prorated to the battery-lifetim
 
 col_g1, col_g2 = st.columns([3, 1])
 with col_g1:
-    use_green_deduction = st.checkbox(t("green_deduction_label"), value=True, key="green_deduction",
+    use_green_deduction = st.checkbox(t("green_deduction_label"), value=False, key="green_deduction",
                                       help=t("green_deduction_help"))
 with col_g2:
     green_owners = st.selectbox(t("green_owners_label"), [1, 2], index=0, key="green_owners",
@@ -1566,13 +1572,14 @@ def _green_deduction(bat_gross, sol_gross):
     return bat_d, sol_d
 
 
-def _profit_over_life(benefit_yr, lifetime, bat_invest_net, sol_invest_net):
+def _profit_over_life(benefit_life, lifetime, bat_invest_net, sol_invest_net):
     """Net result over the battery lifetime (the horizon used everywhere).
 
+    benefit_life: summed benefit over the lifetime incl. wear (lifetime_benefit()).
     The battery investment is written off over its own lifetime; the solar investment
     lives SOLAR_LIFETIME_YEARS, so only the share belonging to this horizon is charged.
     """
-    return (benefit_yr * lifetime - bat_invest_net
+    return (benefit_life - bat_invest_net
             - sol_invest_net * min(1.0, lifetime / SOLAR_LIFETIME_YEARS))
 
 # ================================================================
@@ -1612,7 +1619,7 @@ def _inputs_signature():
     import hashlib
     _hc = heating_config
     _parts = [
-        efficiency, cycle_life, use_solar, solar_kwp, export_factor, export_fee, _export_arb_kwh,
+        efficiency, cycle_life, bat_fade_pct, standby_w, use_solar, solar_kwp, export_factor, export_fee, _export_arb_kwh,
         _solar_source, sorted((solar_config.real_monthly_kwh or {}).items()) if solar_config else None,
         grid_operator, fuse_amps, phases, fuse_overcurrent_factor, energy_tax,
         peak_rate, offpeak_rate, flat_rate,
@@ -1662,22 +1669,23 @@ def scale_vol(rows, factor):
     return out
 
 
-# Future-scenario volatility levels (target factors + intermediate points for interpolation)
-FUTURE_SCENARIOS = [("conservative", 1.5), ("likely", 2.5), ("high_volatility", 4.0)]
-ALL_VOL_LEVELS = [1.0, 1.5, 2.0, 2.5, 3.0, 4.0]
+# Future-scenario volatility levels (target factors + intermediate points for interpolation).
+# Named for what they assume, not for how likely they are: the tool makes no forecast.
+FUTURE_SCENARIOS = [("scen_smaller", 0.7), ("scen_unchanged", 1.0), ("scen_somewhat_larger", 1.5),
+                    ("scen_much_larger", 2.5), ("scen_extreme", 4.0)]
+ALL_VOL_LEVELS = [0.7, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0]
 
 
 def _compute_vol_benefits(best, price_rows, solar_cfg):
     """Simulate the recommended battery at each volatility level (once, after a simulation).
 
-    Returns {factor: yearly benefit} with the SAME benefit definition as the main
-    recommendation: arbitrage + effekt savings + solar self-consumption − fuse fee delta
-    (and, for existing panels with export, minus the export they earn without a battery).
-    Factor 1.0 is the main result itself (no re-simulation).
+    Returns {factor: battery part per year when new}, the same quantity as best["bat_part"]
+    (arbitrage + effekt savings, and for existing panels with export minus the export they
+    earn without a battery). The solar and fixed parts don't depend on volatility; wear is
+    applied when the scenario is evaluated. Factor 1.0 is the main result itself.
     """
     ref_cfg = best["config"]
-    _extra = (best["total_benefit_yr"] - best["arb_yr"]) - best["fuse_fee_delta_yr"]
-    out = {1.0: best["net_benefit_yr"]}
+    out = {1.0: best["bat_part"]}
     for vf in ALL_VOL_LEVELS:
         if vf == 1.0:
             continue
@@ -1706,7 +1714,7 @@ def _compute_vol_benefits(best, price_rows, solar_cfg):
         if d > 0 and solar_cfg and sol_invest_total == 0 and fc_cfg.export_price_factor > 0:
             # Existing panels: their export without a battery (at these prices) isn't battery value
             ay -= baseline_export_revenue(scaled, fc_cfg, best["tariff"], solar_cfg) / d * 365.25
-        out[vf] = ay + _extra
+        out[vf] = ay
     return out
 
 
@@ -1762,6 +1770,8 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
         return tariffs
 
     price_rows = df_prices.to_dict("records")
+    bat_fade = bat_fade_pct / 100
+    solar_deg = solar_config.degradation_per_year if solar_config else 0.0
     # Panels the household already has (solar enabled, no solar investment)
     _existing_solar = bool(solar_config) and sol_invest_total == 0
     _baseline_export_cache = {}  # (fuse, tariff name) -> export SEK/yr without battery
@@ -1806,6 +1816,7 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
             num_days = 0
             effekt_saving_yr = 0
             solar_self_yr = 0
+            solar_direct_kwh = 0
             baseline_export_yr = 0
 
             for _tf in _fuse_tariffs:
@@ -1834,9 +1845,10 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
                     p -= base_exp
 
                 # Solar used directly by the house (also needs this tariff's schedule in cfg)
-                sol_self = 0
+                sol_self = sol_self_kwh = 0
                 if solar_config:
-                    sol_self = solar_direct_use(r, cfg)[1] / d * 365.25
+                    sol_self_kwh, sol_self = solar_direct_use(r, cfg)
+                    sol_self = sol_self / d * 365.25
 
                 if p > best_profit:
                     best_profit = p
@@ -1846,6 +1858,7 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
                     num_days = d
                     effekt_saving_yr = eff_save
                     solar_self_yr = sol_self
+                    solar_direct_kwh = sol_self_kwh
                     baseline_export_yr = base_exp
 
             if result is None:
@@ -1854,8 +1867,19 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
             arb_yr = (result.net_profit_sek / num_days * 365.25 + effekt_saving_yr
                       - baseline_export_yr) if num_days > 0 else 0
 
-            total_benefit_yr = arb_yr + (solar_self_yr if sol_invest_total > 0 else 0)
-            net_benefit_yr = total_benefit_yr - _fuse_fee_delta_yr
+            # Benefit split by how it wears: battery value fades with capacity, counted solar
+            # direct use with panel degradation, fixed part (fuse fee delta, standby) doesn't.
+            # Standby: constant draw around the clock at the unweighted mean purchase price.
+            _avg_ore = (sum(s.total_cost_ore for s in result.slots) / len(result.slots)
+                        if result.slots else 0)
+            standby_cost_yr = standby_cost_per_year(standby_w, _avg_ore)
+            bat_part = arb_yr
+            solar_part = solar_self_yr if sol_invest_total > 0 else 0
+            fixed_part = -_fuse_fee_delta_yr - standby_cost_yr
+            _wear_args = (bat_fade, solar_deg)
+            # Year-1 benefit ("lower electricity cost per year" in texts and PDF)
+            net_benefit_yr = yearly_benefit(bat_part, solar_part, fixed_part, 1, *_wear_args)
+            total_benefit_yr = net_benefit_yr + _fuse_fee_delta_yr  # before fuse fee delta
             # Investments are net of the grön teknik deduction (when enabled)
             _bat_ded, _sol_ded = _green_deduction(bat_cost + bat_install, sol_invest_total)
             invest = bat_cost + bat_install - _bat_ded
@@ -1863,12 +1887,17 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
             total_invest = invest + sol_invest_net
             cycles_yr = result.num_cycles / (num_days / 365.25) if num_days > 0 else 0
             lifetime = min(cycle_life / cycles_yr if cycles_yr > 0 else 15, 15)
-            payback = total_invest / net_benefit_yr if net_benefit_yr > 0 else None
-            profit_life = _profit_over_life(net_benefit_yr, lifetime, invest, sol_invest_net)
+            payback = payback_years(total_invest, bat_part, solar_part, fixed_part, *_wear_args,
+                                    horizon=SOLAR_LIFETIME_YEARS, lifetime=lifetime)
+            benefit_life = lifetime_benefit(bat_part, solar_part, fixed_part, lifetime, *_wear_args)
+            profit_life = _profit_over_life(benefit_life, lifetime, invest, sol_invest_net)
 
             # Track grid export for self-consumption optimization
             _yrs = num_days / 365.25 if num_days > 0 else 1
             grid_export_yr = result.total_grid_export_kwh / _yrs
+            # Where the solar production went (kWh/yr), for the detail view
+            _sflows = ({k: v / _yrs for k, v in solar_flows(result, solar_direct_kwh).items()}
+                       if solar_config else None)
 
             # Track luft-luft flex contribution (from solar surplus)
             _aa_flex_kwh = 0
@@ -1890,6 +1919,10 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
                 "arb_yr": arb_yr, "solar_self_yr": solar_self_yr,
                 "total_benefit_yr": total_benefit_yr,
                 "net_benefit_yr": net_benefit_yr,
+                "bat_part": bat_part, "solar_part": solar_part, "fixed_part": fixed_part,
+                "standby_cost_yr": standby_cost_yr, "benefit_life": benefit_life,
+                "bat_fade": bat_fade, "solar_deg": solar_deg,
+                "solar_flows_kwh_yr": _sflows,
                 "fuse_amps": _fuse, "fuse_fee_yr": _op_fuse_fees.get(_fuse, 0),
                 "fuse_fee_delta_yr": _fuse_fee_delta_yr,
                 "payback": payback, "profit_life": profit_life,
@@ -1936,6 +1969,8 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
         "sol_install": sol_install if use_solar else 0, "sol_invest_total": sol_invest_total,
         "finance": finance, "loan_rate": loan_rate, "loan_years": loan_years,
         "efficiency": efficiency, "cycle_life": cycle_life, "energy_tax": energy_tax,
+        "bat_fade_pct": bat_fade_pct, "standby_w": standby_w, "solar_deg": solar_deg,
+        "battery_prices": [(str(rw["Namn"]), float(rw["Pris_SEK"])) for _, rw in valid_rows.iterrows()],
         "green_deduction": use_green_deduction, "green_owners": green_owners,
         "price_range": f"{df_prices['date'].min()} — {df_prices['date'].max()}",
         "price_days": int(df_prices["date"].nunique()),
@@ -1977,40 +2012,44 @@ def _fmt_payback(payback):
 def _annual_cost(res):
     """Annualized investment cost: battery over its lifetime, solar over SOLAR_LIFETIME_YEARS.
 
-    net_benefit_yr − _annual_cost(res), times the lifetime, equals profit_life.
+    (_avg_benefit(res) − _annual_cost(res)) × lifetime equals profit_life.
     """
     sol_net = res.get("sol_invest_net", res["total_invest"] - res["invest"])
     life = max(res["lifetime"], 1e-9)
     return (res["invest"] + sol_net * min(1.0, life / SOLAR_LIFETIME_YEARS)) / life
 
 
-def _vol_benefit_at(vol_arb, vol):
-    """Yearly benefit at a volatility factor, interpolated between simulated levels."""
-    levels = sorted(vol_arb)
-    below = [v for v in levels if v <= vol]
-    above = [v for v in levels if v > vol]
-    if below and above:
-        b, a = below[-1], above[0]
-        frac = (vol - b) / (a - b)
-        return vol_arb[b] * (1 - frac) + vol_arb[a] * frac
-    return vol_arb[below[-1]] if below else vol_arb[levels[0]]
+def _avg_benefit(res):
+    """Average benefit per year over the battery lifetime (incl. wear and standby)."""
+    return res["benefit_life"] / max(res["lifetime"], 1e-9)
 
 
-def _scenario_year_benefit(vol_arb, target_vol, yr):
-    """Benefit in year `yr`: volatility ramps linearly from today to target over 10 years."""
-    return _vol_benefit_at(vol_arb, 1.0 + (target_vol - 1.0) * min(yr, 10) / 10)
+def _wear(res):
+    return res["bat_fade"], res["solar_deg"]
+
+
+def _vol_benefit_at(vol_arb, vol, res):
+    """Year-1 benefit if volatility were `vol` already (battery part interpolated
+    between simulated levels + solar + fixed parts)."""
+    return yearly_benefit(value_at_level(vol_arb, vol), res["solar_part"], res["fixed_part"], 1,
+                          *_wear(res))
+
+
+def _scenario_year_benefit(vol_arb, target_vol, yr, res):
+    """Benefit in year `yr`: volatility ramps linearly from today to target over 10 years,
+    with the same wear as the main result."""
+    return yearly_benefit(scenario_bat_part(vol_arb, target_vol, yr), res["solar_part"],
+                          res["fixed_part"], yr, *_wear(res))
 
 
 def _scenario_net(vol_arb, target_vol, res):
-    """Net over the battery lifetime for a scenario — same accounting as profit_life."""
+    """Net over the battery lifetime for a scenario — same accounting as profit_life
+    (the unchanged 1.0× scenario equals profit_life exactly)."""
     life = res["lifetime"]
-    total = 0.0
-    yr = 1
-    while yr - 1 < life:
-        total += _scenario_year_benefit(vol_arb, target_vol, yr) * min(1.0, life - (yr - 1))
-        yr += 1
+    total = lifetime_benefit(lambda yr: scenario_bat_part(vol_arb, target_vol, yr),
+                             res["solar_part"], res["fixed_part"], life, *_wear(res))
     sol_net = res.get("sol_invest_net", res["total_invest"] - res["invest"])
-    return _profit_over_life(0, life, res["invest"], sol_net) + total
+    return _profit_over_life(total, life, res["invest"], sol_net)
 
 
 if "all_results" in st.session_state:
@@ -2073,6 +2112,30 @@ if "all_results" in st.session_state:
         if not (use_solar and solar_kwp > 0):
             st.caption(t("green_no_battery_without_solar"))
     st.caption(t("horizon_note").format(solar_life=SOLAR_LIFETIME_YEARS))
+
+    # === ASSUMPTIONS behind the result (always visible, values from the simulation snapshot) ===
+    with st.expander(t("assumptions_header"), expanded=True):
+        _ass = [t("assume_prices").format(range=_si.get("price_range", ""), days=_si.get("price_days", 0))]
+        _bp = "; ".join(f"{_n} {_p:,.0f} kr" for _n, _p in _si.get("battery_prices", []))
+        _ass.append(t("assume_battery_prices").format(prices=_bp, install=f"{bat_install:,.0f}"))
+        if sol_invest_total > 0:
+            _ass.append(t("assume_solar_price").format(material=f"{sol_price:,.0f}",
+                                                       install=f"{sol_install:,.0f}"))
+        _gd_used = best.get("green_bat", 0) + best.get("green_sol", 0)
+        if _si.get("green_deduction") and _gd_used > 0:
+            _ass.append(t("assume_green_on").format(amount=f"{_gd_used:,.0f}"))
+        else:
+            _ass.append(t("assume_green_off"))
+        _ass.append(t("assume_efficiency").format(eff=f"{_si.get('efficiency', 0) * 100:.0f}"))
+        _ass.append(t("assume_fade").format(fade=f"{best['bat_fade'] * 100:.1f}"))
+        _ass.append(t("assume_standby").format(w=f"{_si.get('standby_w', 0):.0f}",
+                                               cost=f"{best['standby_cost_yr']:,.0f}"))
+        if best["solar_part"] > 0:
+            _ass.append(t("assume_solar_deg").format(deg=f"{best['solar_deg'] * 100:.1f}"))
+        _ass.append(t("assume_horizon").format(life=f"{best['lifetime']:.1f}",
+                                               cycles=f"{best['cycles_yr']:.0f}"))
+        _ass.append(t("assume_future_prices"))
+        st.markdown("\n".join(f"- {_a}" for _a in _ass))
     if _rec_fuse != fuse_amps:
         _fv = st.session_state.get("fuse_variants", {}).get(best["label"], [])
         _current_fuse_result = next((r for r in _fv if r["fuse_amps"] == fuse_amps), None)
@@ -2148,12 +2211,16 @@ if "all_results" in st.session_state:
             _alt_arb -= baseline_export_revenue(price_rows, _alt_cfg, best["tariff"],
                                                 solar_cfg) / _alt_yrs
         _alt_life = min(best["config"].cycle_life / _alt_cycles if _alt_cycles > 0 else 15, 15)
-        _alt_benefit = _alt_arb + _alt_solar_self - best["fuse_fee_delta_yr"]
+        # Same accounting as the main result: wear, standby (same prices and tariff), fuse fee
+        _alt_fixed = best["fixed_part"]
+        _alt_benefit = yearly_benefit(_alt_arb, _alt_solar_self, _alt_fixed, 1, *_wear(best))
+        _alt_benefit_life = lifetime_benefit(_alt_arb, _alt_solar_self, _alt_fixed, _alt_life,
+                                             *_wear(best))
         return {
             "benefit": _alt_benefit,
             "cycles": _alt_cycles,
             "life": _alt_life,
-            "profit": _profit_over_life(_alt_benefit, _alt_life, best["invest"],
+            "profit": _profit_over_life(_alt_benefit_life, _alt_life, best["invest"],
                                         best.get("sol_invest_net", best["total_invest"] - best["invest"])),
             "export_kwh": _alt_result.total_grid_export_kwh / _alt_yrs if _alt_yrs > 0 else 0,
             "export_rev": _alt_result.total_export_revenue / _alt_yrs if _alt_yrs > 0 else 0,
@@ -2303,11 +2370,11 @@ if "all_results" in st.session_state:
         _report_net_life_fin = best["profit_life"] - _ls_rep["interest_in_horizon"]
 
     # Future scenarios (simulated once at simulation time, see _compute_vol_benefits)
-    _vol_arb = st.session_state.get("vol_arb") or {1.0: best["net_benefit_yr"]}
+    _vol_arb = st.session_state.get("vol_arb") or {1.0: best["bat_part"]}
     scenario_results = {}
     for _sk, _svf in FUTURE_SCENARIOS:
         scenario_results[t(_sk)] = {
-            "arb_yr": _vol_benefit_at(_vol_arb, _svf), "vol": _svf, "desc": t(f"{_sk}_desc"),
+            "arb_yr": _vol_benefit_at(_vol_arb, _svf, best), "vol": _svf, "desc": t(f"{_sk}_desc"),
             "lifetime_profit": _scenario_net(_vol_arb, _svf, best),
         }
 
@@ -2362,6 +2429,11 @@ if "all_results" in st.session_state:
                 green_deduction_battery=best.get("green_bat", 0),
                 green_deduction_solar=best.get("green_sol", 0),
                 solar_lifetime_years=SOLAR_LIFETIME_YEARS,
+                battery_fade_pct=_si.get("bat_fade_pct"),
+                standby_w=_si.get("standby_w"),
+                standby_cost_yr=best.get("standby_cost_yr"),
+                solar_degradation_pct=(_si.get("solar_deg", 0) * 100
+                                       if best.get("solar_part", 0) > 0 else None),
             ))
             st.session_state["_pdf_cache"] = _pdf_bytes
         except Exception as e:
@@ -2615,7 +2687,8 @@ if "all_results" in st.session_state:
     # === SCENARIO SPLIT: Normal years vs High-price period ===
     # Split simulation results by year to show realistic range
     def _yearly_profit(result, year_prefix):
-        """Compute annualized profit from slots matching a year prefix."""
+        """Annualized raw battery slot profit (discharge value − charge cost + export revenue)
+        from slots matching a year prefix ("" = the whole period)."""
         slots = [s for s in result.slots if s.date.startswith(year_prefix)]
         if not slots:
             return None
@@ -2645,7 +2718,8 @@ if "all_results" in st.session_state:
                 yp = _yearly_profit(r["result"], y)
                 if yp is not None:
                     row[y] = yp
-            row["all"] = r["net_benefit_yr"]
+            # Same quantity as the per-year columns, over the whole period
+            row["all"] = _yearly_profit(r["result"], "") or 0
             scenario_data.append(row)
 
         # Identify "normal" and "high" scenarios
@@ -2733,7 +2807,7 @@ if "all_results" in st.session_state:
     ))
     fig_annual.add_trace(go.Bar(
         x=labels,
-        y=[r["net_benefit_yr"] for r in all_results],
+        y=[_avg_benefit(r) for r in all_results],
         name=t("savings_trace"),
         marker_color="#2ecc71",
         hovertemplate="%{x}<br>" + t("saving_hover") + ": %{y:,.0f} " + t("kr_yr") + "<extra></extra>",
@@ -2749,10 +2823,10 @@ if "all_results" in st.session_state:
         return f" ({f:.0f}A)" if f != fuse_amps else ""
     st.dataframe(pd.DataFrame([{
         t("col_battery"): r["label"] + _fuse_label(r),
-        t("col_savings_yr"): f"{r['net_benefit_yr']:,.0f} kr",
+        t("col_savings_yr"): f"{_avg_benefit(r):,.0f} kr",
         t("col_cost_yr"): f"{_annual_cost(r):,.0f} kr",
-        t("col_net_yr"): f"{r['net_benefit_yr'] - _annual_cost(r):,.0f} kr",
-        t("col_net_mo"): f"{(r['net_benefit_yr'] - _annual_cost(r)) / 12:,.0f} kr",
+        t("col_net_yr"): f"{_avg_benefit(r) - _annual_cost(r):,.0f} kr",
+        t("col_net_mo"): f"{(_avg_benefit(r) - _annual_cost(r)) / 12:,.0f} kr",
         t("col_investment"): f"{r['total_invest']:,.0f} kr",
         t("col_lifetime"): f"{r['lifetime']:.0f} {t('yr')}",
         t("col_tariff"): r["best_tariff"],
@@ -2769,28 +2843,32 @@ if "all_results" in st.session_state:
     else:
         _show = all_results
 
-    # LFP degradation: ~1%/year capacity fade (well-established in literature)
-    LFP_FADE_PER_YEAR = 0.01
+    def _cum_cashflow(res):
+        """Cumulative cash flow (money in/out) with wear and standby, until the battery is worn
+        out. The last point is at the (possibly fractional) lifetime."""
+        life = res["lifetime"]
+        xs, ys = [0], [-res["total_invest"]]
+        for yr in range(1, int(math.ceil(life)) + 1):
+            weight = min(1.0, life - (yr - 1))
+            ys.append(ys[-1] + weight * yearly_benefit(res["bat_part"], res["solar_part"],
+                                                       res["fixed_part"], yr, *_wear(res)))
+            xs.append(round(yr - 1 + weight, 2))
+        return xs, ys
 
     fig_life = go.Figure()
     colors = ["#3498db", "#2ecc71", "#e74c3c"]
-    years = list(range(0, 16))
     for i, r in enumerate(_show):
-        # Solid line: degradation-adjusted cashflow
-        cum = [-r["total_invest"]]
-        for yr in range(1, 16):
-            soh = 1 - LFP_FADE_PER_YEAR * yr
-            cum.append(cum[-1] + r["net_benefit_yr"] * soh)
+        xs, cum = _cum_cashflow(r)
         is_best = r["label"] == best["label"]
         fig_life.add_trace(go.Scatter(
-            x=years, y=cum, mode="lines+markers", name=r["label"],
+            x=xs, y=cum, mode="lines+markers", name=r["label"],
             line=dict(width=4 if is_best else 2, color=colors[i % len(colors)]),
             hovertemplate=(
                 f"{r['label']}<br>"
                 f"{t('xaxis_year')} %{{x}}: %{{y:,.0f}} kr<br>"
                 "SoH: %{customdata:.0f}%<extra></extra>"
             ),
-            customdata=[100 - yr * LFP_FADE_PER_YEAR * 100 for yr in years],
+            customdata=[max(0.0, 100 - x * r["bat_fade"] * 100) for x in xs],
         ))
     fig_life.add_hline(y=0, line_color="gray", line_width=1,
                         annotation_text=t("repaid_annotation"), annotation_position="bottom right")
@@ -2799,7 +2877,9 @@ if "all_results" in st.session_state:
         margin=dict(l=0, r=0, t=30, b=0), legend=dict(orientation="h", y=1.02),
     )
     st.plotly_chart(fig_life, use_container_width=True)
-    st.caption(t("degradation_caption"))
+    st.caption(t("degradation_caption").format(
+        fade=f"{best['bat_fade'] * 100:.1f}", deg=f"{best['solar_deg'] * 100:.1f}",
+        standby=f"{_si.get('standby_w', 0):.0f}", standby_cost=f"{best['standby_cost_yr']:,.0f}"))
 
     # === FINANCING PERSPECTIVE ===
     st.divider()
@@ -2872,14 +2952,14 @@ if "all_results" in st.session_state:
         if len(profitable) == len(fin_data):
             st.success(t("fin_all_profitable").format(
                 label=best_fin['label'],
-                net_mo=f"{best_fin['net']:,.0f}",
-                net_life=f"{best_fin['net_lifetime']:,.0f}",
+                net_mo=f"{best_fin['net']:+,.0f}",
+                net_life=f"{best_fin['net_lifetime']:+,.0f}",
                 lifetime=f"{best_fin['lifetime']:.0f}"))
         elif profitable:
             st.info(t("fin_best_result").format(
                 label=best_fin['label'],
-                net_mo=f"{best_fin['net']:,.0f}",
-                net_life=f"{best_fin['net_lifetime']:,.0f}",
+                net_mo=f"{best_fin['net']:+,.0f}",
+                net_life=f"{best_fin['net_lifetime']:+,.0f}",
                 lifetime=f"{best_fin['lifetime']:.0f}"))
         else:
             st.warning(t("fin_none_profitable"))
@@ -2890,10 +2970,7 @@ if "all_results" in st.session_state:
         fig_cf = go.Figure()
         colors = ["#3498db", "#2ecc71", "#e74c3c", "#9b59b6", "#f39c12", "#1abc9c"]
         for i, r in enumerate(all_results):
-            years = list(range(0, 16))
-            cf = [-r["total_invest"]]
-            for y in range(1, 16):
-                cf.append(cf[-1] + r["net_benefit_yr"])
+            years, cf = _cum_cashflow(r)
             fig_cf.add_trace(go.Scatter(
                 x=years, y=cf, mode="lines+markers", name=r["label"],
                 line=dict(width=2, color=colors[i % len(colors)]),
@@ -2975,6 +3052,7 @@ if "all_results" in st.session_state:
             t("fuse_col_net"): f"{fc['net_yr']:,.0f} {t('kr_yr')} ({fc['net_yr']/12:,.0f} {t('kr_month')})",
             t("fuse_col_vs_current"): f"{fc['net_yr'] - _current_net:+,.0f} {t('kr_yr')}" if not fc["current"] else "\u2014",
         } for fc in fuse_comparison]), use_container_width=True, hide_index=True)
+        st.caption(t("fuse_year1_note"))
 
         # Recommendation
         best_fuse = max(fuse_comparison, key=lambda fc: fc["net_yr"])
@@ -3030,10 +3108,17 @@ if "all_results" in st.session_state:
         st.text(f"{_lbl('detail_battery_price')} {sel['bat_cost']:>10,.0f} kr")
         st.text(f"{_lbl('detail_total_invest')} {sel['total_invest']:>10,.0f} kr")
         st.text(f"{_lbl('detail_lower_cost')} {per_year:>10,.0f} {t('kr_yr')} ({per_year/12:,.0f} {t('kr_month')})")
-        if sel["arb_yr"] > 0:
-            st.text(f"{_lbl('detail_of_which_battery')} {sel['arb_yr']:>10,.0f} {t('kr_yr')}")
-        if sel["solar_self_yr"] > 0:
-            st.text(f"{_lbl('detail_of_which_solar')} {sel['solar_self_yr']:>10,.0f} {t('kr_yr')}")
+        # Year-1 components (they add up to the line above)
+        _bat_y1 = yearly_benefit(sel["bat_part"], 0, 0, 1, *_wear(sel))
+        _sol_y1 = yearly_benefit(0, sel["solar_part"], 0, 1, *_wear(sel))
+        if _bat_y1 != 0:
+            st.text(f"{_lbl('detail_of_which_battery')} {_bat_y1:>10,.0f} {t('kr_yr')}")
+        if sel["solar_part"] > 0:  # only when solar is part of the investment (counted)
+            st.text(f"{_lbl('detail_of_which_solar')} {_sol_y1:>10,.0f} {t('kr_yr')}")
+        if sel["standby_cost_yr"] > 0:
+            st.text(f"{_lbl('detail_of_which_standby')} {-sel['standby_cost_yr']:>10,.0f} {t('kr_yr')}")
+        if sel["fuse_fee_delta_yr"] != 0:
+            st.text(f"{_lbl('detail_of_which_fuse')} {-sel['fuse_fee_delta_yr']:>10,.0f} {t('kr_yr')}")
         if sel.get("green_bat", 0) + sel.get("green_sol", 0) > 0:
             st.text(f"{_lbl('detail_green_deduction')} {-(sel['green_bat'] + sel['green_sol']):>10,.0f} kr")
         st.text(f"{_lbl('detail_payback')} {_fmt_payback(sel['payback']):>13}")
@@ -3042,6 +3127,12 @@ if "all_results" in st.session_state:
         _life_lbl = (t('detail_battery_life') + ":").ljust(_w)
         st.text(f"{_life_lbl} {sel['lifetime']:>10.1f} {t('yr')} ({sel['cycles_yr']:.0f} {t('cycles_yr')})")
         st.text(f"{_lbl('detail_tariff')} {sel['best_tariff']}")
+        _sf = sel.get("solar_flows_kwh_yr")
+        if _sf and _sf["produced"] > 0:
+            st.markdown(f"**{t('detail_solar_flows')}**")
+            for _fk in ("produced", "direct", "battery", "flex", "exported", "curtailed"):
+                st.text(f"{_lbl('solar_flow_' + _fk)} {_sf[_fk]:>10,.0f} kWh/{t('yr')}"
+                        + (f" ({_sf[_fk] / _sf['produced']:.0%})" if _fk != "produced" else ""))
 
     # Monthly cashflow breakdown
     st.subheader(t("typical_year"))
@@ -3132,10 +3223,11 @@ if "all_results" in st.session_state:
     # swing between cheap and expensive hours), not on the average price level.
     # More wind/solar in the grid → more volatility → better for batteries.
     #
-    # This section scales the historical price data to simulate three futures:
-    #   - Conservative (1.5x): modest increase in price swings
-    #   - Likely (2.5x): what most energy analysts expect in 10 years
-    #   - High volatility (4.0x): aggressive renewable buildout scenario
+    # This section scales the historical price swings to five assumed futures. They are
+    # assumptions, not forecasts, and none is presented as more likely than another:
+    #   - Smaller swings (0.7x): e.g. many batteries and flexible loads flattening prices
+    #   - Unchanged (1.0x): equals the main result exactly
+    #   - Somewhat larger (1.5x), much larger (2.5x), extremely larger (4.0x)
     #
     # The scaling preserves the daily average price but amplifies the spread
     # between cheap and expensive hours. The volatility increases linearly
@@ -3146,7 +3238,7 @@ if "all_results" in st.session_state:
     st.caption(t("step6_caption"))
 
 
-    # Three scenarios for the recommended battery. Simulated ONCE right after the main
+    # Five scenarios for the recommended battery. Simulated ONCE right after the main
     # simulation (_compute_vol_benefits); here we only read the cached numbers.
     # Benefit and net use the same definitions as the main recommendation.
     scenarios = [(t(_sk), _svf, t(f"{_sk}_desc")) for _sk, _svf in FUTURE_SCENARIOS]
@@ -3154,8 +3246,7 @@ if "all_results" in st.session_state:
     _horizon = best["lifetime"]
 
     # Summary metrics
-    col_s1, col_s2, col_s3 = st.columns(3)
-    for col, (label, vf, desc) in zip([col_s1, col_s2, col_s3], scenarios):
+    for col, (label, vf, desc) in zip(st.columns(len(scenarios)), scenarios):
         sr = scenario_results[label]
         col.metric(label, f"{sr['arb_yr']:,.0f} {t('kr_yr')}",
                     delta=t("net_lifetime_delta").format(value=f"{sr['lifetime_profit']:+,.0f}",
@@ -3167,14 +3258,18 @@ if "all_results" in st.session_state:
     st.caption(t("forecast_15yr_caption"))
 
     fig_15 = go.Figure()
-    scenario_colors = {t("conservative"): "#3498db", t("likely"): "#2ecc71", t("high_volatility"): "#e74c3c"}
+    scenario_colors = {t("scen_smaller"): "#9b59b6", t("scen_unchanged"): "#7f8c8d",
+                       t("scen_somewhat_larger"): "#3498db", t("scen_much_larger"): "#2ecc71",
+                       t("scen_extreme"): "#e74c3c"}
     _n_years = int(math.ceil(_horizon))
     for label, target_vol, desc in scenarios:
-        cum = [-inv]
+        cum, xs = [-inv], [0]
         for yr in range(1, _n_years + 1):
-            cum.append(cum[-1] + _scenario_year_benefit(_vol_arb, target_vol, yr))
+            _w = min(1.0, _horizon - (yr - 1))  # stop at the battery's lifetime
+            cum.append(cum[-1] + _w * _scenario_year_benefit(_vol_arb, target_vol, yr, best))
+            xs.append(round(yr - 1 + _w, 2))
         fig_15.add_trace(go.Scatter(
-            x=list(range(_n_years + 1)), y=cum, mode="lines",
+            x=xs, y=cum, mode="lines",
             name=label, line=dict(width=3, color=scenario_colors[label]),
             hovertemplate=f"{label}<br>{t('xaxis_year')} %{{x}}: %{{y:,.0f}} kr<extra></extra>",
         ))

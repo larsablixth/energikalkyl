@@ -1141,6 +1141,99 @@ class TestLoanSchedule:
         assert abs(ls["interest_in_horizon"] - (ls["monthly_payment"] * 120 - 100_000)) < 1e-6
 
 
+class TestWearAndStandby:
+    def test_standby_cost(self):
+        from economics import standby_cost_per_year
+        # 45 W × 8,760 h = 394.2 kWh at 150 öre = 591.3 kr
+        assert abs(standby_cost_per_year(45, 150.0) - 591.3) < 1e-9
+        assert standby_cost_per_year(0, 150.0) == 0
+
+    def test_yearly_benefit_mid_year_wear(self):
+        from economics import yearly_benefit
+        # Year 1: battery at 1 − 0.01×0.5, solar at 0.995^0.5, fixed unchanged
+        b = yearly_benefit(10_000, 6_000, -500, 1, 0.01, 0.005)
+        assert abs(b - (10_000 * 0.995 + 6_000 * 0.995 ** 0.5 - 500)) < 1e-9
+        # No wear: plain sum
+        assert yearly_benefit(10_000, 6_000, -500, 7, 0, 0) == 15_500
+        # Battery value never goes negative
+        assert yearly_benefit(10_000, 0, 0, 200, 0.01, 0) == 0
+
+    def test_lifetime_benefit_partial_year(self):
+        from economics import lifetime_benefit, yearly_benefit
+        # No wear: equals yearly × lifetime, also for a fractional lifetime
+        assert abs(lifetime_benefit(1_000, 500, -100, 12.4, 0, 0) - 1_400 * 12.4) < 1e-9
+        # With wear: last year weighted by its fraction
+        exp = sum(yearly_benefit(1_000, 500, -100, yr, 0.01, 0.005) for yr in range(1, 3))
+        exp += 0.5 * yearly_benefit(1_000, 500, -100, 3, 0.01, 0.005)
+        assert abs(lifetime_benefit(1_000, 500, -100, 2.5, 0.01, 0.005) - exp) < 1e-9
+        # Linear battery fade: average over 15 years = value at the midpoint (7.5 yr)
+        assert abs(lifetime_benefit(10_000, 0, 0, 15, 0.01, 0) - 15 * 10_000 * 0.925) < 1e-6
+
+    def test_payback_interpolated_and_none(self):
+        from economics import payback_years
+        assert abs(payback_years(25_000, 10_000, 0, 0, 0, 0) - 2.5) < 1e-9
+        # Wear makes payback later than investment / year-1 benefit
+        assert payback_years(100_000, 10_000, 0, 0, 0.01, 0) > 100_000 / 9_950
+        # Never reached within the 25-year solar lifetime
+        assert payback_years(100_000, 1_000, 0, 0, 0.01, 0) is None
+        assert payback_years(10_000, 1_000, 0, -2_000, 0, 0) is None
+        assert payback_years(0, 1_000, 0, 0, 0, 0) == 0
+        # After the battery lifetime only the panels keep paying: 5 years of
+        # 10,000 (battery 8,000 + solar 2,000) = 50,000, then 2,000 per year.
+        assert abs(payback_years(60_000, 8_000, 2_000, 0, 0, 0, lifetime=5) - 10.0) < 1e-9
+        # A battery-only investment that isn't repaid within the battery's life never is
+        assert payback_years(60_000, 8_000, 0, 0, 0, 0, lifetime=5) is None
+        # Standby (fixed part) stops with the battery too
+        assert abs(payback_years(40_000, 8_000, 2_000, -1_000, 0, 0, lifetime=4) - 6.0) < 1e-9
+
+    def test_unchanged_scenario_equals_main_result(self):
+        """The 1.0× scenario must reproduce the main lifetime benefit exactly."""
+        from economics import lifetime_benefit, scenario_bat_part
+        vol = {0.7: 6_000.0, 1.0: 9_000.0, 1.5: 12_000.0, 2.5: 15_000.0, 4.0: 20_000.0}
+        main = lifetime_benefit(9_000.0, 6_653.0, -700.0, 13.7, 0.01, 0.005)
+        scen = lifetime_benefit(lambda yr: scenario_bat_part(vol, 1.0, yr),
+                                6_653.0, -700.0, 13.7, 0.01, 0.005)
+        assert scen == main
+
+    def test_scenario_ramp(self):
+        from economics import scenario_bat_part, value_at_level
+        vol = {0.7: 7_000.0, 1.0: 10_000.0, 1.5: 12_000.0}
+        assert scenario_bat_part(vol, 1.5, 10) == 12_000.0
+        assert scenario_bat_part(vol, 1.5, 14) == 12_000.0          # stays at target
+        assert abs(scenario_bat_part(vol, 1.5, 5) - 11_000.0) < 1e-9  # 1.25× halfway
+        assert abs(scenario_bat_part(vol, 0.7, 5) - 8_500.0) < 1e-9   # 0.85×
+        assert value_at_level(vol, 5.0) == 12_000.0                  # clamped
+
+
+class TestSolarFlows:
+    def test_flows_add_up(self):
+        from batteri import SimResult, BatteryConfig
+        from economics import solar_flows
+        r = SimResult(config=BatteryConfig())
+        # 6 kW solar: 2 direct, 2 battery, 1 flex, 1 curtailed (zero export)
+        s1 = _slot("2026-06-15", "12:00", solar=6.0)
+        s1.solar_charge_kwh, s1.flex_consumed_kwh = 2.0, 1.0
+        # 4 kW solar, battery discharging 3 kWh to the grid on top of 1 kWh solar export
+        s2 = _slot("2026-06-15", "13:00", action="discharge", power=3.0, solar=4.0)
+        s2.grid_export_kwh = 4.0
+        r.slots = [s1, s2]
+        f = solar_flows(r, direct_kwh=5.0)
+        assert f["produced"] == 10.0 and f["battery"] == 2.0 and f["flex"] == 1.0
+        assert f["exported"] == 1.0
+        assert abs(f["curtailed"] - 1.0) < 1e-9
+
+
+class TestReportAssumptions:
+    def test_wear_and_five_scenarios_in_pdf(self):
+        from report import generate_report
+        scen = {f"S{v}": {"arb_yr": 1000.0 * v, "vol": v, "lifetime_profit": 100.0 * v - 200,
+                          "desc": "antagande"} for v in (0.7, 1.0, 1.5, 2.5, 4.0)}
+        pdf = generate_report(battery_label="32 kWh", future_scenarios=scen,
+                              battery_fade_pct=1.0, standby_w=45, standby_cost_yr=600,
+                              solar_degradation_pct=0.5)
+        assert pdf[:4] == b"%PDF"
+
+
 class TestSmartLoadEnergy:
     def test_daily_energy_matches_target(self):
         """11 kW EV needing 30 kWh: 3 hours, the most expensive at 8 kW."""

@@ -38,26 +38,28 @@ The app follows a 6-step flow:
    - Heating: calibrated from energy class OR manual Tibber Insights breakdown OR auto-fit from consumption
    - Calibrated data overrides energy class completely (house size irrelevant when calibrated)
    - EV default: 18-07 window, 30 kWh/day, Smart=True (picks 3 cheapest hours within window)
-   - Flex loads: pool (summer) + varmvatten dump (year-round, absorbs remaining solar)
+   - Flex loads: pool (summer) + varmvatten dump (year-round, 10 kWh/day ≈ a 300-litre tank; absorbs remaining solar)
+   - Battery column: efficiency, cycle life, capacity fade (%/yr, default 1.0), standby power inverter + BMS (W, default 45)
    - **Luft-luft komplement**: optional air-to-air HP (heating above min temp + AC cooling). Model preset: Mitsubishi Hero 2.0 LN25. Auto-registers as flex load to absorb solar surplus.
 3. **Investment** — two pricing modes:
    - Specificerade batterier: editable price table (NKON defaults 5-96 kWh), user can add/remove
    - SEK per kWh: enter price/kWh, auto-generates 5-100 kWh sizes, finds optimal for self-consumption
 4. **Results** — simulates ALL battery sizes × ALL tariffs × ALL fuse sizes, recommends optimal combo
-   - Annualized cost vs savings (same timescale), cumulative cashflow chart
+   - "Assumptions behind this result" block (always visible) right under the recommendation
+   - Annualized cost vs lifetime-average savings (same timescale), cumulative cashflow chart (stops at battery lifetime)
    - Scenario comparison by year (normal vs high-price years)
    - Self-consumption optimization: finds smallest battery for near-zero grid export
    - Luft-luft contribution shown separately (not part of main ROI)
    - Financing: compared over battery lifetime, not loan term
-   - PDF bank report with methodology and three future scenarios
-5. **Detail view** — monthly breakdown for selected battery
-6. **Future scenarios** — Konservativt (1.5x), Sannolikt (2.5x), Hög volatilitet (4.0x)
+   - PDF bank report with methodology, wear/standby assumptions and five future scenarios
+5. **Detail view** — monthly breakdown for selected battery; where the solar production goes (direct, battery, flex, export, curtailed)
+6. **Future scenarios** — five assumed price-swing levels, named for what they assume (not how likely): Mindre prissvängningar (0.7x), Oförändrat (1.0x, = main result), Något större (1.5x), Mycket större (2.5x), Extremt större (4x)
 
 ## Key files
 
 ### Core simulation
 - `batteri.py` — Battery simulation engine. `BatteryConfig` dataclass, `simulate()` function. Multi-cycle scheduling, solar-aware, fuse headroom-limited. Supports `daily_load_override` for temperature-dependent load profiles. `LoadSchedule` supports smart mode: picks cheapest N hours within availability window, with effekttariff peak penalty.
-- `economics.py` — Pure (no Streamlit) evaluation of simulation results, called by app.py: `solar_direct_use()`, `effekt_savings()`, `baseline_export_revenue()`, `loan_schedule()`. Tested in `test_energikalkyl.py`.
+- `economics.py` — Pure (no Streamlit) evaluation of simulation results, called by app.py: `solar_direct_use()`, `solar_flows()`, `effekt_savings()`, `baseline_export_revenue()`, `standby_cost_per_year()`, `yearly_benefit()`, `lifetime_benefit()`, `payback_years()`, `value_at_level()`/`scenario_bat_part()` (future scenarios), `loan_schedule()`. Tested in `test_energikalkyl.py`.
 - `solar.py` — Solar production model. Three-tier: real hourly data → model scaled to real monthly totals → cos³ curve fallback. `SolarConfig` with `real_production` (hourly dict) and `real_monthly_kwh` (monthly scaling). `get_solar_for_slot()` transparently picks best available source.
 
 ### Tariffs & grid operators
@@ -193,7 +195,7 @@ The app follows a 6-step flow:
 - Main optimization sweeps fuse sizes (one smaller + user's selection + up to 3 larger) in outer loop
 - Minimum fuse floor: must handle household peak load (base + all scheduled loads running simultaneously)
 - Each battery label keeps only the fuse size with highest `profit_life` (net of fuse cost delta)
-- `net_benefit_yr` = gross savings − extra fuse subscription cost (vs user's selected fuse)
+- `net_benefit_yr` = YEAR-1 benefit: battery part + counted solar part (with year-1 wear) − extra fuse subscription cost (vs user's selected fuse) − standby cost. The fuse comparison table shows year-1 amounts
 - Can recommend both upgrades and downgrades (e.g. SEOM 16-25A same price tier)
 - Fuse comparison section shows pre-computed variants for recommended battery (no re-simulation)
 - Fuse dropdown shows yearly fee per size (e.g. "20A — 1 780 kr/år")
@@ -210,7 +212,7 @@ The app follows a 6-step flow:
 - **Solar self-consumption value** only counted when solar is part of investment
 - **The battery doesn't save kWh** — it shifts WHEN you buy (cheap night → expensive peak)
 - **EV is smart-scheduled**: wide availability window (18-07), picks cheapest hours day-ahead. Avoids effekttariff peak hours and tidstariff peak rates automatically. Pool + varmvatten are flexibla laster (solar surplus)
-- **Zero-export strategy**: default mode. Varmvatten element (3 kW, no daily cap) + luft-luft (pre-heat/cool) absorb surplus after battery. Solar surplus curtailed if no flex loads available. No export-capable inverter or microproducer registration needed. Export mode available as option with comparison showing it's typically worse than self-consumption.
+- **Zero-export strategy**: default mode. Varmvatten element (3 kW, default 10 kWh/day) + luft-luft (pre-heat/cool) absorb surplus after battery. Solar surplus curtailed if no flex loads available. No export-capable inverter or microproducer registration needed. Export mode available as option with comparison showing it's typically worse than self-consumption.
 - **Export comparison**: expandable section in results shows zero-export vs export side by side, with tipping point analysis. Conclusion: export only viable with effekttariff operators (SEOM) and consistently high daily spreads (>60 öre).
 - **Session persistence**: opt-in via `ENERGIKALKYL_PERSIST=1` (`.app_state/session.json`); never on Streamlit Cloud
 - **Tibber token**: kept in session state and passed as `token=`; never `os.environ`. Server-side token fallback only on self-hosted installs
@@ -218,7 +220,10 @@ The app follows a 6-step flow:
 - **Tibber auto-fill**: one click fetches address, city, grid operator, fuse size, house area, residents, heating type, price area — all auto-configured
 - **Tibber Insights calibration**: manual input of annual breakdown (heating/EV/active/always-on) for per-house h_loss fitting
 - **Calibrated h_loss overrides energy class**: if consumption data is loaded, calibration runs BEFORE widget renders
-- **Three future scenarios**: Konservativt (1.5x), Sannolikt (2.5x), Hög volatilitet (4.0x) — based on analyst consensus
+- **No built-in optimism** (owner rule, Nov 2026): only neutral assumptions, shown to the user as assumptions (assumptions block under the recommendation, PDF methodology)
+- **Wear and standby in every headline number**: benefit split into `bat_part` (arb_yr incl. effekt/export-baseline; falls linearly by the fade %/yr), `solar_part` (counted solar direct use; `SolarConfig.degradation_per_year` 0.5 %/yr, geometric) and `fixed_part` (−fuse fee delta − standby cost). Wear is evaluated mid-year (year − 0.5). `profit_life` = `lifetime_benefit` − battery investment − pro-rata solar investment; `payback` = `payback_years` (cumulative worn benefit, None if not within 25 yr); the annualized chart uses `benefit_life / lifetime`. Standby cost = W × 8.76 kWh × unweighted mean `total_cost_ore` of the chosen result
+- **Five future scenarios** (0.7x, 1.0x, 1.5x, 2.5x, 4x): assumptions, not forecasts; no "likely"/analyst claims. Volatility ramps linearly to the target over 10 years; `vol_arb` holds the battery part per level, solar/fixed parts and wear are the same as the main result, so 1.0x equals `profit_life` exactly
+- **Green deduction off by default**: the default prices are the owner's DIY figures (imported battery, self-mounted panels), which get no deduction. The option remains for buyers of an installed system
 - **PDF bank report**: includes methodology, scenarios, battery comparison, financing analysis
 
 ## API keys (not in repo)
@@ -259,6 +264,8 @@ The app adds 25% Swedish VAT to these (`BATTERY_VAT` in app.py), so default tabl
 - **Effekt savings must not be clamped at 0, and charging must respect the peak** — the clamp hid up to −5,500 kr/yr (SEOM, 32 kWh) of extra demand charge caused by midday grid charging
 - **Loan financing over battery lifetime = profit_life − interest paid in that period** (`loan_schedule`). Counting only loan payments ignored the ~84% of a 50-year loan still owed when the battery is worn out
 - **Existing panels + export: subtract the no-battery export revenue** (`baseline_export_revenue`), and smart loads run exactly `daily_kwh` (last chosen hour at partial power; the EV was simulated as 33 kWh/day instead of 30)
+- **One accounting everywhere**: the cumulative cashflow chart assumed 1 %/yr wear while every other number assumed a battery like new for its whole life and no standby draw. All headline numbers, charts, scenarios and the export comparison now use the same `yearly_benefit`/`lifetime_benefit`
+- **Defaults must not hide losses**: a 99 kWh/day hot-water dump load swallowed ~48 kWh of surplus solar a day and hid curtailment; now 10 kWh/day and the detail view shows curtailed solar
 - **Smart load scheduling needs effekttariff penalty** — without it, EV charges during SEOM peak hours (07-19), increasing effektavgift. Penalty scales by kw_factor for Ellevio night discount
 
 ## Verified simulation results (2026-03-21)
@@ -271,7 +278,7 @@ With correct parameters (20A fuse, 270 m², calibrated h_loss=0.160, EV 23-03):
 ## Known issues / future work
 - ~~Solar model is simplified~~ — RESOLVED: PVGIS satellite data + Tibber production + CSV import. cos³ fallback only when no real data.
 - PVGIS data ends ~early 2023 (SARAH3 database). For 2024+ simulation dates, monthly-scaled model used.
-- No degradation modeling for battery capacity over time
+- ~~No degradation modeling for battery capacity over time~~ — RESOLVED: linear capacity fade (input, default 1 %/yr) applied to the battery value, panel degradation 0.5 %/yr, standby power (input, default 45 W). The scheduler itself still simulates a new battery (full capacity every year); wear is applied to the value afterwards
 - Tibber hourly data limited to ~30 days via API — use Vattenfall Excel for long history
 - Pool heat pump modeled as constant 3 kW but real heat pumps vary with temperature
 - ~~EV modeled as 11 kW × 23-03~~ — RESOLVED: smart scheduling picks cheapest hours within configurable window (default 18-07, 30 kWh/day). Avoids effekttariff peak hours and tidstariff peak rates.
