@@ -3,13 +3,16 @@ Economic evaluation of simulation results (pure functions, no Streamlit).
 
 app.py runs the simulations and calls these to turn a SimResult into the
 headline numbers: solar direct use, effekttariff (peak demand) savings,
-export revenue the panels would earn without a battery, wear and standby
+export revenue the panels would earn without a battery, the household's bill
+without any investment (to compare an operator's tariffs), wear and standby
 over the years, and loan cost over the battery lifetime.
 """
 
 import math
 from collections import defaultdict
 from dataclasses import replace
+
+from tariff import EffektTariff
 
 
 def solar_direct_use(result, cfg) -> tuple[float, float]:
@@ -134,28 +137,23 @@ def scenario_bat_part(bat_by_vol, target_vol, year, ramp_years=10) -> float:
     return value_at_level(bat_by_vol, 1.0 + (target_vol - 1.0) * min(year, ramp_years) / ramp_years)
 
 
-def effekt_savings(result, tariff, cfg, num_days, solar_in_baseline=False) -> float:
-    """Yearly change in effektavgift (peak demand charge) caused by the investment.
+def _effekt_monthly_peaks(result, tariff, cfg, solar_in_baseline):
+    """Measured monthly peaks WITH and WITHOUT the investment, per month.
 
-    Compares the monthly measured peak WITH the investment (grid draw after
-    solar, battery charging and discharging) vs WITHOUT it. Positive = saving;
-    negative = the battery's charging raised the peak and costs money.
+    Returns [(month, avg_without_kw, avg_with_kw)], one entry per "YYYY-MM" in the
+    result. Operator rules: only tariff.is_peak_hour() hours count, weighted by
+    tariff.kw_factor() (night discount), monthly peak = average of the top N daily
+    peaks (one per day).
 
-    solar_in_baseline: the panels exist anyway (not part of the investment), so
-    the "without" peak is load minus solar. Otherwise the "without" peak is the
-    raw load and solar's peak reduction is credited to the investment.
-
-    Operator rules: only tariff.is_peak_hour() hours count, weighted by
-    tariff.kw_factor() (night discount), monthly peak = average of the top N
-    daily peaks (one per day), priced with tariff.get_effekt_rate(month).
-
-    Call right after simulate() with the same cfg (smart-load schedule).
+    solar_in_baseline: the panels exist anyway, so the "without" peak is load minus
+    solar. Otherwise it is the raw load (solar's peak reduction belongs to the
+    investment).
     """
     monthly_slots = defaultdict(list)
     for s in result.slots:
         monthly_slots[s.date[:7]].append(s)
 
-    total_saving = 0.0
+    out = []
     for ym, slots in monthly_slots.items():
         daily_peaks_with = defaultdict(float)
         daily_peaks_without = defaultdict(float)
@@ -187,14 +185,68 @@ def effekt_savings(result, tariff, cfg, num_days, solar_in_baseline=False) -> fl
         peaks_with = sorted(daily_peaks_with.values(), reverse=True)[:n]
         avg_without = sum(peaks_without) / len(peaks_without) if peaks_without else 0
         avg_with = sum(peaks_with) / len(peaks_with) if peaks_with else 0
+        out.append((int(ym.split("-")[1]), avg_without, avg_with))
+    return out
 
-        month = int(ym.split("-")[1])
-        rate = tariff.get_effekt_rate(month) if hasattr(tariff, "get_effekt_rate") else tariff.effekt_rate
-        # No clamp: a higher peak with the battery is a real extra cost
-        total_saving += (avg_without - avg_with) * rate
 
+def _effekt_rate(tariff, month):
+    return tariff.get_effekt_rate(month) if hasattr(tariff, "get_effekt_rate") else tariff.effekt_rate
+
+
+def effekt_savings(result, tariff, cfg, num_days, solar_in_baseline=False) -> float:
+    """Yearly change in effektavgift (peak demand charge) caused by the investment.
+
+    Compares the monthly measured peak WITH the investment (grid draw after
+    solar, battery charging and discharging) vs WITHOUT it. Positive = saving;
+    negative = the battery's charging raised the peak and costs money.
+
+    solar_in_baseline: the panels exist anyway (not part of the investment), so
+    the "without" peak is load minus solar. Otherwise the "without" peak is the
+    raw load and solar's peak reduction is credited to the investment.
+
+    Peak rules: see _effekt_monthly_peaks(); priced with tariff.get_effekt_rate(month).
+
+    Call right after simulate() with the same cfg (smart-load schedule).
+    """
+    # No clamp: a higher peak with the battery is a real extra cost
+    total_saving = sum((without - with_) * _effekt_rate(tariff, month)
+                       for month, without, with_ in
+                       _effekt_monthly_peaks(result, tariff, cfg, solar_in_baseline))
     years = num_days / 365.25
     return total_saving / years if years > 0 else 0.0
+
+
+def baseline_bill(result, tariff, cfg, num_days, solar_in_baseline=False) -> float:
+    """Yearly variable electricity cost (SEK) of the household WITHOUT the investment
+    under `tariff`: what it would pay on that tariff if it didn't invest.
+
+    Energy: every slot's load × that slot's full purchase price (total_cost_ore:
+    spot incl. VAT + grid energy fee + energy tax). With solar_in_baseline (panels
+    the household already has) only the load the panels don't cover is bought,
+    max(0, load − solar). Plus, for an EffektTariff, the demand charge of the
+    no-investment monthly peaks (same peak rules as effekt_savings()).
+
+    The fixed subscription (fuse) fee is left out: it is the same for all of an
+    operator's tariffs at a given fuse. Used to compare the operator's tariffs with
+    each other, not as an absolute bill.
+
+    Call right after simulate() with the same cfg (smart-load schedule).
+    """
+    energy = 0.0
+    for s in result.slots:
+        h = int(s.hour.split(":")[0])
+        month = int(s.date.split("-")[1])
+        load_kw = cfg.total_load_kw(h, month, s.date)
+        if solar_in_baseline:
+            load_kw = max(0.0, load_kw - s.solar_kw)
+        energy += load_kw * s.total_cost_ore / 100  # hourly slots: kW == kWh
+    demand = 0.0
+    if isinstance(tariff, EffektTariff):
+        demand = sum(without * _effekt_rate(tariff, month)
+                     for month, without, _ in
+                     _effekt_monthly_peaks(result, tariff, cfg, solar_in_baseline))
+    years = num_days / 365.25
+    return (energy + demand) / years if years > 0 else 0.0
 
 
 def baseline_export_revenue(prices, cfg, tariff, solar) -> float:

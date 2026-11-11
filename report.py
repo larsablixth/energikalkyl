@@ -187,6 +187,8 @@ def generate_report(
     standby_w: float = None,              # inverter + BMS standby draw, W
     standby_cost_yr: float = None,        # its cost, kr per year
     solar_degradation_pct: float = None,  # panel production loss, % per year (when counted)
+    # Sentence naming the personal figures that are still the app's examples (None = none)
+    example_note: str = None,
 ) -> bytes:
     """Generate a PDF report and return it as bytes."""
 
@@ -210,6 +212,8 @@ def generate_report(
 
     # === EXECUTIVE SUMMARY ===
     pdf.section_title("Sammanfattning")
+    if example_note:
+        pdf.body_text(example_note)
     pdf.body_text(
         f"Denna analys visar att en investering i {battery_label} hembatteri"
         f"{' och ' + str(solar_kwp) + ' kWp solceller' if solar_kwp > 0 else ''} "

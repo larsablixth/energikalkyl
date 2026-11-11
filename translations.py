@@ -513,8 +513,10 @@ STRINGS = {
         "en": "Electricity loads",
     },
     "loads_caption": {
-        "sv": "Laster utöver uppvärmning. EV och pool hanteras separat från hushållets grundlast.",
-        "en": "Loads beyond heating. EV and pool are handled separately from base household load.",
+        "sv": "Laster utöver uppvärmning. Elbil och poolvärmepump hanteras separat från hushållets grundlast. "
+              "Inga är förvalda: lägg till de du har.",
+        "en": "Loads beyond heating. EV and pool heat pump are handled separately from base household load. "
+              "None are preselected: add the ones you have.",
     },
     "base_load": {
         "sv": "Grundlast (kW)",
@@ -548,13 +550,33 @@ STRINGS = {
     },
     "flexible_caption": {
         "sv": "Körs på solöverskott istället för att exportera till nät. "
-              "Varmvatten-element tar upp överskott när batteriet är fullt.",
+              "Varmvatten-element tar upp överskott när batteriet är fullt. "
+              "En poolvärmepump (värmer vattnet) kan vänta på överskott; en cirkulationspump för poolen "
+              "går varje dag oavsett sol och hör hemma under tidsstyrda laster (eller i grundlasten), inte här.",
         "en": "Runs on solar surplus instead of exporting to grid. "
-              "Hot water tank absorbs surplus when the battery is full.",
+              "Hot water tank absorbs surplus when the battery is full. "
+              "A pool heat pump (heats the water) can wait for surplus; a pool circulation pump "
+              "runs every day whether the sun shines or not and belongs under scheduled loads (or in the base load), not here.",
     },
     "add_flex_load": {
         "sv": "+ Flexibel last",
         "en": "+ Flexible load",
+    },
+    "add_ev_load": {
+        "sv": "+ Elbil",
+        "en": "+ EV",
+    },
+    "ev_load_name": {
+        "sv": "Elbil",
+        "en": "EV",
+    },
+    "add_pool_heat_pump": {
+        "sv": "+ Poolvärmepump",
+        "en": "+ Pool heat pump",
+    },
+    "pool_heat_pump_name": {
+        "sv": "Poolvärmepump",
+        "en": "Pool heat pump",
     },
 
     # ---- Heating ----
@@ -1454,8 +1476,8 @@ STRINGS = {
 
     # ---- House consumption summary ----
     "house_consumption_summary": {
-        "sv": "Husförbrukning (exkl. EV/pool): ~{annual} kWh/år | vinter ~{winter} kWh/dag, sommar ~{summer} kWh/dag",
-        "en": "House consumption (excl. EV/pool): ~{annual} kWh/yr | winter ~{winter} kWh/day, summer ~{summer} kWh/day",
+        "sv": "Husförbrukning (exkl. elbil/poolvärmepump): ~{annual} kWh/år | vinter ~{winter} kWh/dag, sommar ~{summer} kWh/dag",
+        "en": "House consumption (excl. EV/pool heat pump): ~{annual} kWh/yr | winter ~{winter} kWh/day, summer ~{summer} kWh/day",
     },
 
     # ---- Spread analysis details ----
@@ -1935,6 +1957,10 @@ STRINGS = {
         "sv": '  varav säkringsavgift',
         "en": '  of which fuse fee',
     },
+    "detail_of_which_tariff": {
+        "sv": '  varav tariffbyte',
+        "en": '  of which tariff change',
+    },
     "detail_solar_flows": {
         "sv": 'Vart solelen tar vägen (per år)',
         "en": 'Where the solar power goes (per year)',
@@ -2117,6 +2143,18 @@ STRINGS = {
               "{payback_text}, "
               "net {profit:,.0f} SEK over {lifetime:.0f} years",
     },
+    "fuse_downgrade_tip": {
+        "sv": "Tips, oberoende av investeringen: den modellerade förbrukningen ryms inom {fuse:.0f}A i stället för "
+              "{current:.0f}A, vilket skulle sänka abonnemanget med {saving:,.0f} kr/år. Det är inte medräknat i "
+              "kalkylen, eftersom det går att göra utan batteri eller solceller. Kalkylen bygger på timmedelvärden "
+              "och ser inte korta toppar (spis, bastu, elbilsladdning), och med mindre säkring laddar batteriet "
+              "långsammare än kalkylen antar. Rådgör med en elektriker.",
+        "en": "Tip, independent of the investment: the modelled consumption fits within {fuse:.0f}A instead of "
+              "{current:.0f}A, which would lower the subscription by {saving:,.0f} SEK/yr. It is not counted in "
+              "the result, because it can be done without a battery or solar panels. The calculation uses hourly "
+              "averages and does not see short peaks (stove, sauna, EV charging), and with a smaller fuse the "
+              "battery charges more slowly than assumed here. Ask an electrician.",
+    },
     "fuse_change_info": {
         "sv": "Säkring: {change_word} {from_fuse:.0f}A → {to_fuse:.0f}A: "
               "abonnemang {fee_delta:+,.0f} kr/år, "
@@ -2298,8 +2336,8 @@ STRINGS = {
         "en": "Other flex loads",
     },
     "aa_other_flex_help": {
-        "sv": "Poolpump, varmvatten etc. — separat från luft-luft",
-        "en": "Pool pump, hot water, etc. — separate from air-to-air",
+        "sv": "Poolvärmepump, varmvatten etc. — separat från luft-luft",
+        "en": "Pool heat pump, hot water, etc. — separate from air-to-air",
     },
     "aa_caption": {
         "sv": "Luft-luft absorberar {aa_flex:,.0f} kWh/år solöverskott "
@@ -2468,12 +2506,72 @@ STRINGS = {
         "en": 'Electricity prices: historical spot prices {range} ({days} days).',
     },
     "assume_battery_prices": {
-        "sv": 'Batteripriser (från tabellen): {prices}. Installation: {install} kr.',
-        "en": 'Battery prices (from the table): {prices}. Installation: {install} SEK.',
+        "sv": 'Batteripriser (från tabellen): {prices}. Installation: {install} kr{ex_install}.',
+        "en": 'Battery prices (from the table): {prices}. Installation: {install} SEK{ex_install}.',
     },
     "assume_solar_price": {
-        "sv": 'Solceller: {material} kr material + {install} kr installation.',
-        "en": 'Solar panels: {material} SEK material + {install} SEK installation.',
+        "sv": 'Solceller {kwp} kWp{ex_kwp}: {material} kr material + {install} kr installation{ex_price}.',
+        "en": 'Solar panels {kwp} kWp{ex_kwp}: {material} SEK material + {install} SEK installation{ex_price}.',
+    },
+    "assume_solar_existing": {
+        "sv": 'Befintliga solceller {kwp} kWp{ex_kwp} (ingår inte i investeringen).',
+        "en": 'Existing solar panels {kwp} kWp{ex_kwp} (not part of the investment).',
+    },
+    "assume_grid": {
+        "sv": 'Nätbolag: {operator}, säkring {fuse} A, {phases}-fas.',
+        "en": 'Grid operator: {operator}, fuse {fuse} A, {phases}-phase.',
+    },
+    "assume_tariff_reference": {
+        "sv": 'Besparingen räknas mot att stanna på nätbolagets billigaste tariff utan investering ({tariff}). '
+              'Kräver batteriet en dyrare tariff räknas merkostnaden för hela hushållets förbrukning av.',
+        "en": "The saving is measured against staying on the operator's cheapest tariff without investing ({tariff}). "
+              "If the battery needs a dearer tariff, the extra cost on the whole household's consumption is deducted.",
+    },
+    "assume_consumption_own": {
+        "sv": 'Förbrukning: från din egen förbrukningsdata (Tibber, uppladdad fil eller Tibber Insights).',
+        "en": 'Consumption: from your own consumption data (Tibber, uploaded file or Tibber Insights).',
+    },
+    "assume_consumption_house": {
+        "sv": 'Förbrukning: modellerad med uppvärmningsmodellen för energiklass {eclass}, {area} m², {heating}{ex}.',
+        "en": 'Consumption: modelled with the heating model for energy class {eclass}, {area} m², {heating}{ex}.',
+    },
+    "example_mark": {
+        "sv": 'exempel',
+        "en": 'example',
+    },
+    "example_warning": {
+        "sv": 'Exempelkalkyl: följande värden är exempel och inte dina egna: {items}. '
+              'Ange dina egna värden för en kalkyl som gäller ditt hus.',
+        "en": 'Example calculation: these values are examples, not your own: {items}. '
+              'Enter your own values for a calculation that applies to your house.',
+    },
+    "example_pdf_note": {
+        "sv": 'Observera: kalkylen bygger delvis på exempelvärden, inte på hushållets egna uppgifter: {items}.',
+        "en": "Note: the calculation partly rests on example values, not on the household's own figures: {items}.",
+    },
+    "example_item_battery_table": {
+        "sv": 'batteripriserna (NKON-listpriser)',
+        "en": 'the battery prices (NKON list prices)',
+    },
+    "example_item_battery_sek_kwh": {
+        "sv": 'batteripriset {price} kr/kWh',
+        "en": 'the battery price {price} SEK/kWh',
+    },
+    "example_item_battery_install": {
+        "sv": 'batteriinstallationen {amount} kr',
+        "en": 'the battery installation {amount} SEK',
+    },
+    "example_item_solar_kwp": {
+        "sv": 'solcellsanläggningens storlek {kwp} kWp',
+        "en": 'the solar system size {kwp} kWp',
+    },
+    "example_item_solar_price": {
+        "sv": 'solcellspriset {material} kr material + {install} kr installation',
+        "en": 'the solar price {material} SEK material + {install} SEK installation',
+    },
+    "example_item_house": {
+        "sv": 'förbrukningen, modellerad för ett exempelhus (energiklass {eclass}, {area} m², {heating})',
+        "en": 'the consumption, modelled for an example house (energy class {eclass}, {area} m², {heating})',
     },
     "assume_green_off": {
         "sv": 'Inget grönt avdrag. Standardpriserna är ett gör-det-själv-exempel (importerat batteri, egen montering av solcellerna) som inte ger avdrag.',

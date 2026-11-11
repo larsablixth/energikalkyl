@@ -37,15 +37,16 @@ The app follows a 6-step flow:
    - **Solar data**: radio selector — PVGIS satellite (default, location-specific), CSV from inverter, or cos³ model. Tibber production auto-fetched if available.
    - Heating: calibrated from energy class OR manual Tibber Insights breakdown OR auto-fit from consumption
    - Calibrated data overrides energy class completely (house size irrelevant when calibrated)
-   - EV default: 18-07 window, 30 kWh/day, Smart=True (picks 3 cheapest hours within window)
-   - Flex loads: pool (summer) + varmvatten dump (year-round, 10 kWh/day ≈ a 300-litre tank; absorbs remaining solar)
+   - Scheduled loads: none by default. "+ Elbil" adds the EV template (`example_inputs.EV_LOAD`: 11 kW, 18-07 window, 30 kWh/day, Smart=True — picks the cheapest hours within the window)
+   - Flex loads: only the varmvatten dump by default (year-round, 10 kWh/day ≈ a 300-litre tank; absorbs remaining solar). "+ Poolvärmepump" adds a pool heat pump (3 kW, 20 kWh/day, May-Sep). A pool *heat pump* heats and can wait for surplus; a pool *circulation pump* (0.3-1 kW) runs every day and belongs under scheduled loads or the base load
    - Battery column: efficiency, cycle life, capacity fade (%/yr, default 1.0), standby power inverter + BMS (W, default 45)
    - **Luft-luft komplement**: optional air-to-air HP (heating above min temp + AC cooling). Model preset: Mitsubishi Hero 2.0 LN25. Auto-registers as flex load to absorb solar surplus.
 3. **Investment** — two pricing modes:
    - Specificerade batterier: editable price table (NKON defaults 5-96 kWh), user can add/remove
    - SEK per kWh: enter price/kWh, auto-generates 5-100 kWh sizes, finds optimal for self-consumption
 4. **Results** — simulates ALL battery sizes × ALL tariffs × ALL fuse sizes, recommends optimal combo
-   - "Assumptions behind this result" block (always visible) right under the recommendation
+   - "Assumptions behind this result" block (always visible) right under the recommendation: also grid operator/fuse/phases, the reference tariff and the consumption source; untouched example figures are marked
+   - "Exempelkalkyl" warning under the recommendation listing personal figures still at their example values (also first in the PDF summary)
    - Annualized cost vs lifetime-average savings (same timescale), cumulative cashflow chart (stops at battery lifetime)
    - Scenario comparison by year (normal vs high-price years)
    - Self-consumption optimization: finds smallest battery for near-zero grid export
@@ -59,7 +60,8 @@ The app follows a 6-step flow:
 
 ### Core simulation
 - `batteri.py` — Battery simulation engine. `BatteryConfig` dataclass, `simulate()` function. Multi-cycle scheduling, solar-aware, fuse headroom-limited. Supports `daily_load_override` for temperature-dependent load profiles. `LoadSchedule` supports smart mode: picks cheapest N hours within availability window, with effekttariff peak penalty.
-- `economics.py` — Pure (no Streamlit) evaluation of simulation results, called by app.py: `solar_direct_use()`, `solar_flows()`, `effekt_savings()`, `baseline_export_revenue()`, `standby_cost_per_year()`, `yearly_benefit()`, `lifetime_benefit()`, `payback_years()`, `value_at_level()`/`scenario_bat_part()` (future scenarios), `loan_schedule()`. Tested in `test_energikalkyl.py`.
+- `economics.py` — Pure (no Streamlit) evaluation of simulation results, called by app.py: `solar_direct_use()`, `solar_flows()`, `effekt_savings()`, `baseline_bill()` (household bill without investing, per tariff), `baseline_export_revenue()`, `standby_cost_per_year()`, `yearly_benefit()`, `lifetime_benefit()`, `payback_years()`, `value_at_level()`/`scenario_bat_part()` (future scenarios), `loan_schedule()`. Tested in `test_energikalkyl.py`.
+- `example_inputs.py` — The example personal figures (battery price table, installation, solar size/price, house) the widgets start with, load templates (EV, pool heat pump, hot water), and `untouched_examples()` which lists those still unchanged in a simulation snapshot. Tested in `test_energikalkyl.py`.
 - `solar.py` — Solar production model. Three-tier: real hourly data → model scaled to real monthly totals → cos³ curve fallback. `SolarConfig` with `real_production` (hourly dict) and `real_monthly_kwh` (monthly scaling). `get_solar_for_slot()` transparently picks best available source.
 
 ### Tariffs & grid operators
@@ -112,12 +114,12 @@ The app follows a 6-step flow:
 - Spot prices are excl. VAT; buying adds 25% (`spot_vat_factor`), export is paid without VAT
 - Minimum 20 öre/kWh absolute spread required to cycle (10 öre for export arbitrage)
 - Solar-aware: estimates expected daily solar surplus, reduces grid charging to leave room for free solar
-- Priority chain: household load → battery charging → flex loads (pool/varmvatten) → grid export
+- Priority chain: household load → battery charging → flex loads (poolvärmepump/varmvatten) → grid export
 - IMPORTANT: battery MUST charge before flex loads — flex loads steal solar otherwise (cost 5,000 kr/yr)
 - Charging power limited by fuse headroom (fuse capacity − household load at that hour)
 - `daily_load_override`: when set, provides date+hour specific load (from heating model), overriding seasonal/hourly profiles
-- All tariff types simulated automatically — best picked per battery size
-- **Fuse size optimization**: sweeps one size down + user's fuse + up to 3 larger, picks optimal fuse per battery (net of extra subscription cost). Minimum fuse floor based on household peak load (base + all scheduled loads). Deduplicates to show best fuse per battery label.
+- All tariff types simulated automatically. The choice per battery size is made on the whole bill: battery value + counted solar value − `tariff_switch_cost_yr` (the tariff's `baseline_bill` minus the cheapest of the operator's tariffs without investing)
+- **Fuse size optimization**: sweeps the user's fuse + up to 3 larger (never smaller, see below), picks optimal fuse per battery (net of extra subscription cost). Minimum fuse floor based on household peak load (highest hourly load of the heating model / measured profile, else base load, + all scheduled loads). Deduplicates to show best fuse per battery label.
 - **Phase imbalance derating**: `phase_balance_factor=0.7` reduces usable fuse capacity by 30% for 3-phase. Real loads aren't balanced — one phase often carries ~43% instead of 33%. A 3-phase inverter with per-phase compensation can eliminate this derating by actively balancing phases (discharge onto the overloaded phase).
 - **Smart scheduled loads**: `LoadSchedule(smart=True, daily_kwh=30)` picks cheapest N hours within availability window each day (prices known day-ahead). Avoids effekttariff peak hours (penalty scaled by kw_factor for night discount). Tidstariff peak/off-peak handled via total_cost_ore().
 - **Discharge valuation**: two modes depending on export setting:
@@ -192,11 +194,11 @@ The app follows a 6-step flow:
 - Addresses bias from including extreme periods (e.g., Q1 2026 with 2× normal prices)
 
 ### Fuse size optimization (app.py)
-- Main optimization sweeps fuse sizes (one smaller + user's selection + up to 3 larger) in outer loop
-- Minimum fuse floor: must handle household peak load (base + all scheduled loads running simultaneously)
+- Main optimization sweeps fuse sizes (user's selection + up to 3 larger) in outer loop
+- Minimum fuse floor: must handle household peak load (house peak hour from the active load model + all scheduled loads running simultaneously). Hourly averages only: short peaks (stove, sauna) are not modelled
 - Each battery label keeps only the fuse size with highest `profit_life` (net of fuse cost delta)
 - `net_benefit_yr` = YEAR-1 benefit: battery part + counted solar part (with year-1 wear) − extra fuse subscription cost (vs user's selected fuse) − standby cost. The fuse comparison table shows year-1 amounts
-- Can recommend both upgrades and downgrades (e.g. SEOM 16-25A same price tier)
+- Recommends upgrades only. A smaller fuse the modelled load fits within is shown as a separate tip (`fuse_downgrade_tip`) and is never counted in the result: its fee saving needs no investment, and hourly averages hide short peaks
 - Fuse comparison section shows pre-computed variants for recommended battery (no re-simulation)
 - Fuse dropdown shows yearly fee per size (e.g. "20A — 1 780 kr/år")
 - SEOM 2026 fuse fees: 16-25A=1,780 kr/yr (same tier), 35A=3,175, 50A=4,475, 63A=5,445
@@ -204,14 +206,15 @@ The app follows a 6-step flow:
 ## Key design decisions
 - **Recommendation-first**: app tells you what to buy, not the other way around
 - **All battery sizes simulated**: editable price table with NKON defaults, user can add/remove
-- **All tariffs tested**: per battery size, across operator's available tariff types
+- **All tariffs tested**: per battery size, across operator's available tariff types. The saving is measured against staying on the operator's cheapest tariff without investing; a dearer tariff's extra bill (all household consumption) is a yearly cost in `fixed_part` (`tariff_switch_cost_yr`, detail line "varav tariffbyte"). Single-tariff operators are unaffected
+- **Personal figures are examples** (owner decision, Nov 2026, "middle path"): technical defaults stay; battery prices, installation, solar size/price and the example house keep a value so the app works on a first visit, but the result is labelled "Exempelkalkyl" listing the untouched ones (`untouched_examples` on the `sim_inputs` snapshot; defaults live only in `example_inputs.py`). Operator, fuse and phases are never judged by value, only stated in the assumptions. No EV and no pool by default
 - **Cashflow is "money in/out"**, not "profit" — language matters for user understanding
 - **Monthly view** preferred over daily (bills are monthly)
 - **Mortgage perspective**: financing section compares over battery LIFETIME, not loan term (50yr mortgage outlives 15yr battery)
 - **Battery alone is profitable**: 32 kWh without solar saves ~4,800 kr/yr on Tidstariff arbitrage alone
 - **Solar self-consumption value** only counted when solar is part of investment
 - **The battery doesn't save kWh** — it shifts WHEN you buy (cheap night → expensive peak)
-- **EV is smart-scheduled**: wide availability window (18-07), picks cheapest hours day-ahead. Avoids effekttariff peak hours and tidstariff peak rates automatically. Pool + varmvatten are flexibla laster (solar surplus)
+- **EV is smart-scheduled** (when added): wide availability window (18-07), picks cheapest hours day-ahead. Avoids effekttariff peak hours and tidstariff peak rates automatically. Poolvärmepump + varmvatten are flexibla laster (solar surplus)
 - **Zero-export strategy**: default mode. Varmvatten element (3 kW, default 10 kWh/day) + luft-luft (pre-heat/cool) absorb surplus after battery. Solar surplus curtailed if no flex loads available. No export-capable inverter or microproducer registration needed. Export mode available as option with comparison showing it's typically worse than self-consumption.
 - **Export comparison**: expandable section in results shows zero-export vs export side by side, with tipping point analysis. Conclusion: export only viable with effekttariff operators (SEOM) and consistently high daily spreads (>60 öre).
 - **Session persistence**: opt-in via `ENERGIKALKYL_PERSIST=1` (`.app_state/session.json`); never on Streamlit Cloud
@@ -266,6 +269,8 @@ The app adds 25% Swedish VAT to these (`BATTERY_VAT` in app.py), so default tabl
 - **Existing panels + export: subtract the no-battery export revenue** (`baseline_export_revenue`), and smart loads run exactly `daily_kwh` (last chosen hour at partial power; the EV was simulated as 33 kWh/day instead of 30)
 - **One accounting everywhere**: the cumulative cashflow chart assumed 1 %/yr wear while every other number assumed a battery like new for its whole life and no standby draw. All headline numbers, charts, scenarios and the export comparison now use the same `yearly_benefit`/`lifetime_benefit`
 - **Defaults must not hide losses**: a 99 kWh/day hot-water dump load swallowed ~48 kWh of surplus solar a day and hid curtailment; now 10 kWh/day and the detail view shows curtailed solar
+- **Pick the tariff on the whole bill, not battery value alone**: with 1 phase the app switched to Enkeltariff for a slightly higher battery value although the household's bill without investing is ~2,100 kr/yr higher there (default house, 43,090 vs 45,232 kr/yr). Now `baseline_bill` per tariff, reference = cheapest, switch cost subtracted in `fixed_part`
+- **A default EV was simulated for every visitor**: 30 kWh/day of EV charging (≈11,000 kWh/yr) for households without an EV inflated load and fuse floor. Now no scheduled loads by default (quick-add button instead)
 - **Smart load scheduling needs effekttariff penalty** — without it, EV charges during SEOM peak hours (07-19), increasing effektavgift. Penalty scales by kw_factor for Ellevio night discount
 
 ## Verified simulation results (2026-03-21)

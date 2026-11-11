@@ -32,7 +32,8 @@ The app has 6 steps that run top-to-bottom:
 KEY CONCEPTS:
 - "Arbitrage" = buy cheap electricity at night, use it during expensive peak hours
 - "Effekttariff" = you pay for your highest power peak each month (kW), not just energy (kWh)
-- "Flex loads" = pool pumps, hot water tanks, heat pumps that can shift to use free solar
+- "Flex loads" = pool heat pumps, hot water tanks, heat pumps that can shift to use free solar
+  (a pool's circulation pump must run every day, sun or not: it is a scheduled/base load)
 - "Self-consumption" = using your own solar power instead of exporting it to the grid
 - "Spread" = difference between cheapest and most expensive hour — this is what the battery earns
 
@@ -74,9 +75,12 @@ from weather import (
     fetch_station_data, SWEDISH_CITIES,
 )
 from report import generate_report
-from economics import (solar_direct_use, effekt_savings, baseline_export_revenue, loan_schedule,
+from economics import (solar_direct_use, effekt_savings, baseline_export_revenue, baseline_bill,
+                       loan_schedule,
                        solar_flows, standby_cost_per_year, yearly_benefit, lifetime_benefit,
                        payback_years, value_at_level, scenario_bat_part)
+from example_inputs import (EXAMPLE, EV_LOAD, POOL_HEAT_PUMP_LOAD, HOT_WATER_LOAD,
+                            default_battery_rows, untouched_examples)
 from app_state import save_state, load_state
 from translations import t, set_language, get_language, STRINGS
 
@@ -620,7 +624,7 @@ with st.expander(t("spread_expander").format(median=f"{_median_range:.0f}", p80=
 #   (limits how fast the battery can charge), and energy tax.
 #
 # BELOW THE COLUMNS:
-#   - Loads: EV charging schedule, flexible loads (pool, hot water)
+#   - Loads: EV charging schedule, flexible loads (pool heat pump, hot water)
 #   - Heating model: temperature-dependent electricity usage based on SMHI weather
 #   - Calibration: fine-tune the model against your actual consumption data
 # ================================================================
@@ -643,7 +647,8 @@ with col_sys2:
     st.subheader(t("solar_panels"))
     use_solar = st.checkbox(t("solar_panels"), value=True, key="use_solar")
     if use_solar:
-        solar_kwp = st.number_input(t("system_kwp"), value=15.0, min_value=0.0, step=0.5, key="solar_kwp")
+        solar_kwp = st.number_input(t("system_kwp"), value=EXAMPLE["solar_kwp"], min_value=0.0, step=0.5,
+                                    key="solar_kwp")
         _zero_export = st.checkbox(t("zero_export_label"), value=True, key="zero_export",
                                     help=t("zero_export_help"))
         if _zero_export:
@@ -850,12 +855,14 @@ with col_sys3:
 # Two types of electricity loads beyond basic household use:
 #
 # SCHEDULED LOADS (left column):
-#   Fixed-schedule loads like EV charging. Example: "Elbil 11 kW, 23:00-03:00"
+#   Fixed-schedule loads like EV charging. Example: "Elbil 11 kW, 18:00-07:00, smart"
+#   None by default: the "+ Elbil" button adds the EV template (example_inputs.EV_LOAD).
 #   These always run at their scheduled time regardless of price.
 #   The battery can't shift these, but it can discharge to cover part of them.
 #
 # FLEXIBLE LOADS (right column):
-#   Loads that can shift to when solar surplus is available. Example: pool pump, hot water.
+#   Loads that can shift to when solar surplus is available. Example: pool heat pump, hot water.
+#   Default: only the hot-water tank; "+ Poolvärmepump" adds a pool heat pump (3 kW, May-Sep).
 #   The simulation runs these AFTER the battery is charged, using leftover solar.
 #   This means: solar → battery → flex loads → grid export (priority order).
 #   The goal is near-zero grid export — use ALL solar production in the house.
@@ -871,8 +878,7 @@ with col_l1:
         base_load = 1.5  # overridden by profile or heating model
 
     if "scheduled_loads" not in st.session_state:
-        st.session_state["scheduled_loads"] = [{"name": "Elbil", "power": 11.0, "start": 18, "end": 7,
-                                                 "daily_kwh": 30.0, "smart": True}]
+        st.session_state["scheduled_loads"] = []  # no EV unless the visitor adds one
 
     st.markdown(t("scheduled_loads"))
     st.caption(t("scheduled_caption"))
@@ -891,17 +897,18 @@ with col_l1:
             st.session_state["scheduled_loads"].pop(i)
             st.rerun()
 
-    if st.button(t("add_load")):
+    _cb1, _cb2 = st.columns(2)
+    if _cb1.button(t("add_load")):
         st.session_state["scheduled_loads"].append({"name": "Ny", "power": 1.0, "start": 0, "end": 6,
                                                      "daily_kwh": 0.0, "smart": False})
+        st.rerun()
+    if _cb2.button(t("add_ev_load")):
+        st.session_state["scheduled_loads"].append(dict(EV_LOAD, name=t("ev_load_name")))
         st.rerun()
 
 with col_l2:
     if "flexible_loads" not in st.session_state:
-        st.session_state["flexible_loads"] = [
-            {"name": "Poolpump", "power": 3.0, "daily": 20.0, "sm": 5, "em": 9},
-            {"name": "Varmvatten", "power": 3.0, "daily": 10.0, "sm": 1, "em": 12},
-        ]
+        st.session_state["flexible_loads"] = [dict(HOT_WATER_LOAD)]
 
     _month_names = t("month_names")
     _month_opts = list(range(1, 13))
@@ -922,8 +929,12 @@ with col_l2:
             st.session_state["flexible_loads"].pop(i)
             st.rerun()
 
-    if st.button(t("add_flex_load")):
+    _fb1, _fb2 = st.columns(2)
+    if _fb1.button(t("add_flex_load")):
         st.session_state["flexible_loads"].append({"name": "Ny", "power": 2.0, "daily": 10.0, "sm": 1, "em": 12})
+        st.rerun()
+    if _fb2.button(t("add_pool_heat_pump")):
+        st.session_state["flexible_loads"].append(dict(POOL_HEAT_PUMP_LOAD, name=t("pool_heat_pump_name")))
         st.rerun()
 
 scheduled_loads = [LoadSchedule(l["name"], l["power"], l["start"], l["end"],
@@ -969,6 +980,8 @@ use_heating_model = st.checkbox(t("heating_checkbox"), value=True, key="use_heat
                                  help=t("heating_checkbox_help"))
 daily_load_override = None
 heating_config = None
+_insights_calibrated = False  # Tibber-Insights breakdown applied (own consumption data)
+energy_class = house_area = heating_type = None
 
 if use_heating_model:
     st.caption(t("heating_caption"))
@@ -1049,11 +1062,12 @@ if use_heating_model:
         col_house1, col_house2 = st.columns(2)
         with col_house1:
             energy_class = st.selectbox(t("energy_class_label"),
-                                         list(_ENERGY_CLASSES.keys()), index=2,
+                                         list(_ENERGY_CLASSES.keys()),
+                                         index=list(_ENERGY_CLASSES).index(EXAMPLE["energy_class"]),
                                          format_func=lambda k: t(f"eclass_{k.lower()}"),
                                          key="energy_class", help=t("energy_class_help"))
             _tibber_size = st.session_state.get("tibber_home", {}).get("house_size", 0)
-            _area_default = _tibber_size if _tibber_size > 0 else 150
+            _area_default = _tibber_size if _tibber_size > 0 else EXAMPLE["house_area"]
             house_area = st.number_input(t("house_area_label"), value=_area_default, min_value=30, max_value=500, step=10,
                                           key=f"house_area_{_area_default}", help=t("house_area_help"))
 
@@ -1090,7 +1104,7 @@ if use_heating_model:
             _tibber_heat = st.session_state.get("tibber_home", {}).get("heating_source", "")
             _heat_map = {"GROUND": 0, "AIR2AIR": 1, "AIR2WATER": 1,
                           "DISTRICT": 2, "ELECTRIC": 3}
-            _heat_default = _heat_map.get(_tibber_heat, 0)
+            _heat_default = _heat_map.get(_tibber_heat, _heating_options.index(EXAMPLE["heating_type"]))
             heating_type = st.selectbox(t("heating_label"), _heating_options, index=_heat_default,
                                          format_func=t, key=f"heating_type_{_heat_default}",
                                          help=t("heating_type_help"))
@@ -1361,6 +1375,7 @@ if use_heating_model:
                             cop_base=cop_base, cop_slope=cop_slope,
                         )
                         non_heat_base = cal_base
+                        _insights_calibrated = True
 
                         # Auto-update EV scheduled load from real data
                         if cal_ev > 0 and st.session_state.get("scheduled_loads"):
@@ -1431,11 +1446,13 @@ _pricing_mode = st.radio(t("pricing_mode"), list(_pricing_mode_labels),
                           format_func=lambda k: t(_pricing_mode_labels[k]),
                           key="pricing_mode_key", horizontal=True)
 
+sek_per_kwh = EUR_SEK = None  # only the active pricing mode sets its own
 if _pricing_mode == "sek_kwh":
     st.caption(t("sek_kwh_caption"))
     col_sek1, col_sek2, col_sek3 = st.columns(3)
     with col_sek1:
-        sek_per_kwh = st.number_input(t("battery_price_kwh"), value=1000, min_value=100, max_value=5000,
+        sek_per_kwh = st.number_input(t("battery_price_kwh"), value=EXAMPLE["sek_per_kwh"],
+                                       min_value=100, max_value=5000,
                                        step=50, key="sek_per_kwh",
                                        help=t("sek_kwh_typical_help"))
     with col_sek2:
@@ -1461,21 +1478,11 @@ else:
     st.caption(t("edit_table_caption"))
     st.caption(t("nkon_vat_note"))
 
-    EUR_SEK = st.number_input(t("eur_sek_rate"), value=11.5, min_value=5.0, max_value=20.0, step=0.1,
-                               key="eur_sek_rate")
+    EUR_SEK = st.number_input(t("eur_sek_rate"), value=EXAMPLE["eur_sek"], min_value=5.0, max_value=20.0,
+                               step=0.1, key="eur_sek_rate")
 
-    # NKON list prices are in EUR excl. Swedish VAT; a private buyer pays 25% on top
-    BATTERY_VAT = 1.25
-    default_batteries = pd.DataFrame([
-        {"Namn": "5 kWh",       "Kapacitet_kWh": 5.12,   "Max_kW": 3.8,  "Pris_SEK": round(600 * EUR_SEK * BATTERY_VAT)},
-        {"Namn": "10 kWh",      "Kapacitet_kWh": 10.24,  "Max_kW": 7.5,  "Pris_SEK": round(1177 * EUR_SEK * BATTERY_VAT)},
-        {"Namn": "16 kWh",      "Kapacitet_kWh": 16.10,  "Max_kW": 11.0, "Pris_SEK": round(1512 * EUR_SEK * BATTERY_VAT)},
-        {"Namn": "32 kWh",      "Kapacitet_kWh": 32.15,  "Max_kW": 15.0, "Pris_SEK": round(2857 * EUR_SEK * BATTERY_VAT)},
-        {"Namn": "32+16 kWh",   "Kapacitet_kWh": 48.25,  "Max_kW": 15.0, "Pris_SEK": round((2857+1512) * EUR_SEK * BATTERY_VAT)},
-        {"Namn": "2x32 kWh",    "Kapacitet_kWh": 64.30,  "Max_kW": 15.0, "Pris_SEK": round(2857 * 2 * EUR_SEK * BATTERY_VAT)},
-        {"Namn": "2x32+16 kWh", "Kapacitet_kWh": 80.40,  "Max_kW": 15.0, "Pris_SEK": round((2857*2+1512) * EUR_SEK * BATTERY_VAT)},
-        {"Namn": "3x32 kWh",    "Kapacitet_kWh": 96.45,  "Max_kW": 15.0, "Pris_SEK": round(2857 * 3 * EUR_SEK * BATTERY_VAT)},
-    ])
+    # NKON list prices (EUR excl. VAT) + 25 % VAT: see example_inputs.py
+    default_batteries = pd.DataFrame(default_battery_rows(EUR_SEK))
 
     if (st.session_state.get("_bt_seed") is not None
             and st.session_state.get("_bt_seed_eur") == EUR_SEK):
@@ -1505,13 +1512,13 @@ else:
 # Other costs
 col_i1, col_i2, col_i3 = st.columns(3)
 with col_i1:
-    bat_install = st.number_input(t("battery_install"), value=10000, min_value=0, step=1000,
+    bat_install = st.number_input(t("battery_install"), value=EXAMPLE["bat_install"], min_value=0, step=1000,
                                    key="bat_install", help=t("install_same_cost_help"))
 with col_i2:
     if use_solar:
-        sol_price = st.number_input(t("solar_material"), value=48000, min_value=0, step=5000,
+        sol_price = st.number_input(t("solar_material"), value=EXAMPLE["sol_price"], min_value=0, step=5000,
                                     key="sol_price", help=t("solar_material_help"))
-        sol_install = st.number_input(t("solar_install"), value=0, min_value=0, step=5000,
+        sol_install = st.number_input(t("solar_install"), value=EXAMPLE["sol_install"], min_value=0, step=5000,
                                       key="sol_install", help=t("solar_install_help"))
     else:
         sol_price = 0
@@ -1736,18 +1743,35 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
         solar_config.installation_cost = sol_install
 
     # Determine fuse sizes to sweep (down + user's selection + larger)
-    # Minimum fuse: must handle household peak load (base + all scheduled loads running)
+    # Minimum fuse: must handle household peak load (house peak + all scheduled loads running).
+    # House peak = highest hourly load of the active load model (heating model / measured
+    # profile); base_load only without one. (With the old default EV the 11 kW hid this.)
     # Derate for phase imbalance: loads aren't balanced across 3 phases
     _phase_balance = 0.7 if phases == 3 else 1.0
-    _peak_load_kw = base_load + sum(l.power_kw for l in scheduled_loads)
+    if daily_load_override:
+        _house_peak_kw = max(max(_p.values()) for _p in daily_load_override.values())
+    elif seasonal_load_profile:
+        _house_peak_kw = max(kw for _m in seasonal_load_profile.values() for kw in _m.values())
+    elif hourly_load_profile:
+        _house_peak_kw = max(hourly_load_profile.values())
+    else:
+        _house_peak_kw = base_load
+    _peak_load_kw = _house_peak_kw + sum(l.power_kw for l in scheduled_loads)
     _min_fuse_amps = _peak_load_kw / (0.23 * phases * _phase_balance) if phases > 0 else 16
     _op_fuse_fees = get_operator_fuse_fees(grid_operator)
     _available_fuses = sorted(_op_fuse_fees.keys())
-    # Only include smaller fuses that can still handle household peak load
-    _smaller = [f for f in _available_fuses if f < fuse_amps and f >= _min_fuse_amps][-1:]
+    # Smaller fuses are NOT part of the sweep: a smaller fuse only gives the battery
+    # less room to charge, and the fee it saves can be had without investing at all,
+    # so it must not be counted as value of the investment. If the modelled load fits a
+    # smaller, cheaper fuse, that is shown as a separate tip (see fuse_downgrade_tip).
     _larger = [f for f in _available_fuses if f > fuse_amps][:3]
-    _fuses_to_sweep = _smaller + [f for f in _available_fuses if f == fuse_amps] + _larger
+    _fuses_to_sweep = [f for f in _available_fuses if f == fuse_amps] + _larger
     _base_fuse_fee_yr = _op_fuse_fees.get(fuse_amps, 0)
+    _downgrade_tip = None
+    for _f in _available_fuses:
+        if _min_fuse_amps <= _f < fuse_amps and _op_fuse_fees.get(_f, 0) < _base_fuse_fee_yr:
+            _downgrade_tip = {"fuse": _f, "saving_yr": _base_fuse_fee_yr - _op_fuse_fees.get(_f, 0)}
+            break
 
     def _build_tariffs_for_fuse(f_amps):
         """Build tariffs for a given fuse size, applying user overrides."""
@@ -1775,6 +1799,7 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
     # Panels the household already has (solar enabled, no solar investment)
     _existing_solar = bool(solar_config) and sol_invest_total == 0
     _baseline_export_cache = {}  # (fuse, tariff name) -> export SEK/yr without battery
+    _baseline_bill_cache = {}  # tariff name -> household bill SEK/yr without investing
 
     # Simulate ALL battery sizes × tariffs × fuse sizes
     _all_raw_results = []
@@ -1808,17 +1833,8 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
                 fuse_overcurrent_factor=fuse_overcurrent_factor,
             )
 
-            # Simulate all tariffs, pick best
-            best_profit = -999999
-            result = None
-            tariff = None
-            best_tariff = ""
-            num_days = 0
-            effekt_saving_yr = 0
-            solar_self_yr = 0
-            solar_direct_kwh = 0
-            baseline_export_yr = 0
-
+            # Simulate every tariff first, then choose (on the whole bill, not battery value alone)
+            _tf_evals = []
             for _tf in _fuse_tariffs:
                 r = simulate(price_rows, cfg, tariff=_tf, solar=solar_config)
                 d = len(set(s.date for s in r.slots))
@@ -1850,19 +1866,38 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
                     sol_self_kwh, sol_self = solar_direct_use(r, cfg)
                     sol_self = sol_self / d * 365.25
 
-                if p > best_profit:
-                    best_profit = p
-                    result = r
-                    tariff = _tf
-                    best_tariff = _tf.name
-                    num_days = d
-                    effekt_saving_yr = eff_save
-                    solar_self_yr = sol_self
-                    solar_direct_kwh = sol_self_kwh
-                    baseline_export_yr = base_exp
+                # The household's bill on this tariff without investing (same cfg schedule;
+                # doesn't depend on battery size or fuse → cached per tariff)
+                if _tf.name not in _baseline_bill_cache:
+                    _baseline_bill_cache[_tf.name] = baseline_bill(
+                        r, _tf, cfg, d, solar_in_baseline=_existing_solar)
+                _tf_evals.append({"tariff": _tf, "result": r, "num_days": d, "bat_value": p,
+                                  "effekt": eff_save, "base_exp": base_exp,
+                                  "sol_self": sol_self, "sol_self_kwh": sol_self_kwh,
+                                  "bill": _baseline_bill_cache[_tf.name]})
 
-            if result is None:
+            if not _tf_evals:
                 continue
+
+            # Reference = the cheapest of the operator's tariffs without investing (what a
+            # sensible household pays today). A tariff with a higher bill costs the difference
+            # every year; the choice maximises battery + counted solar value − that cost.
+            _ref_bill = min(e["bill"] for e in _tf_evals)
+            for e in _tf_evals:
+                e["switch_cost"] = max(0.0, e["bill"] - _ref_bill)
+                e["score"] = (e["bat_value"] + (e["sol_self"] if sol_invest_total > 0 else 0)
+                              - e["switch_cost"])
+            _chosen = max(_tf_evals, key=lambda e: e["score"])  # first wins a tie (old behaviour)
+            _ref_tariff_name = min(_tf_evals, key=lambda e: e["bill"])["tariff"].name
+            result = _chosen["result"]
+            tariff = _chosen["tariff"]
+            best_tariff = tariff.name
+            num_days = _chosen["num_days"]
+            effekt_saving_yr = _chosen["effekt"]
+            solar_self_yr = _chosen["sol_self"]
+            solar_direct_kwh = _chosen["sol_self_kwh"]
+            baseline_export_yr = _chosen["base_exp"]
+            tariff_switch_cost_yr = _chosen["switch_cost"]
 
             arb_yr = (result.net_profit_sek / num_days * 365.25 + effekt_saving_yr
                       - baseline_export_yr) if num_days > 0 else 0
@@ -1875,7 +1910,9 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
             standby_cost_yr = standby_cost_per_year(standby_w, _avg_ore)
             bat_part = arb_yr
             solar_part = solar_self_yr if sol_invest_total > 0 else 0
-            fixed_part = -_fuse_fee_delta_yr - standby_cost_yr
+            # Fixed part: also the yearly extra bill of the chosen tariff vs the cheapest one
+            # without investing (0 when the chosen tariff is the cheapest)
+            fixed_part = -_fuse_fee_delta_yr - standby_cost_yr - tariff_switch_cost_yr
             _wear_args = (bat_fade, solar_deg)
             # Year-1 benefit ("lower electricity cost per year" in texts and PDF)
             net_benefit_yr = yearly_benefit(bat_part, solar_part, fixed_part, 1, *_wear_args)
@@ -1921,6 +1958,9 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
                 "net_benefit_yr": net_benefit_yr,
                 "bat_part": bat_part, "solar_part": solar_part, "fixed_part": fixed_part,
                 "standby_cost_yr": standby_cost_yr, "benefit_life": benefit_life,
+                "tariff_switch_cost_yr": tariff_switch_cost_yr,
+                "ref_tariff": _ref_tariff_name, "n_tariffs": len(_tf_evals),
+                "baseline_bills": {e["tariff"].name: e["bill"] for e in _tf_evals},
                 "bat_fade": bat_fade, "solar_deg": solar_deg,
                 "solar_flows_kwh_yr": _sflows,
                 "fuse_amps": _fuse, "fuse_fee_yr": _op_fuse_fees.get(_fuse, 0),
@@ -1962,6 +2002,7 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
         _addr_snap = selected_city if use_heating_model else ""
     st.session_state["sim_inputs"] = {
         "grid_operator": grid_operator, "fuse_amps": fuse_amps, "phases": phases,
+        "fuse_downgrade_tip": _downgrade_tip,
         "fuse_overcurrent_factor": fuse_overcurrent_factor,
         "use_solar": use_solar, "solar_kwp": solar_kwp if use_solar else 0,
         "solar_source": _solar_source, "solar_tilt": _pvgis_tilt, "solar_aspect": _pvgis_aspect,
@@ -1971,6 +2012,14 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
         "efficiency": efficiency, "cycle_life": cycle_life, "energy_tax": energy_tax,
         "bat_fade_pct": bat_fade_pct, "standby_w": standby_w, "solar_deg": solar_deg,
         "battery_prices": [(str(rw["Namn"]), float(rw["Pris_SEK"])) for _, rw in valid_rows.iterrows()],
+        # For the "example figures" check (example_inputs.untouched_examples)
+        "pricing_mode": _pricing_mode, "eur_sek": EUR_SEK, "sek_per_kwh": sek_per_kwh,
+        "battery_rows": [(str(rw["Namn"]), float(rw["Kapacitet_kWh"]), float(rw["Max_kW"]),
+                          float(rw["Pris_SEK"])) for _, rw in valid_rows.iterrows()],
+        "use_heating_model": use_heating_model,
+        "own_consumption": bool(seasonal_load_profile or hourly_load_profile
+                                or st.session_state.get("tibber_home") or _insights_calibrated),
+        "energy_class": energy_class, "house_area": house_area, "heating_type": heating_type,
         "green_deduction": use_green_deduction, "green_owners": green_owners,
         "price_range": f"{df_prices['date'].min()} — {df_prices['date'].max()}",
         "price_days": int(df_prices["date"].nunique()),
@@ -2052,6 +2101,30 @@ def _scenario_net(vol_arb, target_vol, res):
     return _profit_over_life(total, life, res["invest"], sol_net)
 
 
+def _example_items_text(items, si, lang=None):
+    """Untouched example figures (untouched_examples ids) as a readable list, in `lang`
+    (default: the UI language; the PDF passes "sv")."""
+    lang = lang or get_language()
+    tr = lambda key: STRINGS[key][lang]
+    texts = []
+    for item in items:
+        if item == "battery_prices":
+            texts.append(tr("example_item_battery_sek_kwh").format(price=f"{si.get('sek_per_kwh') or 0:,.0f}")
+                         if si.get("pricing_mode") == "sek_kwh" else tr("example_item_battery_table"))
+        elif item == "battery_install":
+            texts.append(tr("example_item_battery_install").format(amount=f"{si.get('bat_install', 0):,.0f}"))
+        elif item == "solar_kwp":
+            texts.append(tr("example_item_solar_kwp").format(kwp=f"{si.get('solar_kwp', 0):g}"))
+        elif item == "solar_price":
+            texts.append(tr("example_item_solar_price").format(material=f"{si.get('sol_price', 0):,.0f}",
+                                                               install=f"{si.get('sol_install', 0):,.0f}"))
+        elif item == "house":
+            texts.append(tr("example_item_house").format(
+                eclass=si.get("energy_class"), area=si.get("house_area"),
+                heating=tr(si.get("heating_type"))))
+    return "; ".join(texts)
+
+
 if "all_results" in st.session_state:
     all_results = st.session_state["all_results"]
     solar_cfg = st.session_state.get("solar_cfg")
@@ -2102,6 +2175,10 @@ if "all_results" in st.session_state:
     )
     if best["profit_life"] <= 0:
         st.warning(t("rec_not_profitable"))
+    # Personal figures that are still the app's examples (compared with example_inputs.EXAMPLE)
+    _examples = untouched_examples(_si)
+    if _examples:
+        st.warning(t("example_warning").format(items=_example_items_text(_examples, _si)))
     if _si.get("green_deduction"):
         _gd_total = best.get("green_bat", 0) + best.get("green_sol", 0)
         if _gd_total > 0:
@@ -2115,12 +2192,28 @@ if "all_results" in st.session_state:
 
     # === ASSUMPTIONS behind the result (always visible, values from the simulation snapshot) ===
     with st.expander(t("assumptions_header"), expanded=True):
+        _ex_mark = lambda item: f" ({t('example_mark')})" if item in _examples else ""
         _ass = [t("assume_prices").format(range=_si.get("price_range", ""), days=_si.get("price_days", 0))]
+        _ass.append(t("assume_grid").format(operator=grid_operator, fuse=f"{fuse_amps:.0f}", phases=phases))
+        if best.get("n_tariffs", 1) > 1:
+            _ass.append(t("assume_tariff_reference").format(tariff=best["ref_tariff"]))
         _bp = "; ".join(f"{_n} {_p:,.0f} kr" for _n, _p in _si.get("battery_prices", []))
-        _ass.append(t("assume_battery_prices").format(prices=_bp, install=f"{bat_install:,.0f}"))
+        _ass.append(t("assume_battery_prices").format(prices=_bp + _ex_mark("battery_prices"),
+                                                      install=f"{bat_install:,.0f}",
+                                                      ex_install=_ex_mark("battery_install")))
         if sol_invest_total > 0:
-            _ass.append(t("assume_solar_price").format(material=f"{sol_price:,.0f}",
-                                                       install=f"{sol_install:,.0f}"))
+            _ass.append(t("assume_solar_price").format(kwp=f"{solar_kwp:g}", ex_kwp=_ex_mark("solar_kwp"),
+                                                       material=f"{sol_price:,.0f}",
+                                                       install=f"{sol_install:,.0f}",
+                                                       ex_price=_ex_mark("solar_price")))
+        elif use_solar and solar_kwp > 0:
+            _ass.append(t("assume_solar_existing").format(kwp=f"{solar_kwp:g}", ex_kwp=_ex_mark("solar_kwp")))
+        if _si.get("own_consumption"):
+            _ass.append(t("assume_consumption_own"))
+        elif _si.get("use_heating_model") and _si.get("heating_type"):
+            _ass.append(t("assume_consumption_house").format(
+                eclass=_si["energy_class"], area=_si["house_area"],
+                heating=t(_si["heating_type"]), ex=_ex_mark("house")))
         _gd_used = best.get("green_bat", 0) + best.get("green_sol", 0)
         if _si.get("green_deduction") and _gd_used > 0:
             _ass.append(t("assume_green_on").format(amount=f"{_gd_used:,.0f}"))
@@ -2147,6 +2240,13 @@ if "all_results" in st.session_state:
                 fee_delta=best['fuse_fee_delta_yr'], extra=_extra_benefit,
             )
         )
+
+    # A smaller fuse the modelled load fits within: a saving that needs no investment,
+    # so it is a tip, never part of the result.
+    _dg_tip = _si.get("fuse_downgrade_tip")
+    if _dg_tip:
+        st.info(t("fuse_downgrade_tip").format(
+            fuse=_dg_tip["fuse"], current=fuse_amps, saving=_dg_tip["saving_yr"]))
 
     if fuse_overcurrent_factor > 0 and _rec_fuse == fuse_amps:
         _eff_a = fuse_amps * (1.0 + fuse_overcurrent_factor)
@@ -2212,7 +2312,8 @@ if "all_results" in st.session_state:
                                                 solar_cfg) / _alt_yrs
         _alt_life = min(best["config"].cycle_life / _alt_cycles if _alt_cycles > 0 else 15, 15)
         # Same accounting as the main result: wear, standby (same prices and tariff), fuse fee
-        _alt_fixed = best["fixed_part"]
+        # and the tariff switch cost (same tariff, so the same extra bill vs the cheapest one)
+        _alt_fixed = -best["fuse_fee_delta_yr"] - best["standby_cost_yr"] - best.get("tariff_switch_cost_yr", 0)
         _alt_benefit = yearly_benefit(_alt_arb, _alt_solar_self, _alt_fixed, 1, *_wear(best))
         _alt_benefit_life = lifetime_benefit(_alt_arb, _alt_solar_self, _alt_fixed, _alt_life,
                                              *_wear(best))
@@ -2434,6 +2535,8 @@ if "all_results" in st.session_state:
                 standby_cost_yr=best.get("standby_cost_yr"),
                 solar_degradation_pct=(_si.get("solar_deg", 0) * 100
                                        if best.get("solar_part", 0) > 0 else None),
+                example_note=(STRINGS["example_pdf_note"]["sv"].format(
+                    items=_example_items_text(_examples, _si, lang="sv")) if _examples else None),
             ))
             st.session_state["_pdf_cache"] = _pdf_bytes
         except Exception as e:
@@ -2653,7 +2756,9 @@ if "all_results" in st.session_state:
                     # EV/scheduled loads are inside load_kw (ev_kw = their part);
                     # with a measured hourly/seasonal profile they are part of
                     # the profile and ev_kw is 0.
-                    "ev_in_profile": not _bcfg.scheduled_loads,
+                    # True only when there are scheduled loads but the profile replaced them
+                    "ev_in_profile": not _bcfg.scheduled_loads and any(
+                        _sl.get("power", 0) > 0 for _sl in (_exp_ss["scheduled_loads"] or [])),
                     "period": {"first": _dates[0], "last": _dates[-1], "days": _days},
                     "result": {
                         "net_sek": round(_r.net_profit_sek, 2),
@@ -3119,6 +3224,8 @@ if "all_results" in st.session_state:
             st.text(f"{_lbl('detail_of_which_standby')} {-sel['standby_cost_yr']:>10,.0f} {t('kr_yr')}")
         if sel["fuse_fee_delta_yr"] != 0:
             st.text(f"{_lbl('detail_of_which_fuse')} {-sel['fuse_fee_delta_yr']:>10,.0f} {t('kr_yr')}")
+        if sel.get("tariff_switch_cost_yr", 0) > 0:
+            st.text(f"{_lbl('detail_of_which_tariff')} {-sel['tariff_switch_cost_yr']:>10,.0f} {t('kr_yr')}")
         if sel.get("green_bat", 0) + sel.get("green_sol", 0) > 0:
             st.text(f"{_lbl('detail_green_deduction')} {-(sel['green_bat'] + sel['green_sol']):>10,.0f} kr")
         st.text(f"{_lbl('detail_payback')} {_fmt_payback(sel['payback']):>13}")
