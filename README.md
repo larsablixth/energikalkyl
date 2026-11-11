@@ -45,11 +45,13 @@ For bast resultat, fyll i din arsforbrukning uppdelad per kategori (uppvarmning,
 ## Vad simuleras?
 
 - **Alla batteristorlekar** i pristabellen (redigerbar, NKON ESS Pro som standard)
-- **Alla tariffer** for din nätägare (Tidstariff, Enkeltariff, Effekttariff)
+- **Alla tariffer** for din nätägare (Tidstariff, Enkeltariff, Effekttariff). Tariffen valjs pa hela elrakningen: besparingen raknas mot att stanna pa natägarens billigaste tariff utan investering
 - **Sakringsuppgradering** — behover du storre sakring?
 - **Uppvarmningsmodell** — temperaturanpassad fran SMHI väderdata (230 stationer)
-- **Tre framtidsscenarier** — konservativt, sannolikt, hog volatilitet
+- **Fem antaganden om framtida prisskillnader** — 0,7x (mindre), 1,0x (oforandrat), 1,5x, 2,5x och 4x (storre). Antaganden, inte prognoser
+- **Slitage och standby** — batteriets kapacitetsforlust (1 %/ar), solcellernas aldring (0,5 %/ar) och standbyforbrukning (45 W) ingar i alla resultat och visas som antaganden
 - **PDF-rapport** for banken med metodik och kassaflodesanalys
+- **Exempelvarden markeras** — batteripriser, installation, solcellsstorlek/-pris och exempelhuset ar exempel tills du anger egna; resultatet visar da "Exempelkalkyl" med en lista over dem. Ingen elbil eller pool ar forvald: lagg till med "+ Elbil" (tidsstyrd) och "+ Poolvarmepump" (flexibel last pa soloverskott). En poolens cirkulationspump gar varje dag och hor hemma under tidsstyrda laster eller i grundlasten
 
 ## Natägare som stods
 
@@ -88,6 +90,8 @@ echo "din-nyckel" > .entsoe_key
 | heating.py | Uppvarmningsmodell (bergvarme, luftvarmepump, fjarrvarme, direktel) |
 | weather.py | SMHI väderdata (230 stationer, auto-hamtning) |
 | report.py | PDF-rapport for bankunderlag |
+| economics.py | Resultatberakningar (solegenanvandning, effektavgift, elrakning per tariff, slitage, lan) |
+| example_inputs.py | Exempelvardena som appen startar med + vilka som ar oforandrade |
 | tibber_source.py | Tibber GraphQL API |
 | eon_source.py | E.ON Navigator API |
 | import_vattenfall.py | Vattenfall Excel (daglig + timdata) |

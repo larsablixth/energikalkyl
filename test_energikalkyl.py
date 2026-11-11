@@ -965,5 +965,471 @@ class TestScenarios:
         assert 1000 <= p25 <= 2000
 
 
+# ============================================================
+# economics.py tests + effekt-aware charging + smart load energy
+# ============================================================
+
+def _slot(d, hour, action="idle", power=0.0, solar=0.0, cost_ore=100.0):
+    from batteri import SlotResult
+    return SlotResult(date=d, hour=hour, sek_per_kwh=0.5, grid_fee_ore=0.0,
+                      total_cost_ore=cost_ore, action=action, power_kw=power,
+                      energy_kwh=power, soc_before=0.0, soc_after=0.0,
+                      cost_sek=0.0, saving_sek=0.0, solar_kw=solar)
+
+
+def _seom_like():
+    from tariff import EffektTariff
+    return EffektTariff(energy_rate=5.0, effekt_rate=145.0, low_season_rate=72.5,
+                        top_n_peaks=3, night_discount=1.0, peak_months=(11, 12, 1, 2, 3),
+                        peak_weekday_only=True, peak_hour_start=7, peak_hour_end=19)
+
+
+class TestSolarDirectUse:
+    def test_capped_at_house_load(self):
+        """Surplus solar (battery, export or curtailed) is not direct use."""
+        from batteri import SimResult, BatteryConfig
+        from economics import solar_direct_use
+        cfg = BatteryConfig(base_load_kw=2.0)
+        r = SimResult(config=cfg)
+        r.slots = [_slot("2026-06-15", "12:00", solar=5.0, cost_ore=100.0),
+                   _slot("2026-06-15", "18:00", solar=1.0, cost_ore=200.0),
+                   _slot("2026-06-15", "23:00", solar=0.0, cost_ore=300.0)]
+        kwh, sek = solar_direct_use(r, cfg)
+        assert abs(kwh - 3.0) < 1e-9          # 2 (capped) + 1
+        assert abs(sek - (2.0 * 1.0 + 1.0 * 2.0)) < 1e-9  # each at its own slot price
+
+    def test_independent_of_battery_size(self):
+        from batteri import simulate, BatteryConfig
+        from tariff import Tidstariff
+        from solar import SolarConfig
+        from economics import solar_direct_use
+        prices = [{"date": "2026-06-15", "hour": f"{h:02d}:00",
+                   "sek_per_kwh": 0.3 if h < 6 else 1.0} for h in range(24)]
+        vals = []
+        for cap in (5.0, 32.0):
+            cfg = BatteryConfig(capacity_kwh=cap, export_price_factor=0.0)
+            r = simulate(prices, cfg, Tidstariff(), SolarConfig(capacity_kwp=15.0))
+            vals.append(solar_direct_use(r, cfg))
+        assert abs(vals[0][0] - vals[1][0]) < 1e-6
+        assert abs(vals[0][1] - vals[1][1]) < 1e-6
+
+
+class TestEffektSavings:
+    def test_higher_peak_is_negative(self):
+        """Charging that raises the monthly peak costs money (no clamp at zero)."""
+        from batteri import SimResult, BatteryConfig
+        from economics import effekt_savings
+        tf = _seom_like()
+        cfg = BatteryConfig(base_load_kw=2.0)
+        r = SimResult(config=cfg)
+        # Mon-Wed January: charging 5 kW at 10:00 on top of 2 kW load
+        r.slots = [_slot(f"2026-01-0{d}", "10:00", "charge", 5.0) for d in (5, 6, 7)]
+        val = effekt_savings(r, tf, cfg, num_days=365.25)
+        assert abs(val - (-5.0 * 145.0)) < 1e-6
+
+    def test_discharge_lowers_peak(self):
+        from batteri import SimResult, BatteryConfig
+        from economics import effekt_savings
+        tf = _seom_like()
+        cfg = BatteryConfig(base_load_kw=4.0)
+        r = SimResult(config=cfg)
+        r.slots = [_slot(f"2026-01-0{d}", "17:00", "discharge", 3.0) for d in (5, 6, 7)]
+        assert abs(effekt_savings(r, tf, cfg, num_days=365.25) - 3.0 * 145.0) < 1e-6
+
+    def test_solar_in_baseline(self):
+        """Existing panels: solar's own peak reduction is not credited to the battery."""
+        from batteri import SimResult, BatteryConfig
+        from economics import effekt_savings
+        tf = _seom_like()
+        cfg = BatteryConfig(base_load_kw=4.0)
+        r = SimResult(config=cfg)
+        r.slots = [_slot(f"2026-01-0{d}", "12:00", solar=1.0) for d in (5, 6, 7)]
+        assert abs(effekt_savings(r, tf, cfg, 365.25) - 145.0) < 1e-6
+        assert abs(effekt_savings(r, tf, cfg, 365.25, solar_in_baseline=True)) < 1e-9
+
+
+class TestEffektAwareCharging:
+    def _prices(self):
+        # Mon 5 - Fri 9 Jan 2026: cheap midday (inside SEOM peak hours 07-19),
+        # expensive evening (outside)
+        rows = []
+        for d in range(5, 10):
+            for h in range(24):
+                p = 0.10 if 10 <= h <= 12 else (3.0 if h in (20, 21) else 1.0)
+                rows.append({"date": f"2026-01-{d:02d}", "hour": f"{h:02d}:00", "sek_per_kwh": p})
+        return rows
+
+    def test_charging_never_raises_peak(self):
+        from batteri import simulate, BatteryConfig
+        from economics import effekt_savings
+        tf = _seom_like()
+        cfg = BatteryConfig(capacity_kwh=10.0, max_charge_kw=5.0, max_discharge_kw=5.0,
+                            base_load_kw=2.0, export_price_factor=0.0)
+        r = simulate(self._prices(), cfg, tf)
+        for s in r.slots:
+            if s.action == "charge" and tf.is_peak_hour(s.date, s.hour):
+                assert 2.0 + s.power_kw <= 2.0 + 1e-6
+        assert effekt_savings(r, tf, cfg, 5) >= -1e-6
+
+    def test_non_effekt_tariff_unchanged(self):
+        """Without an effekttariff the cheap midday hours are still used."""
+        from batteri import simulate, BatteryConfig
+        from tariff import FastTariff
+        cfg = BatteryConfig(capacity_kwh=10.0, max_charge_kw=5.0, max_discharge_kw=5.0,
+                            base_load_kw=2.0, export_price_factor=0.0)
+        r = simulate(self._prices(), cfg, FastTariff())
+        assert any(s.action == "charge" and 10 <= int(s.hour[:2]) <= 12 for s in r.slots)
+
+    def test_zero_rate_season_not_capped(self):
+        """Hours priced at 0 kr/kW (e.g. Göteborg summer) don't limit charging."""
+        from batteri import simulate, BatteryConfig
+        from tariff import EffektTariff
+        tf = EffektTariff(effekt_rate=135.0, low_season_rate=0.0, peak_months=(11, 12, 1, 2, 3),
+                          night_discount=1.0, peak_weekday_only=True, peak_hour_start=7, peak_hour_end=20)
+        # 1-5 June 2026 is Mon-Fri
+        rows = [dict(r, date=f"2026-06-{int(r['date'][-2:]) - 4:02d}") for r in self._prices()]
+        cfg = BatteryConfig(capacity_kwh=10.0, max_charge_kw=5.0, max_discharge_kw=5.0,
+                            base_load_kw=2.0, export_price_factor=0.0)
+        r = simulate(rows, cfg, tf)
+        assert any(s.action == "charge" and 10 <= int(s.hour[:2]) <= 12 for s in r.slots)
+
+
+class TestBaselineExport:
+    def test_zero_battery_simulation(self):
+        from batteri import simulate, BatteryConfig
+        from tariff import Tidstariff
+        from solar import SolarConfig
+        from economics import baseline_export_revenue
+        prices = [{"date": "2026-06-15", "hour": f"{h:02d}:00",
+                   "sek_per_kwh": 0.3 if h < 6 else 1.0} for h in range(24)]
+        cfg = BatteryConfig(capacity_kwh=10.0, export_price_factor=1.0)
+        sol = SolarConfig(capacity_kwp=10.0)
+        base = baseline_export_revenue(prices, cfg, Tidstariff(), sol)
+        assert base > 0
+        with_bat = simulate(prices, cfg, Tidstariff(), sol)
+        # The battery soaks up some surplus, so it exports less than the panels alone
+        assert with_bat.total_export_revenue <= base + 1e-9
+        assert cfg.capacity_kwh == 10.0  # original config untouched
+        zero = simulate(prices, BatteryConfig(capacity_kwh=0.0, max_charge_kw=0.0,
+                                              max_discharge_kw=0.0, export_price_factor=1.0),
+                        Tidstariff(), sol)
+        assert zero.total_charged_kwh == 0 and zero.total_discharged_kwh == 0
+        assert zero.total_solar_charge_kwh == 0 and zero.num_cycles == 0
+        assert abs(zero.total_export_revenue - base) < 1e-9
+
+
+class TestLoanSchedule:
+    def test_mortgage_outlives_battery(self):
+        from economics import loan_schedule
+        ls = loan_schedule(100_000, 3.0, 50, 15)
+        assert abs(ls["monthly_payment"] - 322) < 1
+        assert abs(ls["balance_at_horizon"] - 83_663) <= 1
+        assert abs(ls["interest_in_horizon"] - 41_619) <= 2
+        assert abs(ls["paid_in_horizon"] - 57_956) <= 2
+
+    def test_zero_rate(self):
+        from economics import loan_schedule
+        ls = loan_schedule(120_000, 0.0, 10, 5)
+        assert abs(ls["monthly_payment"] - 1000) < 1e-9
+        assert abs(ls["balance_at_horizon"] - 60_000) < 1e-6
+        assert abs(ls["interest_in_horizon"]) < 1e-6
+
+    def test_loan_ends_before_horizon(self):
+        from economics import loan_schedule
+        ls = loan_schedule(100_000, 5.0, 10, 15)
+        assert ls["balance_at_horizon"] == 0
+        assert abs(ls["interest_in_horizon"] - (ls["monthly_payment"] * 120 - 100_000)) < 1e-6
+
+
+class TestWearAndStandby:
+    def test_standby_cost(self):
+        from economics import standby_cost_per_year
+        # 45 W × 8,760 h = 394.2 kWh at 150 öre = 591.3 kr
+        assert abs(standby_cost_per_year(45, 150.0) - 591.3) < 1e-9
+        assert standby_cost_per_year(0, 150.0) == 0
+
+    def test_yearly_benefit_mid_year_wear(self):
+        from economics import yearly_benefit
+        # Year 1: battery at 1 − 0.01×0.5, solar at 0.995^0.5, fixed unchanged
+        b = yearly_benefit(10_000, 6_000, -500, 1, 0.01, 0.005)
+        assert abs(b - (10_000 * 0.995 + 6_000 * 0.995 ** 0.5 - 500)) < 1e-9
+        # No wear: plain sum
+        assert yearly_benefit(10_000, 6_000, -500, 7, 0, 0) == 15_500
+        # Battery value never goes negative
+        assert yearly_benefit(10_000, 0, 0, 200, 0.01, 0) == 0
+
+    def test_lifetime_benefit_partial_year(self):
+        from economics import lifetime_benefit, yearly_benefit
+        # No wear: equals yearly × lifetime, also for a fractional lifetime
+        assert abs(lifetime_benefit(1_000, 500, -100, 12.4, 0, 0) - 1_400 * 12.4) < 1e-9
+        # With wear: last year weighted by its fraction
+        exp = sum(yearly_benefit(1_000, 500, -100, yr, 0.01, 0.005) for yr in range(1, 3))
+        exp += 0.5 * yearly_benefit(1_000, 500, -100, 3, 0.01, 0.005)
+        assert abs(lifetime_benefit(1_000, 500, -100, 2.5, 0.01, 0.005) - exp) < 1e-9
+        # Linear battery fade: average over 15 years = value at the midpoint (7.5 yr)
+        assert abs(lifetime_benefit(10_000, 0, 0, 15, 0.01, 0) - 15 * 10_000 * 0.925) < 1e-6
+
+    def test_payback_interpolated_and_none(self):
+        from economics import payback_years
+        assert abs(payback_years(25_000, 10_000, 0, 0, 0, 0) - 2.5) < 1e-9
+        # Wear makes payback later than investment / year-1 benefit
+        assert payback_years(100_000, 10_000, 0, 0, 0.01, 0) > 100_000 / 9_950
+        # Never reached within the 25-year solar lifetime
+        assert payback_years(100_000, 1_000, 0, 0, 0.01, 0) is None
+        assert payback_years(10_000, 1_000, 0, -2_000, 0, 0) is None
+        assert payback_years(0, 1_000, 0, 0, 0, 0) == 0
+        # After the battery lifetime only the panels keep paying: 5 years of
+        # 10,000 (battery 8,000 + solar 2,000) = 50,000, then 2,000 per year.
+        assert abs(payback_years(60_000, 8_000, 2_000, 0, 0, 0, lifetime=5) - 10.0) < 1e-9
+        # A battery-only investment that isn't repaid within the battery's life never is
+        assert payback_years(60_000, 8_000, 0, 0, 0, 0, lifetime=5) is None
+        # Standby (fixed part) stops with the battery too
+        assert abs(payback_years(40_000, 8_000, 2_000, -1_000, 0, 0, lifetime=4) - 6.0) < 1e-9
+
+    def test_unchanged_scenario_equals_main_result(self):
+        """The 1.0× scenario must reproduce the main lifetime benefit exactly."""
+        from economics import lifetime_benefit, scenario_bat_part
+        vol = {0.7: 6_000.0, 1.0: 9_000.0, 1.5: 12_000.0, 2.5: 15_000.0, 4.0: 20_000.0}
+        main = lifetime_benefit(9_000.0, 6_653.0, -700.0, 13.7, 0.01, 0.005)
+        scen = lifetime_benefit(lambda yr: scenario_bat_part(vol, 1.0, yr),
+                                6_653.0, -700.0, 13.7, 0.01, 0.005)
+        assert scen == main
+
+    def test_scenario_ramp(self):
+        from economics import scenario_bat_part, value_at_level
+        vol = {0.7: 7_000.0, 1.0: 10_000.0, 1.5: 12_000.0}
+        assert scenario_bat_part(vol, 1.5, 10) == 12_000.0
+        assert scenario_bat_part(vol, 1.5, 14) == 12_000.0          # stays at target
+        assert abs(scenario_bat_part(vol, 1.5, 5) - 11_000.0) < 1e-9  # 1.25× halfway
+        assert abs(scenario_bat_part(vol, 0.7, 5) - 8_500.0) < 1e-9   # 0.85×
+        assert value_at_level(vol, 5.0) == 12_000.0                  # clamped
+
+
+class TestSolarFlows:
+    def test_flows_add_up(self):
+        from batteri import SimResult, BatteryConfig
+        from economics import solar_flows
+        r = SimResult(config=BatteryConfig())
+        # 6 kW solar: 2 direct, 2 battery, 1 flex, 1 curtailed (zero export)
+        s1 = _slot("2026-06-15", "12:00", solar=6.0)
+        s1.solar_charge_kwh, s1.flex_consumed_kwh = 2.0, 1.0
+        # 4 kW solar, battery discharging 3 kWh to the grid on top of 1 kWh solar export
+        s2 = _slot("2026-06-15", "13:00", action="discharge", power=3.0, solar=4.0)
+        s2.grid_export_kwh = 4.0
+        r.slots = [s1, s2]
+        f = solar_flows(r, direct_kwh=5.0)
+        assert f["produced"] == 10.0 and f["battery"] == 2.0 and f["flex"] == 1.0
+        assert f["exported"] == 1.0
+        assert abs(f["curtailed"] - 1.0) < 1e-9
+
+
+class TestReportAssumptions:
+    def test_wear_and_five_scenarios_in_pdf(self):
+        from report import generate_report
+        scen = {f"S{v}": {"arb_yr": 1000.0 * v, "vol": v, "lifetime_profit": 100.0 * v - 200,
+                          "desc": "antagande"} for v in (0.7, 1.0, 1.5, 2.5, 4.0)}
+        pdf = generate_report(battery_label="32 kWh", future_scenarios=scen,
+                              battery_fade_pct=1.0, standby_w=45, standby_cost_yr=600,
+                              solar_degradation_pct=0.5)
+        assert pdf[:4] == b"%PDF"
+
+
+class TestSmartLoadEnergy:
+    def test_daily_energy_matches_target(self):
+        """11 kW EV needing 30 kWh: 3 hours, the most expensive at 8 kW."""
+        from batteri import simulate, BatteryConfig, LoadSchedule
+        ev = LoadSchedule("EV", 11.0, 18, 7, daily_kwh=30.0, smart=True)
+        cfg = BatteryConfig(capacity_kwh=10.0, base_load_kw=1.0, scheduled_loads=[ev])
+        prices = [{"date": "2026-01-07", "hour": f"{h:02d}:00",
+                   "sek_per_kwh": 0.1 + 0.01 * h if h < 7 else 1.0 + 0.01 * h} for h in range(24)]
+        simulate(prices, cfg, None)
+        sched = cfg._smart_schedule["2026-01-07"][0]
+        assert sorted(sched) == [0, 1, 2]
+        assert abs(sum(sched.values()) - 30.0) < 1e-9
+        assert sched[2] == 8.0 and sched[0] == 11.0
+        ev_kwh = sum(cfg.total_load_kw(h, 1, "2026-01-07") - 1.0 for h in range(24))
+        assert abs(ev_kwh - 30.0) < 1e-9
+
+    def test_no_daily_target_runs_full_window(self):
+        from batteri import simulate, BatteryConfig, LoadSchedule
+        ev = LoadSchedule("EV", 11.0, 22, 2, daily_kwh=0.0, smart=True)
+        cfg = BatteryConfig(capacity_kwh=10.0, base_load_kw=1.0, scheduled_loads=[ev])
+        prices = [{"date": "2026-01-07", "hour": f"{h:02d}:00", "sek_per_kwh": 1.0} for h in range(24)]
+        simulate(prices, cfg, None)
+        assert cfg._smart_schedule["2026-01-07"][0] == {22: 11.0, 23: 11.0, 0: 11.0, 1: 11.0}
+
+
+class TestBaselineBill:
+    """Household bill without investing, used to compare an operator's tariffs."""
+
+    def _result(self, slots, base_load=2.0):
+        from batteri import SimResult, BatteryConfig
+        cfg = BatteryConfig(base_load_kw=base_load)
+        r = SimResult(config=cfg)
+        r.slots = slots
+        return r, cfg
+
+    def test_energy_at_each_slot_price(self):
+        from tariff import FastTariff
+        from economics import baseline_bill
+        r, cfg = self._result([_slot("2026-06-15", "03:00", cost_ore=100.0),
+                               _slot("2026-06-15", "18:00", cost_ore=200.0)])
+        # 2 kWh × 1 kr + 2 kWh × 2 kr, one year of data
+        assert abs(baseline_bill(r, FastTariff(), cfg, 365.25) - 6.0) < 1e-9
+        # Two years of data: halved per year
+        assert abs(baseline_bill(r, FastTariff(), cfg, 730.5) - 3.0) < 1e-9
+
+    def test_battery_actions_ignored(self):
+        """The bill is WITHOUT the investment: charging/discharging changes nothing."""
+        from tariff import FastTariff
+        from economics import baseline_bill
+        r1, cfg = self._result([_slot("2026-06-15", "03:00", cost_ore=100.0)])
+        r2, _ = self._result([_slot("2026-06-15", "03:00", "charge", 5.0, cost_ore=100.0)])
+        assert baseline_bill(r1, FastTariff(), cfg, 365.25) == baseline_bill(r2, FastTariff(), cfg, 365.25)
+
+    def test_solar_in_baseline(self):
+        """Existing panels: only the load they don't cover is bought (never negative)."""
+        from tariff import FastTariff
+        from economics import baseline_bill
+        r, cfg = self._result([_slot("2026-06-15", "12:00", solar=3.0, cost_ore=100.0),
+                               _slot("2026-06-15", "17:00", solar=1.0, cost_ore=100.0)])
+        assert abs(baseline_bill(r, FastTariff(), cfg, 365.25) - 4.0) < 1e-9
+        assert abs(baseline_bill(r, FastTariff(), cfg, 365.25, solar_in_baseline=True) - 1.0) < 1e-9
+
+    def test_effekt_tariff_adds_demand_charge(self):
+        """EffektTariff: energy + the no-investment peaks priced like effekt_savings()."""
+        from economics import baseline_bill, effekt_savings
+        tf = _seom_like()
+        # Mon-Wed January 10:00 (measured) + one evening hour (not measured), load 2 kW
+        slots = [_slot(f"2026-01-0{d}", "10:00", cost_ore=100.0) for d in (5, 6, 7)]
+        slots.append(_slot("2026-01-05", "22:00", cost_ore=100.0))
+        r, cfg = self._result(slots)
+        # energy 4 × 2 kWh × 1 kr = 8; demand: top-3 average 2 kW × 145 kr = 290
+        assert abs(baseline_bill(r, tf, cfg, 365.25) - 298.0) < 1e-9
+        # Same peak rules as effekt_savings: a 5 kW charge raises the peak by 5 kW there
+        r2, _ = self._result([_slot(f"2026-01-0{d}", "10:00", "charge", 5.0) for d in (5, 6, 7)])
+        assert abs(effekt_savings(r2, tf, cfg, 365.25) - (-5.0 * 145.0)) < 1e-9
+        assert abs(baseline_bill(r2, tf, cfg, 365.25) - (6.0 + 2.0 * 145.0)) < 1e-9
+
+    def test_effekt_with_solar_in_baseline(self):
+        from economics import baseline_bill
+        tf = _seom_like()
+        r, cfg = self._result([_slot(f"2026-01-0{d}", "12:00", solar=1.0, cost_ore=100.0)
+                               for d in (5, 6, 7)], base_load=4.0)
+        # raw: 3 × 4 kWh + 4 kW × 145; existing panels: 3 × 3 kWh + 3 kW × 145
+        assert abs(baseline_bill(r, tf, cfg, 365.25) - (12.0 + 580.0)) < 1e-9
+        assert abs(baseline_bill(r, tf, cfg, 365.25, solar_in_baseline=True) - (9.0 + 435.0)) < 1e-9
+
+    def test_tidstariff_vs_enkeltariff_on_simulated_bill(self):
+        """Real simulate(): the bill follows each tariff's prices and is battery-size independent."""
+        from batteri import simulate, BatteryConfig
+        from tariff import Tidstariff, FastTariff
+        from economics import baseline_bill
+        prices = [{"date": "2026-01-07", "hour": f"{h:02d}:00", "sek_per_kwh": 0.5} for h in range(24)]
+        bills = {}
+        for tf in (Tidstariff(), FastTariff()):
+            for cap in (5.0, 32.0):
+                cfg = BatteryConfig(capacity_kwh=cap, base_load_kw=1.0)
+                r = simulate(prices, cfg, tf)
+                bills[(tf.name, cap)] = baseline_bill(r, tf, cfg, 1)
+        tid, enk = Tidstariff(), FastTariff()
+        # Wed 7 Jan 2026: 16 peak hours (06-22) + 8 off-peak, 1 kWh each, spot 50 öre × 1.25
+        exp_tid = (24 * 62.5 + 16 * tid.peak + 8 * tid.offpeak + 24 * tid.energy_tax) / 100 * 365.25
+        exp_enk = (24 * 62.5 + 24 * (enk.flat_rate + enk.energy_tax)) / 100 * 365.25
+        assert abs(bills[(tid.name, 5.0)] - exp_tid) < 1e-6
+        assert abs(bills[(enk.name, 32.0)] - exp_enk) < 1e-6
+        assert bills[(tid.name, 5.0)] == bills[(tid.name, 32.0)]
+
+
+class TestExampleInputs:
+    """Which personal figures are still the app's untouched examples."""
+
+    def _si(self, **kw):
+        from example_inputs import EXAMPLE, default_battery_rows
+        rows = [(r["Namn"], r["Kapacitet_kWh"], r["Max_kW"], float(r["Pris_SEK"]))
+                for r in default_battery_rows(EXAMPLE["eur_sek"])]
+        si = {"pricing_mode": "table", "battery_rows": rows, "eur_sek": EXAMPLE["eur_sek"],
+              "sek_per_kwh": None, "bat_install": EXAMPLE["bat_install"], "use_solar": True,
+              "solar_kwp": EXAMPLE["solar_kwp"], "sol_price": EXAMPLE["sol_price"],
+              "sol_install": EXAMPLE["sol_install"], "use_heating_model": True,
+              "own_consumption": False, "energy_class": EXAMPLE["energy_class"],
+              "house_area": EXAMPLE["house_area"], "heating_type": EXAMPLE["heating_type"]}
+        si.update(kw)
+        return si
+
+    def test_all_defaults_flagged(self):
+        from example_inputs import untouched_examples
+        assert untouched_examples(self._si()) == [
+            "battery_prices", "battery_install", "solar_kwp", "solar_price", "house"]
+
+    def test_default_table_matches_nkon_prices(self):
+        from example_inputs import default_battery_rows
+        rows = {r["Namn"]: r["Pris_SEK"] for r in default_battery_rows(11.5)}
+        assert rows["32 kWh"] == round(2857 * 11.5 * 1.25)
+        assert rows["32+16 kWh"] == round((2857 + 1512) * 11.5 * 1.25)
+        assert len(rows) == 8
+
+    def test_own_values_not_flagged(self):
+        from example_inputs import untouched_examples
+        si = self._si(sol_price=150000, bat_install=20000, solar_kwp=10.0)
+        assert untouched_examples(si) == ["battery_prices", "house"]
+        # Changing only the installation part counts as an own solar price
+        assert "solar_price" not in untouched_examples(self._si(sol_install=20000))
+
+    def test_battery_table(self):
+        from example_inputs import untouched_examples
+        si = self._si()
+        edited = list(si["battery_rows"])
+        edited[3] = (edited[3][0], edited[3][1], edited[3][2], 30000.0)
+        assert "battery_prices" not in untouched_examples(self._si(battery_rows=edited))
+        assert "battery_prices" not in untouched_examples(self._si(battery_rows=edited[:4]))
+        # Another EUR rate: the default table for that rate is still the example
+        from example_inputs import default_battery_rows
+        rows12 = [(r["Namn"], r["Kapacitet_kWh"], r["Max_kW"], r["Pris_SEK"])
+                  for r in default_battery_rows(12.0)]
+        assert "battery_prices" in untouched_examples(self._si(battery_rows=rows12, eur_sek=12.0))
+        assert "battery_prices" not in untouched_examples(self._si(battery_rows=rows12))
+
+    def test_sek_per_kwh_mode(self):
+        from example_inputs import untouched_examples, EXAMPLE
+        si = self._si(pricing_mode="sek_kwh", eur_sek=None, sek_per_kwh=EXAMPLE["sek_per_kwh"])
+        assert "battery_prices" in untouched_examples(si)
+        assert "battery_prices" not in untouched_examples(dict(si, sek_per_kwh=1500))
+
+    def test_no_solar(self):
+        from example_inputs import untouched_examples
+        items = untouched_examples(self._si(use_solar=False, solar_kwp=0, sol_price=0))
+        assert "solar_kwp" not in items and "solar_price" not in items
+
+    def test_house(self):
+        from example_inputs import untouched_examples
+        assert "house" not in untouched_examples(self._si(own_consumption=True))
+        assert "house" not in untouched_examples(self._si(house_area=180))
+        assert "house" not in untouched_examples(self._si(energy_class="E"))
+        assert "house" not in untouched_examples(self._si(heating_type="heating_district"))
+        assert "house" not in untouched_examples(self._si(use_heating_model=False))
+
+    def test_nothing_untouched(self):
+        from example_inputs import untouched_examples
+        si = self._si(battery_rows=[("Mitt", 20.0, 10.0, 50000.0)], bat_install=0,
+                      solar_kwp=8.0, sol_price=60000, own_consumption=True)
+        assert untouched_examples(si) == []
+
+    def test_grid_not_judged(self):
+        """Operator, fuse and phases are never flagged by value."""
+        from example_inputs import untouched_examples
+        si = self._si(grid_operator="Vattenfall Eldistribution", fuse_amps=25, phases=3)
+        assert not {"grid_operator", "fuse_amps", "phases"} & set(untouched_examples(si))
+
+    def test_translations_exist(self):
+        from translations import STRINGS
+        for key in ("example_warning", "example_pdf_note", "example_mark", "example_item_battery_table",
+                    "example_item_battery_sek_kwh", "example_item_battery_install",
+                    "example_item_solar_kwp", "example_item_solar_price", "example_item_house",
+                    "assume_grid", "assume_tariff_reference", "detail_of_which_tariff",
+                    "add_ev_load", "add_pool_heat_pump", "ev_load_name", "pool_heat_pump_name"):
+            assert STRINGS[key]["sv"] and STRINGS[key]["en"], key
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

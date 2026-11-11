@@ -302,6 +302,22 @@ STRINGS = {
         "sv": "Antal cykler innan batteriet tappar kapacitet. LiFePO4: typiskt 6000-8000.",
         "en": "Number of cycles before battery degrades. LiFePO4: typically 6000-8000.",
     },
+    "bat_fade": {
+        "sv": 'Kapacitetsförlust (%/år)',
+        "en": 'Capacity fade (%/yr)',
+    },
+    "bat_fade_help": {
+        "sv": 'Hur mycket batteriets kapacitet, och därmed dess värde, minskar per år. LiFePO4: ofta omkring 1 %/år. Används i alla resultat.',
+        "en": "How much the battery's capacity, and with it its value, drops per year. LiFePO4: often around 1%/yr. Used in all results.",
+    },
+    "standby_w": {
+        "sv": 'Standbyeffekt växelriktare + BMS (W)',
+        "en": 'Standby power inverter + BMS (W)',
+    },
+    "standby_w_help": {
+        "sv": 'Effekt som batterisystemet drar dygnet runt (t.ex. Deye 12K ~30 W + Seplos BMS ~15 W). Kostnaden dras från besparingen varje år.',
+        "en": 'Power the battery system draws around the clock (e.g. Deye 12K ~30 W + Seplos BMS ~15 W). The cost is subtracted from the savings every year.',
+    },
     "solar_panels": {
         "sv": "Solceller",
         "en": "Solar panels",
@@ -497,8 +513,10 @@ STRINGS = {
         "en": "Electricity loads",
     },
     "loads_caption": {
-        "sv": "Laster utöver uppvärmning. EV och pool hanteras separat från hushållets grundlast.",
-        "en": "Loads beyond heating. EV and pool are handled separately from base household load.",
+        "sv": "Laster utöver uppvärmning. Elbil och poolvärmepump hanteras separat från hushållets grundlast. "
+              "Inga är förvalda: lägg till de du har.",
+        "en": "Loads beyond heating. EV and pool heat pump are handled separately from base household load. "
+              "None are preselected: add the ones you have.",
     },
     "base_load": {
         "sv": "Grundlast (kW)",
@@ -532,13 +550,33 @@ STRINGS = {
     },
     "flexible_caption": {
         "sv": "Körs på solöverskott istället för att exportera till nät. "
-              "Varmvatten-element tar upp överskott när batteriet är fullt.",
+              "Varmvatten-element tar upp överskott när batteriet är fullt. "
+              "En poolvärmepump (värmer vattnet) kan vänta på överskott; en cirkulationspump för poolen "
+              "går varje dag oavsett sol och hör hemma under tidsstyrda laster (eller i grundlasten), inte här.",
         "en": "Runs on solar surplus instead of exporting to grid. "
-              "Hot water tank absorbs surplus when the battery is full.",
+              "Hot water tank absorbs surplus when the battery is full. "
+              "A pool heat pump (heats the water) can wait for surplus; a pool circulation pump "
+              "runs every day whether the sun shines or not and belongs under scheduled loads (or in the base load), not here.",
     },
     "add_flex_load": {
         "sv": "+ Flexibel last",
         "en": "+ Flexible load",
+    },
+    "add_ev_load": {
+        "sv": "+ Elbil",
+        "en": "+ EV",
+    },
+    "ev_load_name": {
+        "sv": "Elbil",
+        "en": "EV",
+    },
+    "add_pool_heat_pump": {
+        "sv": "+ Poolvärmepump",
+        "en": "+ Pool heat pump",
+    },
+    "pool_heat_pump_name": {
+        "sv": "Poolvärmepump",
+        "en": "Pool heat pump",
     },
 
     # ---- Heating ----
@@ -745,16 +783,16 @@ STRINGS = {
         "en": "Scenario comparison",
     },
     "scenario_caption": {
-        "sv": "Samma simulering — uppdelad per år. Elpriser varierar kraftigt mellan år.",
-        "en": "Same simulation — split by year. Electricity prices vary significantly between years.",
+        "sv": 'Samma simulering — uppdelad per år. Alla kolumner visar batteriets handelsresultat per år (urladdningsvärde − laddkostnad + exportintäkt), utan solcellernas egenanvändning, effektavgift, säkringsavgift, standby och slitage. Elpriser varierar kraftigt mellan år.',
+        "en": "Same simulation — split by year. All columns show the battery's trading result per year (discharge value − charging cost + export revenue), without solar self-use, demand charge, fuse fee, standby and wear. Electricity prices vary significantly between years.",
     },
     "compare_all_header": {
         "sv": "Jämförelse alla batteristorlekar",
         "en": "Comparison of all battery sizes",
     },
     "compare_all_caption": {
-        "sv": "Investeringen fördelad över batteriets livslängd jämförd med årlig besparing. Samma tidsskala.",
-        "en": "Investment spread over battery lifetime compared with annual savings. Same timescale.",
+        "sv": 'Investeringen fördelad över batteriets livslängd jämförd med genomsnittlig besparing per år under samma period (inkl. slitage och standby). Samma tidsskala: (besparing − kostnad) × livslängd = netto.',
+        "en": 'Investment spread over the battery lifetime compared with the average savings per year over the same period (incl. wear and standby). Same timescale: (savings − cost) × lifetime = net.',
     },
     "investment_cost_yr": {
         "sv": "Investeringskostnad per år",
@@ -821,36 +859,48 @@ STRINGS = {
         "en": "6. Future outlook",
     },
     "step6_caption": {
-        "sv": "Tre scenarier baserat på hur elprisernas volatilitet utvecklas. "
-              "Mer förnybart i elnätet ger större prisskillnader mellan timmar — "
-              "det är vad batteriet tjänar på.",
-        "en": "Three scenarios based on how electricity price volatility develops. "
-              "More renewables in the grid creates larger price swings between hours — "
-              "this is what the battery profits from.",
+        "sv": 'Fem antaganden om hur prisskillnaderna mellan timmar utvecklas — det är dem batteriet tjänar på. Dygnets medelpris är oförändrat. Det här är antaganden, inte prognoser: kalkylen anger inte vilket som är mest troligt. Besparing/år = första årets värde om scenariots nivå gällde redan nu.',
+        "en": "Five assumptions about how the price differences between hours develop — that is what the battery earns from. The daily average price is unchanged. These are assumptions, not forecasts: the tool does not say which is most likely. Savings/yr = the first year's value if the scenario's level already applied.",
     },
-    "conservative": {
-        "sv": "Konservativt",
-        "en": "Conservative",
+    "scen_smaller": {
+        "sv": 'Mindre prissvängningar (0,7×)',
+        "en": 'Smaller price swings (0.7×)',
     },
-    "likely": {
-        "sv": "Sannolikt",
-        "en": "Likely",
+    "scen_unchanged": {
+        "sv": 'Oförändrat (1,0×)',
+        "en": 'Unchanged (1.0×)',
     },
-    "high_volatility": {
-        "sv": "Hög volatilitet",
-        "en": "High volatility",
+    "scen_somewhat_larger": {
+        "sv": 'Något större (1,5×)',
+        "en": 'Somewhat larger (1.5×)',
     },
-    "conservative_desc": {
-        "sv": "Prissvängningarna ökar 50% på 10 år. Måttlig utbyggnad av förnybart.",
-        "en": "Price swings increase 50% over 10 years. Moderate renewable expansion.",
+    "scen_much_larger": {
+        "sv": 'Mycket större (2,5×)',
+        "en": 'Much larger (2.5×)',
     },
-    "likely_desc": {
-        "sv": "Prissvängningarna 2-3x på 10 år. Fortsatt utbyggnad av vind/sol, fler elbilar, elektrifiering av industri. De flesta energianalytiker förväntar sig detta.",
-        "en": "Price swings 2-3x over 10 years. Continued wind/solar expansion, more EVs, industry electrification. Most energy analysts expect this.",
+    "scen_extreme": {
+        "sv": 'Extremt större (4×)',
+        "en": 'Extremely larger (4×)',
     },
-    "high_volatility_desc": {
-        "sv": "Prissvängningarna 4x. Massiv utbyggnad av förnybart, kärnkraft fasas ut, ökad europeisk sammankoppling.",
-        "en": "Price swings 4x. Massive renewable buildout, nuclear phase-out, increased European interconnection.",
+    "scen_smaller_desc": {
+        "sv": 'Antar att prisskillnaderna mellan timmar minskar till 70 % på 10 år, t.ex. för att många batterier och flexibla laster jämnar ut priserna.',
+        "en": 'Assumes the price differences between hours shrink to 70% over 10 years, e.g. because many batteries and flexible loads flatten prices.',
+    },
+    "scen_unchanged_desc": {
+        "sv": 'Antar samma prisskillnader som i den historiska perioden. Samma som huvudresultatet.',
+        "en": 'Assumes the same price differences as in the historical period. Equals the main result.',
+    },
+    "scen_somewhat_larger_desc": {
+        "sv": 'Antar att prisskillnaderna mellan timmar ökar till 1,5 gånger dagens på 10 år.',
+        "en": "Assumes the price differences between hours grow to 1.5 times today's over 10 years.",
+    },
+    "scen_much_larger_desc": {
+        "sv": 'Antar att prisskillnaderna mellan timmar ökar till 2,5 gånger dagens på 10 år.',
+        "en": "Assumes the price differences between hours grow to 2.5 times today's over 10 years.",
+    },
+    "scen_extreme_desc": {
+        "sv": 'Antar att prisskillnaderna mellan timmar ökar till 4 gånger dagens på 10 år.',
+        "en": "Assumes the price differences between hours grow to 4 times today's over 10 years.",
     },
     "year_forecast": {
         "sv": "15-årsprognos",
@@ -1426,8 +1476,8 @@ STRINGS = {
 
     # ---- House consumption summary ----
     "house_consumption_summary": {
-        "sv": "Husförbrukning (exkl. EV/pool): ~{annual} kWh/år | vinter ~{winter} kWh/dag, sommar ~{summer} kWh/dag",
-        "en": "House consumption (excl. EV/pool): ~{annual} kWh/yr | winter ~{winter} kWh/day, summer ~{summer} kWh/day",
+        "sv": "Husförbrukning (exkl. elbil/poolvärmepump): ~{annual} kWh/år | vinter ~{winter} kWh/dag, sommar ~{summer} kWh/dag",
+        "en": "House consumption (excl. EV/pool heat pump): ~{annual} kWh/yr | winter ~{winter} kWh/day, summer ~{summer} kWh/day",
     },
 
     # ---- Spread analysis details ----
@@ -1672,8 +1722,8 @@ STRINGS = {
         "en": "Lower electricity cost (SEK/yr)",
     },
     "scenario_info": {
-        "sv": "**{label}**: Vid normala priser ({normal_years}) sparar du **{avg_n} kr/år** ({avg_n_mo} kr/mån). Vid höga priser ({high_years}) sparar du **{avg_h} kr/år** ({avg_h_mo} kr/mån).",
-        "en": "**{label}**: At normal prices ({normal_years}) you save **{avg_n} SEK/yr** ({avg_n_mo} SEK/mo). At high prices ({high_years}) you save **{avg_h} SEK/yr** ({avg_h_mo} SEK/mo).",
+        "sv": '**{label}**: batteriets handelsresultat vid normala priser ({normal_years}) är **{avg_n} kr/år** ({avg_n_mo} kr/mån). Vid höga priser ({high_years}) **{avg_h} kr/år** ({avg_h_mo} kr/mån).',
+        "en": "**{label}**: the battery's trading result at normal prices ({normal_years}) is **{avg_n} SEK/yr** ({avg_n_mo} SEK/mo). At high prices ({high_years}) **{avg_h} SEK/yr** ({avg_h_mo} SEK/mo).",
     },
     "invest_cost_trace": {
         "sv": "Investeringskostnad per år",
@@ -1783,13 +1833,21 @@ STRINGS = {
         "sv": "Netto livslängd",
         "en": "Net lifetime",
     },
+    "col_debt_left": {
+        "sv": "Kvar att betala när batteriet är slut",
+        "en": "Debt left when battery is worn out",
+    },
+    "fin_debt_caption": {
+        "sv": "Lånet löper i {years} år men batteriet håller kortare. Kassaflödet per månad blir därför delvis positivt för att amorteringen sprids över fler år än batteriet varar: skulden i kolumnen ovan återstår att betala när batteriet är slut. Netto livslängd räknar med hela investeringen plus räntan under batteriets livslängd.",
+        "en": "The loan runs for {years} years but the battery lasts shorter. The monthly cash flow is therefore positive partly because repayment is spread over more years than the battery lasts: the debt in the column above is still owed when the battery is worn out. Net lifetime counts the full investment plus the interest paid during the battery lifetime.",
+    },
     "fin_all_profitable": {
-        "sv": "**Alla storlekar lönsamma under batteriets livslängd.** Bäst: **{label}** — +{net_mo} kr/mån kassaflöde, +{net_life} kr netto under {lifetime} år.",
-        "en": "**All sizes profitable over battery lifetime.** Best: **{label}** — +{net_mo} SEK/mo cash flow, +{net_life} SEK net over {lifetime} years.",
+        "sv": '**Alla storlekar lönsamma under batteriets livslängd.** Bäst: **{label}** — {net_mo} kr/mån kassaflöde, {net_life} kr netto under {lifetime} år.',
+        "en": '**All sizes profitable over battery lifetime.** Best: **{label}** — {net_mo} SEK/mo cash flow, {net_life} SEK net over {lifetime} years.',
     },
     "fin_best_result": {
-        "sv": "**{label}** ger bäst resultat: +{net_mo} kr/mån kassaflöde, +{net_life} kr netto under {lifetime} år.",
-        "en": "**{label}** gives best result: +{net_mo} SEK/mo cash flow, +{net_life} SEK net over {lifetime} years.",
+        "sv": '**{label}** ger bäst resultat: {net_mo} kr/mån kassaflöde, {net_life} kr netto under {lifetime} år.',
+        "en": '**{label}** gives best result: {net_mo} SEK/mo cash flow, {net_life} SEK net over {lifetime} years.',
     },
     "fin_none_profitable": {
         "sv": "Ingen storlek ger positivt netto under batteriets livslängd med dessa lånvillkor.",
@@ -1855,6 +1913,10 @@ STRINGS = {
         "sv": "**{fuse}A ger b\u00e4st netto** \u2014 {extra} kr/\u00e5r mer \u00e4n {current}A (extra avgift {fee} kr/\u00e5r)",
         "en": "**{fuse}A gives best net** \u2014 {extra} SEK/yr more than {current}A (extra fee {fee} SEK/yr)",
     },
+    "fuse_year1_note": {
+        "sv": 'Belopp per år avser första året (inkl. standby). Rekommendationen ovan väljer säkring efter netto över batteriets livslängd.',
+        "en": 'Amounts per year are for the first year (incl. standby). The recommendation above picks the fuse by net over the battery lifetime.',
+    },
     "fuse_current_best": {
         "sv": "**{fuse}A ger b\u00e4st netto f\u00f6r batteriet.** Uppgradering till {next_fuse}A kostar {fee} kr/\u00e5r mer.",
         "en": "**{fuse}A gives best net for the battery.** Upgrading to {next_fuse}A costs {fee} SEK/yr more.",
@@ -1886,6 +1948,46 @@ STRINGS = {
     "detail_of_which_solar": {
         "sv": "  varav sol egenanv\u00e4nd",
         "en": "  of which solar self-use",
+    },
+    "detail_of_which_standby": {
+        "sv": '  varav standby',
+        "en": '  of which standby',
+    },
+    "detail_of_which_fuse": {
+        "sv": '  varav säkringsavgift',
+        "en": '  of which fuse fee',
+    },
+    "detail_of_which_tariff": {
+        "sv": '  varav tariffbyte',
+        "en": '  of which tariff change',
+    },
+    "detail_solar_flows": {
+        "sv": 'Vart solelen tar vägen (per år)',
+        "en": 'Where the solar power goes (per year)',
+    },
+    "solar_flow_produced": {
+        "sv": 'Producerat',
+        "en": 'Produced',
+    },
+    "solar_flow_direct": {
+        "sv": '  använt direkt i huset',
+        "en": '  used directly in the house',
+    },
+    "solar_flow_battery": {
+        "sv": '  laddat i batteriet',
+        "en": '  charged into the battery',
+    },
+    "solar_flow_flex": {
+        "sv": '  flexibla laster',
+        "en": '  flexible loads',
+    },
+    "solar_flow_exported": {
+        "sv": '  exporterat',
+        "en": '  exported',
+    },
+    "solar_flow_curtailed": {
+        "sv": '  spillt (strypt)',
+        "en": '  wasted (curtailed)',
     },
     "detail_payback": {
         "sv": "\u00c5terbetalningstid",
@@ -1988,8 +2090,8 @@ STRINGS = {
         "en": "Forecast \u2014 {label}",
     },
     "forecast_15yr_caption": {
-        "sv": "Ackumulerat kassafl\u00f6de under batteriets livsl\u00e4ngd i tre scenarier. Volatiliteten \u00f6kar linj\u00e4rt till m\u00e5lniv\u00e5 under de f\u00f6rsta 10 \u00e5ren.",
-        "en": "Cumulative cash flow over battery lifetime in three scenarios. Volatility increases linearly to target level over the first 10 years.",
+        "sv": 'Ackumulerat kassaflöde under batteriets livslängd i varje scenario, med samma slitage och standbykostnad som huvudresultatet. Prisskillnaderna ändras linjärt till scenariots nivå under de första 10 åren.',
+        "en": "Cumulative cash flow over the battery lifetime in each scenario, with the same wear and standby cost as the main result. Price differences change linearly to the scenario's level over the first 10 years.",
     },
     "computing_15yr": {
         "sv": "Ber\u00e4knar 15-\u00e5rskurvor...",
@@ -2040,6 +2142,18 @@ STRINGS = {
               "investment {invest:,.0f} SEK, "
               "{payback_text}, "
               "net {profit:,.0f} SEK over {lifetime:.0f} years",
+    },
+    "fuse_downgrade_tip": {
+        "sv": "Tips, oberoende av investeringen: den modellerade förbrukningen ryms inom {fuse:.0f}A i stället för "
+              "{current:.0f}A, vilket skulle sänka abonnemanget med {saving:,.0f} kr/år. Det är inte medräknat i "
+              "kalkylen, eftersom det går att göra utan batteri eller solceller. Kalkylen bygger på timmedelvärden "
+              "och ser inte korta toppar (spis, bastu, elbilsladdning), och med mindre säkring laddar batteriet "
+              "långsammare än kalkylen antar. Rådgör med en elektriker.",
+        "en": "Tip, independent of the investment: the modelled consumption fits within {fuse:.0f}A instead of "
+              "{current:.0f}A, which would lower the subscription by {saving:,.0f} SEK/yr. It is not counted in "
+              "the result, because it can be done without a battery or solar panels. The calculation uses hourly "
+              "averages and does not see short peaks (stove, sauna, EV charging), and with a smaller fuse the "
+              "battery charges more slowly than assumed here. Ask an electrician.",
     },
     "fuse_change_info": {
         "sv": "Säkring: {change_word} {from_fuse:.0f}A → {to_fuse:.0f}A: "
@@ -2222,8 +2336,8 @@ STRINGS = {
         "en": "Other flex loads",
     },
     "aa_other_flex_help": {
-        "sv": "Poolpump, varmvatten etc. — separat från luft-luft",
-        "en": "Pool pump, hot water, etc. — separate from air-to-air",
+        "sv": "Poolvärmepump, varmvatten etc. — separat från luft-luft",
+        "en": "Pool heat pump, hot water, etc. — separate from air-to-air",
     },
     "aa_caption": {
         "sv": "Luft-luft absorberar {aa_flex:,.0f} kWh/år solöverskott "
@@ -2310,8 +2424,8 @@ STRINGS = {
 
     # ---- Degradation ----
     "degradation_caption": {
-        "sv": "Inkluderar batteriåldring: LiFePO4 tappar ~1% kapacitet per år (85% SoH efter 15 år).",
-        "en": "Includes battery aging: LiFePO4 loses ~1% capacity per year (85% SoH after 15 years).",
+        "sv": 'Linjerna räknar med batteriets kapacitetsförlust ({fade} %/år), solcellernas åldring ({deg} %/år, bara när solcellerna ingår i investeringen) och standbyförbrukning ({standby} W ≈ {standby_cost} kr/år). Varje linje slutar när batteriet är förbrukat.',
+        "en": 'The lines include battery capacity fade ({fade}%/yr), panel degradation ({deg}%/yr, only when the panels are part of the investment) and standby consumption ({standby} W ≈ {standby_cost} SEK/yr). Each line stops when the battery is worn out.',
     },
 
     # ---- Added: validation, stale results, grön teknik, battery table ----
@@ -2382,6 +2496,114 @@ STRINGS = {
     "horizon_note": {
         "sv": "Kalkylhorisont = batteriets livslängd. Solcellsinvesteringen fördelas över solcellernas livslängd ({solar_life} år); endast andelen för horisonten belastar nettot. Investeringar visas efter eventuellt grönt avdrag.",
         "en": "Calculation horizon = battery lifetime. The solar investment is spread over the panels' lifetime ({solar_life} years); only the share for the horizon is charged to the net result. Investments are shown after any green deduction.",
+    },
+    "assumptions_header": {
+        "sv": 'Antaganden bakom resultatet',
+        "en": 'Assumptions behind this result',
+    },
+    "assume_prices": {
+        "sv": 'Elpriser: historiska spotpriser {range} ({days} dagar).',
+        "en": 'Electricity prices: historical spot prices {range} ({days} days).',
+    },
+    "assume_battery_prices": {
+        "sv": 'Batteripriser (från tabellen): {prices}. Installation: {install} kr{ex_install}.',
+        "en": 'Battery prices (from the table): {prices}. Installation: {install} SEK{ex_install}.',
+    },
+    "assume_solar_price": {
+        "sv": 'Solceller {kwp} kWp{ex_kwp}: {material} kr material + {install} kr installation{ex_price}.',
+        "en": 'Solar panels {kwp} kWp{ex_kwp}: {material} SEK material + {install} SEK installation{ex_price}.',
+    },
+    "assume_solar_existing": {
+        "sv": 'Befintliga solceller {kwp} kWp{ex_kwp} (ingår inte i investeringen).',
+        "en": 'Existing solar panels {kwp} kWp{ex_kwp} (not part of the investment).',
+    },
+    "assume_grid": {
+        "sv": 'Nätbolag: {operator}, säkring {fuse} A, {phases}-fas.',
+        "en": 'Grid operator: {operator}, fuse {fuse} A, {phases}-phase.',
+    },
+    "assume_tariff_reference": {
+        "sv": 'Besparingen räknas mot att stanna på nätbolagets billigaste tariff utan investering ({tariff}). '
+              'Kräver batteriet en dyrare tariff räknas merkostnaden för hela hushållets förbrukning av.',
+        "en": "The saving is measured against staying on the operator's cheapest tariff without investing ({tariff}). "
+              "If the battery needs a dearer tariff, the extra cost on the whole household's consumption is deducted.",
+    },
+    "assume_consumption_own": {
+        "sv": 'Förbrukning: från din egen förbrukningsdata (Tibber, uppladdad fil eller Tibber Insights).',
+        "en": 'Consumption: from your own consumption data (Tibber, uploaded file or Tibber Insights).',
+    },
+    "assume_consumption_house": {
+        "sv": 'Förbrukning: modellerad med uppvärmningsmodellen för energiklass {eclass}, {area} m², {heating}{ex}.',
+        "en": 'Consumption: modelled with the heating model for energy class {eclass}, {area} m², {heating}{ex}.',
+    },
+    "example_mark": {
+        "sv": 'exempel',
+        "en": 'example',
+    },
+    "example_warning": {
+        "sv": 'Exempelkalkyl: följande värden är exempel och inte dina egna: {items}. '
+              'Ange dina egna värden för en kalkyl som gäller ditt hus.',
+        "en": 'Example calculation: these values are examples, not your own: {items}. '
+              'Enter your own values for a calculation that applies to your house.',
+    },
+    "example_pdf_note": {
+        "sv": 'Observera: kalkylen bygger delvis på exempelvärden, inte på hushållets egna uppgifter: {items}.',
+        "en": "Note: the calculation partly rests on example values, not on the household's own figures: {items}.",
+    },
+    "example_item_battery_table": {
+        "sv": 'batteripriserna (NKON-listpriser)',
+        "en": 'the battery prices (NKON list prices)',
+    },
+    "example_item_battery_sek_kwh": {
+        "sv": 'batteripriset {price} kr/kWh',
+        "en": 'the battery price {price} SEK/kWh',
+    },
+    "example_item_battery_install": {
+        "sv": 'batteriinstallationen {amount} kr',
+        "en": 'the battery installation {amount} SEK',
+    },
+    "example_item_solar_kwp": {
+        "sv": 'solcellsanläggningens storlek {kwp} kWp',
+        "en": 'the solar system size {kwp} kWp',
+    },
+    "example_item_solar_price": {
+        "sv": 'solcellspriset {material} kr material + {install} kr installation',
+        "en": 'the solar price {material} SEK material + {install} SEK installation',
+    },
+    "example_item_house": {
+        "sv": 'förbrukningen, modellerad för ett exempelhus (energiklass {eclass}, {area} m², {heating})',
+        "en": 'the consumption, modelled for an example house (energy class {eclass}, {area} m², {heating})',
+    },
+    "assume_green_off": {
+        "sv": 'Inget grönt avdrag. Standardpriserna är ett gör-det-själv-exempel (importerat batteri, egen montering av solcellerna) som inte ger avdrag.',
+        "en": 'No green deduction. The default prices are a do-it-yourself example (imported battery, own mounting of the panels), which gets no deduction.',
+    },
+    "assume_green_on": {
+        "sv": 'Grönt avdrag på {amount} kr ingår (kräver installation av företag med F-skatt).',
+        "en": 'A green deduction of {amount} SEK is included (requires installation by a company with F-skatt).',
+    },
+    "assume_efficiency": {
+        "sv": 'Tur-retur-verkningsgrad: {eff} %.',
+        "en": 'Round-trip efficiency: {eff}%.',
+    },
+    "assume_fade": {
+        "sv": 'Batteriets kapacitet, och därmed dess värde, minskar {fade} % per år.',
+        "en": 'Battery capacity, and with it its value, drops {fade}% per year.',
+    },
+    "assume_standby": {
+        "sv": 'Standbyförbrukning växelriktare + BMS: {w} W, ca {cost} kr/år.',
+        "en": 'Standby consumption inverter + BMS: {w} W, about {cost} SEK/yr.',
+    },
+    "assume_solar_deg": {
+        "sv": 'Solcellernas produktion minskar {deg} % per år.',
+        "en": 'Solar production drops {deg}% per year.',
+    },
+    "assume_horizon": {
+        "sv": 'Kalkylhorisont: batteriets livslängd, {life} år ({cycles} cykler/år).',
+        "en": "Horizon: the battery's lifetime, {life} years ({cycles} cycles/yr).",
+    },
+    "assume_future_prices": {
+        "sv": 'Framtida elpriser antas vara som under den historiska perioden (se steg 6 för andra antaganden).',
+        "en": 'Future prices are assumed equal to the historical period (see step 6 for other assumptions).',
     },
     "export_compare_button": {"sv": "Kör jämförelsen", "en": "Run comparison"},
     "detail_green_deduction": {"sv": "Grönt avdrag", "en": "Green deduction"},

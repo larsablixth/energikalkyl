@@ -29,7 +29,9 @@ class LoadSchedule:
 
     Example: EV charging 11 kW, needs 30 kWh/day, available 18-07:
         LoadSchedule("Elbil", 11.0, 18, 7, daily_kwh=30.0, smart=True)
-        → picks the 3 cheapest hours within 18:00-07:00 each day
+        → picks the 3 cheapest hours within 18:00-07:00 each day; the two
+          cheapest run at 11 kW and the most expensive at the remaining 8 kW,
+          so the day's energy is exactly daily_kwh
     """
     name: str
     power_kw: float
@@ -149,14 +151,20 @@ class BatteryConfig:
             return theoretical * self.phase_balance_factor
         return theoretical  # single phase: no imbalance
 
-    # Per-day smart load schedule: {date: {load_index: set_of_active_hours}}
+    # Per-day smart load schedule: {date: {load_index: {hour: kW}}}
     _smart_schedule: dict = field(default_factory=dict, repr=False)
 
     def _is_scheduled_active(self, load_idx: int, load: 'LoadSchedule', hour: int, date: str = None) -> bool:
         """Check if a scheduled load is active, considering smart scheduling."""
         if load.smart and date and date in self._smart_schedule:
-            return hour in self._smart_schedule[date].get(load_idx, set())
+            return hour in self._smart_schedule[date].get(load_idx, {})
         return load.is_active(hour)
+
+    def _scheduled_kw(self, load_idx: int, load: 'LoadSchedule', hour: int, date: str = None) -> float:
+        """Power (kW) a scheduled load draws in this hour (smart loads may run below power_kw)."""
+        if load.smart and date and date in self._smart_schedule:
+            return self._smart_schedule[date].get(load_idx, {}).get(hour, 0.0)
+        return load.power_kw if load.is_active(hour) else 0.0
 
     def total_load_kw(self, hour: int, month: int = None, date: str = None) -> float:
         """Total household load at a given hour (and optionally month/date).
@@ -170,8 +178,7 @@ class BatteryConfig:
             if day_profile is not None:
                 load = day_profile.get(hour, self.base_load_kw)
                 for i, s in enumerate(self.scheduled_loads):
-                    if self._is_scheduled_active(i, s, hour, date):
-                        load += s.power_kw
+                    load += self._scheduled_kw(i, s, hour, date)
                 return load
         if self.seasonal_load_profile is not None and month is not None:
             return self.seasonal_load_profile.get(month, {}).get(hour, self.base_load_kw)
@@ -179,8 +186,7 @@ class BatteryConfig:
             return self.hourly_load_profile.get(hour, self.base_load_kw)
         load = self.base_load_kw
         for i, s in enumerate(self.scheduled_loads):
-            if self._is_scheduled_active(i, s, hour, date):
-                load += s.power_kw
+            load += self._scheduled_kw(i, s, hour, date)
         return load
 
     def available_charge_kw(self, hour: int, month: int = None, date: str = None) -> float:
@@ -397,9 +403,39 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
                 # Sort by effective cost, pick cheapest N hours
                 window_hours.sort(key=lambda x: x[1])
                 n_hours = load.hours_needed()
-                active_hours = {h for h, _ in window_hours[:n_hours]}
+                chosen = window_hours[:n_hours]
+                active_hours = {h: load.power_kw for h, _ in chosen}
+                # hours_needed() rounds up: the most expensive chosen hour only
+                # runs at the power still needed, so the day's energy = daily_kwh
+                if load.daily_kwh > 0 and load.power_kw > 0 and len(chosen) == n_hours and chosen:
+                    rest_kw = load.daily_kwh - (n_hours - 1) * load.power_kw
+                    active_hours[chosen[-1][0]] = max(0.0, min(load.power_kw, rest_kw))
                 day_schedule[load_idx] = active_hours
             config._smart_schedule[day_date] = day_schedule
+
+    # Effekttariff: grid charging must not raise the measured monthly peak.
+    # Cap per month = the N-th highest daily peak without battery (load minus
+    # solar, weighted by kw_factor). Charging in measured hours is limited so the
+    # weighted grid draw stays at or below that cap, which keeps the top-N
+    # average at or below the no-battery level.
+    _effekt_caps = {}  # "YYYY-MM" -> weighted kW cap
+    if _is_effekt:
+        _month_daily: dict[str, dict[str, float]] = {}
+        for day_date in sorted(days.keys()):
+            for p in days[day_date]:
+                if not tariff.is_peak_hour(p["date"], p["hour"]):
+                    continue
+                h = int(p["hour"].split(":")[0])
+                month = int(p["date"].split("-")[1])
+                net_kw = max(0.0, config.total_load_kw(h, month, p["date"]) - _solar_kw(p["date"], p["hour"]))
+                w = net_kw * tariff.kw_factor(p["date"], p["hour"])
+                md = _month_daily.setdefault(p["date"][:7], {})
+                if w > md.get(p["date"], -1.0):
+                    md[p["date"]] = w
+        n_top = max(1, tariff.top_n_peaks)
+        for ym, daily in _month_daily.items():
+            peaks = sorted(daily.values(), reverse=True)
+            _effekt_caps[ym] = peaks[n_top - 1] if len(peaks) >= n_top else peaks[-1]
 
     for day_date in sorted(days.keys()):
         day_prices = days[day_date]
@@ -459,7 +495,15 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
             h = int(p["hour"].split(":")[0])
             month = int(p["date"].split("-")[1])
             avail_kw = config.available_charge_kw(h, month, p["date"])
-            charge_room.append(max(0.0, avail_kw * slot_duration_h - solar_in[i]) if avail_kw > 0.1 else 0.0)
+            room = max(0.0, avail_kw * slot_duration_h - solar_in[i]) if avail_kw > 0.1 else 0.0
+            cap = _effekt_caps.get(p["date"][:7])
+            if (cap is not None and room > 0 and tariff.is_peak_hour(p["date"], p["hour"])
+                    and tariff.get_effekt_rate(month) > 0):
+                factor = tariff.kw_factor(p["date"], p["hour"])
+                if factor > 0:
+                    net_kw = max(0.0, config.total_load_kw(h, month, p["date"]) - _solar_kw(p["date"], p["hour"]))
+                    room = min(room, max(0.0, cap / factor - net_kw) * slot_duration_h)
+            charge_room.append(room)
 
         # Discharge capacity per slot, split into tranches by value: covering
         # the house's own load (what solar doesn't already cover) saves the
