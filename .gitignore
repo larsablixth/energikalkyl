@@ -22,3 +22,6 @@ tibber_historik.csv
 # Keep these for deployment:
 # historik_SE3_3ar.csv
 # .weather_cache/arlanda_temp.csv
+
+# Controller check: compiled firmware planner (controller_check.py)
+.controller_build/

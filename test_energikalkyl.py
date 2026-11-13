@@ -1,3 +1,4 @@
+import os
 """
 Test suite for Energikalkyl — core modules.
 
@@ -1430,6 +1431,153 @@ class TestExampleInputs:
                     "add_ev_load", "add_pool_heat_pump", "ev_load_name", "pool_heat_pump_name"):
             assert STRINGS[key]["sv"] and STRINGS[key]["en"], key
 
+
+
+class TestTariffSwitchSaving:
+    BILLS = {"V Tidstariff": 34744.0, "V Enkeltariff": 36707.0}
+
+    def test_saving_from_dearer_tariff(self):
+        from economics import tariff_switch_saving
+        saving, cheapest = tariff_switch_saving(self.BILLS, "V Enkeltariff")
+        assert saving == pytest.approx(1963.0)
+        assert cheapest == "V Tidstariff"
+
+    def test_already_cheapest(self):
+        from economics import tariff_switch_saving
+        assert tariff_switch_saving(self.BILLS, "V Tidstariff") == (0.0, "V Tidstariff")
+
+    def test_unknown_or_missing(self):
+        from economics import tariff_switch_saving
+        assert tariff_switch_saving(self.BILLS, "V Effekttariff") is None
+        assert tariff_switch_saving({}, "V Tidstariff") is None
+        assert tariff_switch_saving(None, "V Tidstariff") is None
+
+    def test_translations_exist(self):
+        from translations import STRINGS
+        for key in ("current_tariff_label", "current_tariff_unknown", "current_tariff_help",
+                    "current_tariff_keep", "current_tariff_change", "current_tariff_switch_saving",
+                    "assume_current_tariff"):
+            assert STRINGS[key]["sv"] and STRINGS[key]["en"], key
+
+
+class TestEnergyFlows:
+    @staticmethod
+    def _day(**kw):
+        n = 2
+        base = {"hour": [0, 12], "spot": [0.5, 0.5], "buy_ore": [100.0, 100.0], "load_kw": [0.0] * n,
+                "ev_kw": [0.0] * n, "solar_kw": [0.0] * n, "room_kw": [10.0] * n, "in_kwh": [0.0] * n,
+                "out_kwh": [0.0] * n, "solar_in_kwh": [0.0] * n, "export_kwh": [0.0] * n,
+                "flex_kwh": [0.0] * n, "soc_before_kwh": [5.0, 5.0], "soc_kwh": [5.0, 5.0], "net_sek": [0.0] * n}
+        base.update(kw)
+        return base
+
+    def test_hour_balances_and_ev_split(self):
+        import controller_check as cc
+        # hour 0: load 4 (EV 2), battery 3, grid 1. hour 12: solar 10 → 2 house, 5 battery, 1 flex, 2 curtailed
+        h = self._day(load_kw=[4.0, 2.0], ev_kw=[2.0, 0.0], out_kwh=[3.0, 0.0], solar_kw=[0.0, 10.0],
+                      solar_in_kwh=[0.0, 5.0], flex_kwh=[0.0, 1.0])
+        d = cc.day_flows({"2024-06-01": h}, "2024-06-01")
+        assert d["from"]["battery"][0] == pytest.approx(3.0)
+        assert d["from"]["grid"][0] == pytest.approx(1.0)
+        assert d["to"]["ev"][0] == pytest.approx(2.0)
+        assert d["to"]["house"][0] == pytest.approx(2.0)
+        assert d["to"]["battery"][1] == pytest.approx(5.0)
+        assert d["to"]["flex"][1] == pytest.approx(1.0)
+        assert d["to"]["curtailed"][1] == pytest.approx(2.0)
+        for i in range(2):   # every hour: sources = uses
+            assert sum(v[i] for v in d["from"].values()) == pytest.approx(sum(v[i] for v in d["to"].values()))
+        assert cc.day_flows({"2024-06-01": h}, "2024-06-02") is None
+
+    def test_yearly_losses(self):
+        import controller_check as cc
+        # 10 kWh from the grid into the battery, 9 out, stored energy unchanged → 1 kWh lost
+        h = self._day(load_kw=[9.0, 0.0], in_kwh=[0.0, 10.0], out_kwh=[9.0, 0.0],
+                      soc_before_kwh=[15.0, 5.0], soc_kwh=[5.0, 15.0])
+        f = cc.energy_flows({"2024-06-01": h})
+        assert f["links"][("battery", "losses")] == pytest.approx(365.25)
+        assert f["links"][("grid", "battery")] == pytest.approx(3652.5)
+
+
+    def test_flow_series_balances_every_hour(self):
+        import controller_check as cc
+        h = self._day(load_kw=[4.0, 2.0], ev_kw=[2.0, 0.0], out_kwh=[3.0, 0.0], solar_kw=[0.0, 10.0],
+                      solar_in_kwh=[0.0, 5.0], flex_kwh=[0.0, 1.0], net_sek=[2.5, 0.0])
+        sr = cc.flow_series({"2024-06-02": h, "2024-06-01": h})
+        assert sr["dates"] == ["2024-06-01", "2024-06-02"] and sr["day_start"] == [0, 2]
+        for i in range(4):
+            supply = sr["solar"][i] - sr["curtailed"][i] + sr["grid_in"][i] + sr["bat_out"][i]
+            use = sr["house"][i] + sr["ev"][i] + sr["flex"][i] + sr["bat_in"][i] + sr["export"][i]
+            assert supply == pytest.approx(use)
+        assert sr["net_ore"][0] == pytest.approx(250)
+
+    def test_player_packs_int16_hundredths(self):
+        import base64
+        import json
+        from array import array
+        import controller_check as cc
+        import flow_player
+        h = self._day(load_kw=[4.25, 2.0], solar_kw=[0.0, 10.0], solar_in_kwh=[0.0, 5.0])
+        sr = cc.flow_series({"2024-06-01": h})
+        html = flow_player.player_html(sr, 32.0, {"locale": "sv-SE"}, "dark")
+        payload = json.loads(html.split("const P = ", 1)[1].split(";\n", 1)[0])
+        house = array("h", base64.b64decode(payload["data"]["house"]))
+        assert list(house) == [425, 200]
+        assert payload["capacity"] == 32.0 and 'data-theme="dark"' in html
+
+class TestControllerSummary:
+    def test_steps_add_up(self):
+        import controller_check as cc
+
+        def agg(calc, ideal, prog, perf, model, ev_calc_kr, ev_ctrl_kr):
+            return {"days": 365.25, "calc": {"net": calc, "out_kwh": 0}, "ideal": {"net": ideal, "out_kwh": 0},
+                    "progperf": {"net": prog, "out_kwh": 0}, "ctrlperf": {"net": perf, "out_kwh": 0},
+                    "ctrlmodel": {"net": model, "out_kwh": 0},
+                    "ev": {"calc_kwh": 1000.0, "calc_kr": ev_calc_kr, "ctrl_kwh": 1100.0, "ctrl_kr": ev_ctrl_kr}}
+        raw = {"total": agg(1000, 1000, 990, 1010, 950, 1000, 1210), "years": {}, "ev_daily_kwh": 2.7,
+               "segments": 6, "base_load_kw": 3.0, "first": "a", "last": "b"}
+        s = cc.summarize(raw)
+        assert sum(s["steps"].values()) == pytest.approx(s["bat_diff_yr"]) == pytest.approx(-50)
+        # EV: 1.00 → 1.10 kr/kWh on the calculator's 1,000 kWh = 100 kr more
+        assert s["ev"]["extra_kr_yr"] == pytest.approx(100)
+        assert s["total_diff_yr"] == pytest.approx(-150)
+        assert s["total_diff_pct"] == pytest.approx(-15)
+
+
+class TestControllerCheck:
+    """The firmware planner on the calculator's own inputs must reproduce it (parity)."""
+
+    def test_parity_with_calculator(self):
+        import shutil
+        import controller_check as cc
+        if not (shutil.which("g++") or shutil.which("c++")):
+            pytest.skip("no C++ compiler")
+        from batteri import BatteryConfig, LoadSchedule
+        from elpriser import load_csv
+        from solar import SolarConfig
+        from tariff import create_tariffs_for_operator
+        rows = [r for r in load_csv(os.path.join(os.path.dirname(__file__), "historik_SE3_3ar.csv"))
+                if "2024-03-01" <= r["date"] < "2024-04-01"]
+        cfg = BatteryConfig(capacity_kwh=32, max_charge_kw=12.5, max_discharge_kw=12.5, fuse_amps=25,
+                            base_load_kw=1.5, export_price_factor=0.0,
+                            scheduled_loads=[LoadSchedule("Elbil", 11.0, 18, 7, daily_kwh=20, smart=True)])
+        tf = next(x for x in create_tariffs_for_operator("Vattenfall Eldistribution") if "Tid" in x.name)
+        hourly, _ = cc.calculator_hourly(rows, cfg, tf, SolarConfig(capacity_kwp=10))
+        raw = cc.run_check(hourly, {"capacity_kwh": 32, "max_charge_kw": 12.5, "max_discharge_kw": 12.5,
+                                    "efficiency": cfg.efficiency, "min_soc": cfg.min_soc, "max_soc": cfg.max_soc},
+                           cfg.grid_max_kw)
+        s = cc.summarize(raw)
+        assert s["days"] == 31
+        assert abs(s["steps"]["parity"]) < 0.005 * abs(s["kr"]["calc"])
+        # EV: the controller plans about the calculator's EV energy (not a full extra slot)
+        assert s["ev"]["ctrl_kwh_yr"] < 1.1 * s["ev"]["calc_kwh_yr"]
+
+    def test_translations_exist(self):
+        from translations import STRINGS
+        for key in ("ctrl_header", "ctrl_caption", "ctrl_button", "ctrl_notes", "ctrl_step_total",
+                    "flow_header", "flow_solar", "flow_grid", "flow_battery", "flow_house", "flow_ev",
+                    "flow_flex", "flow_export", "flow_curtailed", "flow_losses", "flow_day_from",
+                    "player_header", "player_play", "player_speed_4", "player_charging"):
+            assert STRINGS[key]["sv"] and STRINGS[key]["en"], key
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

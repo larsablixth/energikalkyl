@@ -216,6 +216,21 @@ def effekt_savings(result, tariff, cfg, num_days, solar_in_baseline=False) -> fl
     return total_saving / years if years > 0 else 0.0
 
 
+def tariff_switch_saving(baseline_bills, current_tariff):
+    """Yearly saving from moving from the household's current tariff to the cheapest one,
+    WITHOUT investing (baseline_bills: {tariff name: bill SEK/yr without investing}).
+
+    Returns (saving SEK/yr, cheapest tariff name), or None when the current tariff is
+    unknown or not among the simulated ones. 0 when the current tariff is the cheapest.
+    The investment result is measured against the cheapest tariff, so
+    saving + net_benefit_yr is the household's total change versus today.
+    """
+    if not baseline_bills or current_tariff not in baseline_bills:
+        return None
+    cheapest = min(baseline_bills, key=baseline_bills.get)
+    return baseline_bills[current_tariff] - baseline_bills[cheapest], cheapest
+
+
 def baseline_bill(result, tariff, cfg, num_days, solar_in_baseline=False) -> float:
     """Yearly variable electricity cost (SEK) of the household WITHOUT the investment
     under `tariff`: what it would pay on that tariff if it didn't invest.
