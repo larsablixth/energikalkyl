@@ -13,6 +13,7 @@ distributed across daylight hours using a cosine bell curve.
 
 import math
 from dataclasses import dataclass
+from functools import lru_cache
 
 
 # Typical monthly production per kWp (kWh) for Stockholm, south-facing ~35° tilt
@@ -74,6 +75,13 @@ def hourly_production_factors(month: int) -> dict[int, float]:
     Returns a dict mapping hour -> fraction of daily production.
     Uses a cosine curve between sunrise and sunset, centered at solar noon.
     """
+    return dict(enumerate(_production_factors(month)))
+
+
+@lru_cache(maxsize=12)
+def _production_factors(month: int) -> tuple:
+    """The 24 hourly factors of a month, computed once (they depend only on the month;
+    recomputing them for every simulated hour was ~70 % of a simulation's time)."""
     sunrise, sunset = DAYLIGHT_HOURS[month]
     solar_noon = (sunrise + sunset) / 2
     half_day = (sunset - sunrise) / 2
@@ -99,7 +107,7 @@ def hourly_production_factors(month: int) -> dict[int, float]:
         for h in factors:
             factors[h] /= total
 
-    return factors
+    return tuple(factors[h] for h in range(24))
 
 
 def get_solar_production(month: int, hour: int, config: SolarConfig) -> float:
@@ -112,7 +120,7 @@ def get_solar_production(month: int, hour: int, config: SolarConfig) -> float:
     days_in_month = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month]
     daily_kwh = monthly_kwh / days_in_month
 
-    factors = hourly_production_factors(month)
+    factors = _production_factors(month)
     # Factor gives fraction of daily production for this hour
     # Since each slot is 1 hour, kWh = kW for that hour
     return daily_kwh * factors[hour]

@@ -42,7 +42,7 @@ The app follows a 6-step flow:
    - Specificerade batterier: editable price table (NKON defaults 5-96 kWh), user can add/remove
    - SEK per kWh: enter price/kWh, auto-generates 5-100 kWh sizes, finds optimal for self-consumption
 4. **Results** — simulates ALL battery sizes × ALL tariffs × ALL fuse sizes, recommends optimal combo
-   - Progress bar (`_SimProgress`) while it runs: one step per simulation (battery × tariff × fuse) + the future-scenario simulations; shows the battery/fuse/tariff being simulated, n/total and time left (from the simulations done so far). A run takes ~2.5 min locally, ~4-5 min on Streamlit Cloud
+   - Progress bar (`_SimProgress`) while it runs: one step per simulation (battery × tariff × fuse) + the future-scenario simulations; shows the battery/fuse/tariff being simulated, n/total and time left (from the simulations done so far). A run takes ~45 s locally (70 simulations, ~0.45 s each), ~1-1.5 min on Streamlit Cloud
    - "Assumptions behind this result" block (always visible) right under the recommendation: also grid operator/fuse/phases, the reference tariff and the consumption source; untouched example figures are marked
    - "Exempelkalkyl" warning under the recommendation listing personal figures still at their example values (also first in the PDF summary)
    - Annualized cost vs lifetime-average savings (same timescale), cumulative cashflow chart (stops at battery lifetime)
@@ -275,6 +275,7 @@ The app adds 25% Swedish VAT to these (`BATTERY_VAT` in app.py), so default tabl
 - **Pick the tariff on the whole bill, not battery value alone**: with 1 phase the app switched to Enkeltariff for a slightly higher battery value although the household's bill without investing is ~2,100 kr/yr higher there (default house, 43,090 vs 45,232 kr/yr). Now `baseline_bill` per tariff, reference = cheapest, switch cost subtracted in `fixed_part`
 - **A default EV was simulated for every visitor**: 30 kWh/day of EV charging (≈11,000 kWh/yr) for households without an EV inflated load and fuse floor. Now no scheduled loads by default (quick-add button instead)
 - **Calibration must not edit a widget-backed value after the widget rendered**: the Tibber Insights calibration set the EV's kWh/day in the loads dict, but its number box (key `lk_i`) kept 30 and the loads were already built for that run, so the EV was simulated at the template's 30 kWh/day while the caption said 23.3 (found via the simulator's calculator validation). Now the value is queued (`_ev_cal_pending`) + `st.rerun()` and set before the widgets render; each EV load remembers the `cal_ev` it got so a later manual edit is kept
+- **Cache what only depends on the month/year**: the cos³ solar curve (`solar._production_factors`, per month) was recomputed for every simulated hour — ~70 % of a simulation (1.7 s → 0.45 s); the holiday calendar (`tariff._swedish_holidays`, per year, frozenset) likewise
 - **Smart load scheduling needs effekttariff penalty** — without it, EV charges during SEOM peak hours (07-19), increasing effektavgift. Penalty scales by kw_factor for Ellevio night discount
 
 ## Verified simulation results (2026-03-21)
