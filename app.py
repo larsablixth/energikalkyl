@@ -889,6 +889,16 @@ with col_l1:
     if "scheduled_loads" not in st.session_state:
         st.session_state["scheduled_loads"] = []  # no EV unless the visitor adds one
 
+    # EV kWh/day from the Tibber Insights calibration (queued further down, see
+    # "Auto-update EV scheduled load"): set before the widgets are created.
+    _ev_cal = st.session_state.pop("_ev_cal_pending", None)
+    if _ev_cal:
+        for _i, _v in _ev_cal["values"].items():
+            if _i < len(st.session_state["scheduled_loads"]):
+                st.session_state["scheduled_loads"][_i]["daily_kwh"] = _v
+                st.session_state["scheduled_loads"][_i]["_cal_ev"] = _ev_cal["cal_ev"]
+                st.session_state[f"lk_{_i}"] = _v
+
     st.markdown(t("scheduled_loads"))
     st.caption(t("scheduled_caption"))
     for i, load in enumerate(st.session_state["scheduled_loads"]):
@@ -1386,12 +1396,24 @@ if use_heating_model:
                         non_heat_base = cal_base
                         _insights_calibrated = True
 
-                        # Auto-update EV scheduled load from real data
+                        # Auto-update EV scheduled load from real data. The loads above
+                        # are already built for this run and their kWh/day box (key
+                        # lk_i) keeps its own value, so editing the dict here changed
+                        # nothing: the EV stayed at the template's 30 kWh/day. Queue the
+                        # value and rerun; the loads section applies it before its
+                        # widgets render. Each EV load remembers the cal_ev it got, so a
+                        # later manual edit of its kWh/day is not overwritten.
                         if cal_ev > 0 and st.session_state.get("scheduled_loads"):
                             _ev_daily = round(cal_ev / 365, 1)
-                            for _sl in st.session_state["scheduled_loads"]:
-                                if "bil" in _sl["name"].lower() or "ev" in _sl["name"].lower():
-                                    _sl["daily_kwh"] = _ev_daily
+                            _ev_pending = {
+                                _i: _ev_daily
+                                for _i, _sl in enumerate(st.session_state["scheduled_loads"])
+                                if ("bil" in _sl["name"].lower() or "ev" in _sl["name"].lower())
+                                and _sl.get("_cal_ev") != cal_ev}
+                            if _ev_pending:
+                                st.session_state["_ev_cal_pending"] = {"values": _ev_pending,
+                                                                       "cal_ev": cal_ev}
+                                st.rerun()
                             st.caption(t("cal_ev_updated").format(
                                 daily=_ev_daily, annual=f"{cal_ev:,}"))
                 else:
