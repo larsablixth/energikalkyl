@@ -23,12 +23,16 @@ constexpr int MAX_TRANCHES = (EXPORT_PRICE_FACTOR > 0.0f) ? 2 : 1;
 // Candidate storage: packed (j, tranche, i+1) in generation order, sorted by
 // profit. Sized for the worst case (all pairs i < j plus one stored-energy
 // candidate per use slot and tranche): ≈ 10 KB with one tranche.
-constexpr int MAX_CANDIDATES = MAX_TRANCHES * (PLAN_MAX_SLOTS * (PLAN_MAX_SLOTS + 1) / 2);
+// "Keep for tomorrow" (PlanParams::end) adds PLAN_END_TRANCHES pseudo use
+// slots after the last real one: index n + e, one tranche each.
+constexpr int USE_SLOTS = PLAN_MAX_SLOTS + PLAN_END_TRANCHES;
+constexpr int MAX_CANDIDATES = MAX_TRANCHES * (PLAN_MAX_SLOTS * (PLAN_MAX_SLOTS + 1) / 2)
+                             + PLAN_END_TRANCHES * (PLAN_MAX_SLOTS + 1);
 uint16_t s_cand[MAX_CANDIDATES];
 
-float s_tr_val[PLAN_MAX_SLOTS][2];
-float s_tr_room[PLAN_MAX_SLOTS][2];
-int   s_n_tr[PLAN_MAX_SLOTS];
+float s_tr_val[USE_SLOTS][2];
+float s_tr_room[USE_SLOTS][2];
+int   s_n_tr[USE_SLOTS];
 float s_charge_room[PLAN_MAX_SLOTS];
 
 inline uint16_t pack(int i, int j, int t, int n) {
@@ -105,6 +109,17 @@ void bat_plan_day(const PlanSlot* s, int n, int from_slot, const PlanParams& p,
         }
     }
 
+    /* Tomorrow: energy kept past the last slot, most valuable step first. */
+    const int n_end = (p.end.n < 0) ? 0 : std::min(p.end.n, PLAN_END_TRANCHES);
+    for (int e = 0; e < n_end; e++) {
+        s_n_tr[n + e] = 0;
+        if (p.end.room_kwh[e] > EPS_KWH && p.end.value[e] > 0.0f) {
+            s_tr_val[n + e][0] = p.end.value[e];
+            s_tr_room[n + e][0] = p.end.room_kwh[e];
+            s_n_tr[n + e] = 1;
+        }
+    }
+
     /* Candidates in energikalkyl's generation order. */
     int nc = 0;
     for (int j = from_slot; j < n; j++) {
@@ -121,11 +136,28 @@ void bat_plan_day(const PlanSlot* s, int n, int from_slot, const PlanParams& p,
             }
         }
     }
+    /* …followed by the "keep for tomorrow" candidates (none when nothing is
+     * known about tomorrow, so the list above is then unchanged). */
+    for (int e = 0; e < n_end; e++) {
+        const int j = n + e;
+        if (s_n_tr[j] == 0) continue;
+        const float v = s_tr_val[j][0];
+        if (nc < MAX_CANDIDATES) s_cand[nc++] = pack(-1, j, 0, n);
+        for (int i = from_slot; i < n; i++) {
+            if (s_charge_room[i] <= 0.0f) continue;
+            const float c = s[i].buy_cost;
+            const float profit = v - c / eff + p.end.pair_bonus[e];
+            if (profit > p.min_spread && v > c / eff && nc < MAX_CANDIDATES) {
+                s_cand[nc++] = pack(i, j, 0, n);
+            }
+        }
+    }
     auto profit_of = [&](uint16_t c) {
         int i, j, t;
         unpack(c, n, &i, &j, &t);
         const float v = s_tr_val[j][t];
-        return (i < 0) ? v : v - s[i].buy_cost / eff;
+        if (i < 0) return v;
+        return v - s[i].buy_cost / eff + (j >= n ? p.end.pair_bonus[j - n] : 0.0f);
     };
     /* Most profitable first; ties keep generation order (= Python's stable
      * sort with reverse=True). Packed keys increase with generation order. */
@@ -138,15 +170,43 @@ void bat_plan_day(const PlanSlot* s, int n, int from_slot, const PlanParams& p,
     float* plan_c = out->charge_kwh;
     float* plan_d = out->discharge_kwh;
     float* level = out->level;
+    float reserved = 0.0f;      /* stored kWh promised to tomorrow */
     for (int k = 0; k < nc; k++) {
         int i, j, t;
         unpack(s_cand[k], n, &i, &j, &t);
-        if (plan_c[j] > 0.0f) continue;
         float& dis_left = s_tr_room[j][t];
+        if (j >= n) {
+            /* Keep for tomorrow: the energy stays in the battery to the end
+             * of the day, nothing is discharged today. */
+            if (dis_left <= EPS_KWH) continue;
+            if (i < 0) {
+                const float e_out = std::min(dis_left, (level[n - 1] - reserved) * eff);
+                if (e_out > EPS_KWH) {
+                    reserved += e_out / eff;
+                    dis_left -= e_out;
+                }
+                continue;
+            }
+            if (plan_d[i] > 0.0f) continue;
+            float peak = level[i];
+            for (int q = i + 1; q < n; q++) peak = std::max(peak, level[q]);
+            const float e_in = fmin3(s_charge_room[i] - plan_c[i], usable - peak, dis_left / eff);
+            if (e_in > EPS_KWH) {
+                plan_c[i] += e_in;
+                reserved += e_in;
+                dis_left -= e_in * eff;
+                for (int q = i; q < n; q++) level[q] += e_in;
+            }
+            continue;
+        }
+        if (plan_c[j] > 0.0f) continue;
         if (dis_left <= EPS_KWH) continue;
         if (i < 0) {
             float stored = level[j];
             for (int q = j + 1; q < n; q++) stored = std::min(stored, level[q]);
+            /* never dip into what is promised to tomorrow (reserved is 0 —
+             * and this a no-op — when nothing is known about tomorrow) */
+            if (reserved > 0.0f) stored = std::min(stored, level[n - 1] - reserved);
             const float e_out = std::min(dis_left, stored * eff);
             if (e_out > EPS_KWH) {
                 plan_d[j] += e_out;
@@ -182,6 +242,77 @@ void bat_plan_day(const PlanSlot* s, int n, int from_slot, const PlanParams& p,
             for (int q = i; q < n; q++) level[q] += e_in;
         }
     }
+    out->end_reserved_kwh = reserved;
+}
+
+// ── Value of energy carried into the next day ───────────────────────────
+
+void bat_end_tranches(const PlanSlot* next, int n, const PlanParams& p, PlanEnd* out) {
+    *out = PlanEnd{};
+    if (!next || n <= 0) return;
+    if (n > PLAN_MAX_SLOTS) n = PLAN_MAX_SLOTS;
+    const float eff = p.efficiency;
+    const float usable = p.capacity_kwh * (p.max_soc - p.min_soc);
+    if (!(eff > 0.0f) || !(usable > EPS_KWH)) return;
+
+    /* Ask the planner itself: plan the next day with 0, 1/8, 2/8 … 8/8 of
+     * the battery already full at its start and see what each extra step is
+     * worth. That counts everything the next day's plan knows — its prices,
+     * its sun (energy carried over is worth little if the PV fills the
+     * battery anyway), its charge room, the capacity and min_spread. */
+    PlanParams p0 = p;
+    p0.end = PlanEnd{};                 /* the next day planned on its own */
+    static BatteryPlan plan;
+    float worth[PLAN_END_TRANCHES + 1];
+    float charged[PLAN_END_TRANCHES + 1];
+    for (int k = 0; k <= PLAN_END_TRANCHES; k++) {
+        const float start = usable * static_cast<float>(k) / static_cast<float>(PLAN_END_TRANCHES);
+        bat_plan_day(next, n, 0, p0, start, &plan);
+        const DayMoney m = bat_execute_plan(&plan, next, n, p0, start);
+        worth[k] = m.net();
+        charged[k] = m.charged_kwh;
+    }
+
+    const float step_stored = usable / static_cast<float>(PLAN_END_TRANCHES);
+    const float step_delivered = step_stored * eff;
+    float prev_value = 1e9f;
+    int e = 0;
+    for (int k = 0; k < PLAN_END_TRANCHES; k++) {
+        /* SEK per delivered kWh of this step; never rising with more energy
+         * (the greedy plan can wobble by a few öre). */
+        float value = (worth[k + 1] - worth[k]) / step_delivered;
+        value = std::min(value, prev_value);
+        if (!(value > 0.0f)) break;
+        prev_value = value;
+        /* How much of the step merely replaces the next day's own grid
+         * charging: that energy would be cycled once either way, so charging
+         * it today pays as soon as it is cheaper (bonus = min_spread). The
+         * rest enables uses the next day could not serve: a new cycle. */
+        float replaced = (charged[k] - charged[k + 1]) / step_stored;
+        replaced = std::max(0.0f, std::min(1.0f, replaced));
+        out->value[e] = value;
+        out->room_kwh[e] = step_delivered;
+        out->pair_bonus[e] = replaced * p.min_spread;
+        e++;
+    }
+    out->n = e;
+}
+
+float bat_end_worth(const PlanParams& p, float end_level_kwh, float fallback_per_stored_kwh) {
+    if (p.end.n <= 0) {
+        return end_level_kwh * fallback_per_stored_kwh;      /* unchanged behaviour */
+    }
+    float delivered = std::max(0.0f, end_level_kwh) * p.efficiency;
+    float worth = 0.0f;
+    for (int e = 0; e < p.end.n && e < PLAN_END_TRANCHES && delivered > 0.0f; e++) {
+        const float part = std::min(delivered, p.end.room_kwh[e]);
+        worth += part * p.end.value[e];
+        delivered -= part;
+    }
+    if (delivered > 0.0f && p.efficiency > 0.0f) {
+        worth += delivered / p.efficiency * fallback_per_stored_kwh;
+    }
+    return worth;
 }
 
 // ── Deye model ──────────────────────────────────────────────────────────
@@ -199,6 +330,12 @@ float bat_segment_power_kw(const PlanSegment* segs, int n_segs, int k, const Pla
 DayMoney bat_simulate_program(const PlanSegment* segs, int n_segs, const PlanSlot* s,
                               int n, int from_slot, const PlanParams& p,
                               float start_level_kwh) {
+    return bat_simulate_program_range(segs, n_segs, s, n, from_slot, n, p, start_level_kwh);
+}
+
+DayMoney bat_simulate_program_range(const PlanSegment* segs, int n_segs, const PlanSlot* s,
+                                    int n, int from_slot, int to_slot, const PlanParams& p,
+                                    float start_level_kwh) {
     DayMoney m;
     const float cap = p.capacity_kwh;
     const float floor_abs = cap * p.min_soc;
@@ -210,6 +347,7 @@ DayMoney bat_simulate_program(const PlanSegment* segs, int n_segs, const PlanSlo
     for (int k = 0; k < n; k++) {
         while (seg + 1 < n_segs && segs[seg + 1].start_slot <= k) seg++;
         if (k < from_slot) continue;
+        if (k >= to_slot) break;
         const bool grid = n_segs > 0 && segs[seg].grid_charge;
         if (grid && pw_seg != seg) {
             /* one power per program point (the pipeline writes the min room
@@ -324,7 +462,7 @@ bool same(const PlanSegment& a, const PlanSegment& b) {
 float objective(const PlanSegment* segs, int ns, const PlanSlot* s, int n, int from,
                 const PlanParams& p, float start_level, float terminal_value) {
     const DayMoney m = bat_simulate_program(segs, ns, s, n, from, p, start_level);
-    return m.net() + m.end_level * terminal_value;
+    return m.net() + bat_end_worth(p, m.end_level, terminal_value);
 }
 
 /* Adjacent segments with the same settings are one program point — for
@@ -351,6 +489,16 @@ int compact(PlanSegment* segs, int ns, const PlanSlot* s, int n, int from, float
 }
 
 }  // namespace
+
+float bat_program_objective(const PlanSegment* segs, int n_segs, const PlanSlot* s,
+                            int n, int from_slot, const PlanParams& p,
+                            float start_level_kwh) {
+    if (from_slot < 0) from_slot = 0;
+    float tv = 1e9f;
+    for (int k = from_slot; k < n; k++) tv = std::min(tv, s[k].buy_cost);
+    tv = (n > from_slot) ? 0.5f * p.efficiency * std::max(0.0f, tv) : 0.0f;
+    return objective(segs, n_segs, s, n, from_slot, p, start_level_kwh, tv);
+}
 
 int bat_plan_program(const BatteryPlan* plan, const PlanSlot* s, int from_slot,
                      const PlanParams& p, int max_segments, PlanSegment* out) {
@@ -501,9 +649,11 @@ void plan_order(const SharedDayInput& in, bool ev_first, SharedDayPlan* out) {
     const float slot_h = in.slot_h_price * static_cast<float>(g);
     const float kw_per_amp = static_cast<float>(FUSE_PHASES) * FUSE_VOLTAGE / 1000.0f;
     const bool ev = in.ev_kwh > EPS_KWH;
+    /* House load reserved on the fuse (kW): fuse_load_kwh, else load_kwh. */
+    const float* fuse_load = in.fuse_load_kwh ? in.fuse_load_kwh : in.load_kwh;
     auto load_kw = [&](int i) {
         const int q = i / g;
-        return (q < m && in.load_kwh) ? in.load_kwh[q] / slot_h : 0.0f;
+        return (q < m && fuse_load) ? fuse_load[q] / slot_h : 0.0f;
     };
 
     out->ev_first = ev_first && ev;
@@ -546,7 +696,8 @@ void plan_order(const SharedDayInput& in, bool ev_first, SharedDayPlan* out) {
             const float house = in.load_kwh ? in.load_kwh[q] : 0.0f;
             x.load_kwh = house + (in.ct_sees_ev ? eve : 0.0f);
             x.solar_kwh = in.solar_kwh ? in.solar_kwh[q] : 0.0f;
-            float room = std::min(in.bat_charge_kw, in.grid_max_kw - house / slot_h - evkw);
+            const float reserve = fuse_load ? fuse_load[q] : 0.0f;
+            float room = std::min(in.bat_charge_kw, in.grid_max_kw - reserve / slot_h - evkw);
             if (pass2 && evkw > 0.0f && room < in.bat_charge_kw - 1e-3f) room = 0.0f;
             x.grid_room_kwh = std::max(0.0f, room) * slot_h;
             out->ps[q] = x;
@@ -562,7 +713,7 @@ void plan_order(const SharedDayInput& in, bool ev_first, SharedDayPlan* out) {
         float tv = 1e9f;
         for (int q = from_p; q < m; q++) tv = std::min(tv, out->ps[q].buy_cost);
         tv = (m > from_p) ? 0.5f * pp.efficiency * std::max(0.0f, tv) : 0.0f;
-        out->bat_value_sek = out->bat.net() + out->bat.end_level * tv;
+        out->bat_value_sek = out->bat.net() + bat_end_worth(pp, out->bat.end_level, tv);
     };
 
     /* EV first: the EV plan takes the room before the battery. */

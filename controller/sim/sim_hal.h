@@ -37,8 +37,10 @@ double hal_now_utc();                       // sim clock (UTC seconds)
 uint32_t hal_now_ms();                      // sim clock as millis() (wraps)
 bool hal_read_soc(float* soc);
 int  hal_fetch_prices(int y, int m, int d, float* out, int max_slots, int* slot_min);
-// which: 0 = solar, 1 = house load. kWh per slot of the day described by
-// (day_start_utc, slot_min, n). false = no forecast (firmware default model).
+// which: 0 = solar, 1 = house load (kWh per slot), 2 = outdoor temperature
+// (°C per slot; NaN = missing) of the day described by (day_start_utc,
+// slot_min, n). false = no forecast (firmware default model). The controller
+// (firmware controller.cpp, via wasm/controller_hal.cpp) asks only for 2.
 bool hal_forecast(int which, double day_start_utc, int slot_min, int n, int month, float* out);
 // Full Deye program register image, see deye_program.h DeyeProgram:
 //   regs[0..5] time HHMM, [6..11] power W, [12..17] SOC %, [18..23] charge

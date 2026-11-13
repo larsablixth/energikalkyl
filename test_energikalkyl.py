@@ -1528,12 +1528,12 @@ class TestControllerSummary:
     def test_steps_add_up(self):
         import controller_check as cc
 
-        def agg(calc, ideal, prog, perf, model, ev_calc_kr, ev_ctrl_kr):
+        def agg(calc, ideal, prog, ctrl, ev_calc_kr, ev_ctrl_kr):
             return {"days": 365.25, "calc": {"net": calc, "out_kwh": 0}, "ideal": {"net": ideal, "out_kwh": 0},
-                    "progperf": {"net": prog, "out_kwh": 0}, "ctrlperf": {"net": perf, "out_kwh": 0},
-                    "ctrlmodel": {"net": model, "out_kwh": 0},
-                    "ev": {"calc_kwh": 1000.0, "calc_kr": ev_calc_kr, "ctrl_kwh": 1100.0, "ctrl_kr": ev_ctrl_kr}}
-        raw = {"total": agg(1000, 1000, 990, 1010, 950, 1000, 1210), "years": {}, "ev_daily_kwh": 2.7,
+                    "progperf": {"net": prog, "out_kwh": 0}, "ctrl": {"net": ctrl, "out_kwh": 0},
+                    "ev": {"calc_kwh": 1000.0, "calc_kr": ev_calc_kr, "ctrl_kwh": 1100.0, "ctrl_kr": ev_ctrl_kr,
+                           "unmet_kwh": 0.0}, "safe_min": 0, "guard_events": 0}
+        raw = {"total": agg(1000, 1000, 990, 950, 1000, 1210), "years": {}, "ev_daily_kwh": 2.7,
                "segments": 6, "base_load_kw": 3.0, "first": "a", "last": "b"}
         s = cc.summarize(raw)
         assert sum(s["steps"].values()) == pytest.approx(s["bat_diff_yr"]) == pytest.approx(-50)
@@ -1544,7 +1544,7 @@ class TestControllerSummary:
 
 
 class TestControllerCheck:
-    """The firmware planner on the calculator's own inputs must reproduce it (parity)."""
+    """The firmware planner reproduces the calculator (parity); the real controller runs the period."""
 
     def test_parity_with_calculator(self):
         import shutil
@@ -1564,16 +1564,20 @@ class TestControllerCheck:
         hourly, _ = cc.calculator_hourly(rows, cfg, tf, SolarConfig(capacity_kwp=10))
         raw = cc.run_check(hourly, {"capacity_kwh": 32, "max_charge_kw": 12.5, "max_discharge_kw": 12.5,
                                     "efficiency": cfg.efficiency, "min_soc": cfg.min_soc, "max_soc": cfg.max_soc},
-                           cfg.grid_max_kw)
+                           cfg.grid_max_kw, 25, solar_kwp=10)
         s = cc.summarize(raw)
         assert s["days"] == 31
         assert abs(s["steps"]["parity"]) < 0.005 * abs(s["kr"]["calc"])
+        assert s["safe_min"] == 0, "the controller never fell back to its safe program"
+        assert s["kr"]["ctrl"] > 0.5 * s["kr"]["calc"], s["kr"]
+        assert s["ev"]["unmet_kwh_yr"] < 1
         # EV: the controller plans about the calculator's EV energy (not a full extra slot)
         assert s["ev"]["ctrl_kwh_yr"] < 1.1 * s["ev"]["calc_kwh_yr"]
 
     def test_translations_exist(self):
         from translations import STRINGS
         for key in ("ctrl_header", "ctrl_caption", "ctrl_button", "ctrl_notes", "ctrl_step_total",
+                    "ctrl_step_controller",
                     "flow_header", "flow_solar", "flow_grid", "flow_battery", "flow_house", "flow_ev",
                     "flow_flex", "flow_export", "flow_curtailed", "flow_losses", "flow_day_from",
                     "player_header", "player_play", "player_speed_4", "player_charging"):
