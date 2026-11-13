@@ -1683,52 +1683,88 @@ FUTURE_SCENARIOS = [("scen_smaller", 0.7), ("scen_unchanged", 1.0), ("scen_somew
 ALL_VOL_LEVELS = [0.7, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0]
 
 
+def _sim_battery_part(best, rows, solar_cfg, export_factor=None, export_fee=None,
+                      export_arb_kwh=None):
+    """Simulate the recommended battery on `rows` (optionally with other export settings).
+
+    Returns (battery part per year when new, result, config, days): the same quantity as
+    best["bat_part"] (arbitrage + effekt savings, and for existing panels with export minus
+    the export they earn without a battery).
+    """
+    ref_cfg = best["config"]
+    fc_cfg = BatteryConfig(
+        capacity_kwh=best["capacity"], max_charge_kw=best["max_kw"],
+        max_discharge_kw=best["max_kw"],
+        efficiency=ref_cfg.efficiency, fuse_amps=ref_cfg.fuse_amps, phases=ref_cfg.phases,
+        base_load_kw=ref_cfg.base_load_kw, scheduled_loads=ref_cfg.scheduled_loads,
+        hourly_load_profile=ref_cfg.hourly_load_profile,
+        seasonal_load_profile=ref_cfg.seasonal_load_profile,
+        daily_load_override=ref_cfg.daily_load_override,
+        flexible_loads=ref_cfg.flexible_loads,
+        export_price_factor=ref_cfg.export_price_factor if export_factor is None else export_factor,
+        export_fee_ore=ref_cfg.export_fee_ore if export_fee is None else export_fee,
+        export_arbitrage_kwh=(ref_cfg.export_arbitrage_kwh if export_arb_kwh is None
+                              else export_arb_kwh),
+        purchase_price=round(best["bat_cost"]), installation_cost=ref_cfg.installation_cost,
+        cycle_life=ref_cfg.cycle_life, calendar_life_years=15,
+        fuse_overcurrent_factor=ref_cfg.fuse_overcurrent_factor,
+    )
+    r = simulate(rows, fc_cfg, tariff=best["tariff"], solar=solar_cfg)
+    d = len(set(s.date for s in r.slots))
+    ay = r.net_profit_sek / d * 365.25 if d > 0 else 0
+    if d > 0 and isinstance(best["tariff"], EffektTariff):
+        ay += effekt_savings(r, best["tariff"], fc_cfg, d,
+                             solar_in_baseline=bool(solar_cfg) and sol_invest_total == 0)
+    if d > 0 and solar_cfg and sol_invest_total == 0 and fc_cfg.export_price_factor > 0:
+        # Existing panels: their export without a battery (at these prices) isn't battery value
+        ay -= baseline_export_revenue(rows, fc_cfg, best["tariff"], solar_cfg) / d * 365.25
+    return ay, r, fc_cfg, d
+
+
 def _compute_vol_benefits(best, price_rows, solar_cfg):
     """Simulate the recommended battery at each volatility level (once, after a simulation).
 
-    Returns {factor: battery part per year when new}, the same quantity as best["bat_part"]
-    (arbitrage + effekt savings, and for existing panels with export minus the export they
-    earn without a battery). The solar and fixed parts don't depend on volatility; wear is
-    applied when the scenario is evaluated. Factor 1.0 is the main result itself.
+    Returns {factor: battery part per year when new}, the same quantity as best["bat_part"].
+    The solar and fixed parts don't depend on volatility; wear is applied when the scenario
+    is evaluated. Factor 1.0 is the main result itself.
     """
-    ref_cfg = best["config"]
     out = {1.0: best["bat_part"]}
     for vf in ALL_VOL_LEVELS:
-        if vf == 1.0:
-            continue
-        scaled = scale_vol(price_rows, vf)
-        fc_cfg = BatteryConfig(
-            capacity_kwh=best["capacity"], max_charge_kw=best["max_kw"],
-            max_discharge_kw=best["max_kw"],
-            efficiency=ref_cfg.efficiency, fuse_amps=ref_cfg.fuse_amps, phases=ref_cfg.phases,
-            base_load_kw=ref_cfg.base_load_kw, scheduled_loads=ref_cfg.scheduled_loads,
-            hourly_load_profile=ref_cfg.hourly_load_profile,
-            seasonal_load_profile=ref_cfg.seasonal_load_profile,
-            daily_load_override=ref_cfg.daily_load_override,
-            flexible_loads=ref_cfg.flexible_loads,
-            export_price_factor=ref_cfg.export_price_factor, export_fee_ore=ref_cfg.export_fee_ore,
-            export_arbitrage_kwh=ref_cfg.export_arbitrage_kwh,
-            purchase_price=round(best["bat_cost"]), installation_cost=ref_cfg.installation_cost,
-            cycle_life=ref_cfg.cycle_life, calendar_life_years=15,
-            fuse_overcurrent_factor=ref_cfg.fuse_overcurrent_factor,
-        )
-        r = simulate(scaled, fc_cfg, tariff=best["tariff"], solar=solar_cfg)
-        d = len(set(s.date for s in r.slots))
-        ay = r.net_profit_sek / d * 365.25 if d > 0 else 0
-        if d > 0 and isinstance(best["tariff"], EffektTariff):
-            ay += effekt_savings(r, best["tariff"], fc_cfg, d,
-                                 solar_in_baseline=bool(solar_cfg) and sol_invest_total == 0)
-        if d > 0 and solar_cfg and sol_invest_total == 0 and fc_cfg.export_price_factor > 0:
-            # Existing panels: their export without a battery (at these prices) isn't battery value
-            ay -= baseline_export_revenue(scaled, fc_cfg, best["tariff"], solar_cfg) / d * 365.25
-        out[vf] = ay
+        if vf != 1.0:
+            out[vf] = _sim_battery_part(best, scale_vol(price_rows, vf), solar_cfg)[0]
     return out
+
+
+def _compute_export_vol_benefits(best, price_rows, solar_cfg):
+    """The future scenarios with the OPPOSITE export setting (zero-export <-> export).
+
+    Same settings as the export comparison in the results (export: full spot − 5 öre, no
+    reserved arbitrage capacity). The battery part is simulated at every volatility level;
+    the solar part and the lifetime come from today's prices (1.0x), exactly as the main
+    scenarios hold them at the main result's values.
+    """
+    alt_export = 1.0 if best["config"].export_price_factor == 0 else 0.0
+    alt_fee = 5.0 if alt_export > 0 else 0.0
+    out, solar_part, lifetime = {}, 0.0, best["lifetime"]
+    for vf in ALL_VOL_LEVELS:
+        rows = price_rows if vf == 1.0 else scale_vol(price_rows, vf)
+        ay, r, cfg, d = _sim_battery_part(best, rows, solar_cfg, alt_export, alt_fee, 0.0)
+        out[vf] = ay
+        if vf == 1.0 and d > 0:
+            yrs = d / 365.25
+            if solar_cfg and sol_invest_total > 0:
+                solar_part = solar_direct_use(r, cfg)[1] / yrs
+            cycles = r.num_cycles / yrs
+            lifetime = min(best["config"].cycle_life / cycles if cycles > 0 else 15, 15)
+    return {"export_factor": alt_export, "vol_arb": out, "solar_part": solar_part,
+            "lifetime": lifetime}
 
 
 if st.button(t("run_simulation"), type="primary", use_container_width=True):
     # Clear old results
     for key in ["all_results", "solar_cfg", "price_rows", "shared_config", "fuse_variants",
-                "scenario_results", "vol_arb", "sim_inputs", "sim_sig", "export_cmp", "_pdf_cache"]:
+                "scenario_results", "vol_arb", "sim_inputs", "sim_sig", "export_cmp", "export_vol_cmp",
+                "_pdf_cache"]:
         st.session_state.pop(key, None)
 
     # Validate battery table
@@ -3396,3 +3432,48 @@ if "all_results" in st.session_state:
         t("scenario_col_net_15yr").format(lifetime=f"{_horizon:.0f}"):
             f"{scenario_results[label]['lifetime_profit']:+,.0f} kr",
     } for label, vf, desc in scenarios]), use_container_width=True, hide_index=True)
+
+    # Export vs zero-export in each future scenario: does selling start to pay off if
+    # prices swing more? Simulated only on request (7 extra simulations), cached until the
+    # next simulation run.
+    _cur_is_zero = best["config"].export_price_factor == 0
+    _cur_mode = t("export_mode_zero") if _cur_is_zero else t("export_mode_with")
+    _oth_mode = t("export_mode_with") if _cur_is_zero else t("export_mode_zero")
+    st.subheader(t("scen_export_header"))
+    st.caption(t("scen_export_caption"))
+    _evc = st.session_state.get("export_vol_cmp")
+    if _evc is None and st.button(t("scen_export_button").format(mode=_oth_mode),
+                                  key="export_vol_cmp_btn"):
+        with st.spinner(t("export_simulating")):
+            _evc = _compute_export_vol_benefits(best, price_rows, solar_cfg)
+        st.session_state["export_vol_cmp"] = _evc
+    if _evc is not None:
+        _alt_res = {**best, "solar_part": _evc["solar_part"], "lifetime": _evc["lifetime"]}
+        _rows_ev, _oth_wins = [], []
+        for label, vf, desc in scenarios:
+            _cur_net = scenario_results[label]["lifetime_profit"]
+            _oth_net = _scenario_net(_evc["vol_arb"], vf, _alt_res)
+            _diff = _oth_net - _cur_net
+            if _diff > 0:
+                _oth_wins.append(label)
+            _rows_ev.append({
+                t("scenario_col_scenario"): label,
+                t("scen_export_col_mode").format(mode=_cur_mode + t("export_col_selected")):
+                    f"{_cur_net:+,.0f} kr",
+                t("scen_export_col_mode").format(mode=_oth_mode): f"{_oth_net:+,.0f} kr",
+                t("scen_export_col_diff").format(mode=_oth_mode): f"{_diff:+,.0f} kr",
+                t("scen_export_col_better"): _oth_mode if _diff > 0 else _cur_mode,
+            })
+        st.dataframe(pd.DataFrame(_rows_ev), use_container_width=True, hide_index=True)
+        _with_mode, _zero_mode = t("export_mode_with"), t("export_mode_zero")
+        _export_wins = (_oth_wins if _cur_is_zero
+                        else [lb for lb, _, _ in scenarios if lb not in _oth_wins])
+        if not _export_wins:
+            st.info(t("scen_export_never").format(zero=_zero_mode))
+        elif len(_export_wins) == len(scenarios):
+            st.success(t("scen_export_always").format(export=_with_mode))
+        else:
+            st.info(t("scen_export_some").format(export=_with_mode, zero=_zero_mode,
+                                                scenarios=", ".join(_export_wins)))
+        st.caption(t("scen_export_assumptions").format(
+            life_cur=_horizon, life_oth=_evc["lifetime"], mode=_oth_mode))
