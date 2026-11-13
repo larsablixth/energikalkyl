@@ -1524,6 +1524,25 @@ class TestEnergyFlows:
         assert list(house) == [425, 200]
         assert payload["capacity"] == 32.0 and 'data-theme="dark"' in html
 
+class TestHourlyPrices:
+    """app.py converts the prices to hourly once (to_hourly → HourlyPrices) and
+    simulate() skips the conversion for them: same result as raw rows."""
+
+    def test_converted_once_same_simulation(self):
+        from batteri import BatteryConfig, HourlyPrices, simulate, to_hourly
+        from elpriser import load_csv
+        rows = [r for r in load_csv(os.path.join(os.path.dirname(__file__), "historik_SE3_3ar.csv"))
+                if "2025-09-25" <= r["date"] < "2025-10-08"]   # hourly, then quarter-hourly
+        hr = to_hourly(rows)
+        assert isinstance(hr, HourlyPrices) and to_hourly(hr) is hr
+        assert len(hr) < len(rows), "the quarter-hours became hours"
+        cfg = lambda: BatteryConfig(capacity_kwh=10, max_charge_kw=5, max_discharge_kw=5, base_load_kw=1.0)
+        a, b = simulate(rows, cfg()), simulate(hr, cfg())
+        assert a.net_profit_sek == b.net_profit_sek
+        assert [(s.date, s.hour, s.action, s.energy_kwh) for s in a.slots] == \
+               [(s.date, s.hour, s.action, s.energy_kwh) for s in b.slots]
+
+
 class TestFuseReuse:
     """app.py reuses a simulation for a larger fuse when the smaller fuse never limits
     charging (fuse limit >= battery max kW + house load upper bound). That is only valid

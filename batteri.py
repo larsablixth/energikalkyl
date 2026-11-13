@@ -437,11 +437,16 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
             peaks = sorted(daily.values(), reverse=True)
             _effekt_caps[ym] = peaks[n_top - 1] if len(peaks) >= n_top else peaks[-1]
 
+    _grid_max = config.grid_max_kw  # the fuse limit (a property): once per simulation
     for day_date in sorted(days.keys()):
         day_prices = days[day_date]
 
         # Calculate total cost per slot (spot + grid fee)
+        # Each slot's hour, month, prices, solar and house load are computed
+        # once here and reused by the planning passes and the execution below
+        # (they used to be recomputed in every pass).
         slot_costs = []
+        _hs, _months, _solar_l, _load_l = [], [], [], []
         for i, p in enumerate(day_prices):
             spot_ore = float(p["sek_per_kwh"]) * 100
             grid_ore = tariff.total_cost_ore(p["date"], p["hour"]) if tariff else 0
@@ -454,6 +459,10 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
             solar_surplus_kw = max(0, solar_kw - load_kw)
             # Effective cost is lower when solar surplus can charge for free
             slot_costs.append((i, total_ore, spot_ore, grid_ore, solar_surplus_kw))
+            _hs.append(h)
+            _months.append(month)
+            _solar_l.append(solar_kw)
+            _load_l.append(load_kw)
 
         # Smart multi-cycle charge/discharge scheduling:
         # With day-ahead prices known at 13:00, we have perfect foresight.
@@ -491,17 +500,18 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
             level.append(lvl)
 
         charge_room = []
+        # = config.available_charge_kw(h, month, date) for each slot
+        _avail_l = [min(config.max_charge_kw, max(0.0, _grid_max - _load_l[i])) for i in range(len(day_prices))]
         for i, p in enumerate(day_prices):
-            h = int(p["hour"].split(":")[0])
-            month = int(p["date"].split("-")[1])
-            avail_kw = config.available_charge_kw(h, month, p["date"])
+            month = _months[i]
+            avail_kw = _avail_l[i]
             room = max(0.0, avail_kw * slot_duration_h - solar_in[i]) if avail_kw > 0.1 else 0.0
             cap = _effekt_caps.get(p["date"][:7])
             if (cap is not None and room > 0 and tariff.is_peak_hour(p["date"], p["hour"])
                     and tariff.get_effekt_rate(month) > 0):
                 factor = tariff.kw_factor(p["date"], p["hour"])
                 if factor > 0:
-                    net_kw = max(0.0, config.total_load_kw(h, month, p["date"]) - _solar_kw(p["date"], p["hour"]))
+                    net_kw = max(0.0, _load_l[i] - _solar_l[i])
                     room = min(room, max(0.0, cap / factor - net_kw) * slot_duration_h)
             charge_room.append(room)
 
@@ -514,9 +524,7 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
         for j, p in enumerate(day_prices):
             total_ore, spot_ore, _ = slot_cost_map[j]
             max_out = config.max_discharge_kw * slot_duration_h
-            h = int(p["hour"].split(":")[0])
-            month = int(p["date"].split("-")[1])
-            net_load_kw = max(0.0, config.total_load_kw(h, month, p["date"]) - _solar_kw(p["date"], p["hour"]))
+            net_load_kw = max(0.0, _load_l[j] - _solar_l[j])
             own = min(max_out, net_load_kw * slot_duration_h)
             tranches = [[total_ore, own]]
             if _can_export:
@@ -525,16 +533,20 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
             discharge_tranches.append([tr for tr in tranches if tr[1] > 0.001])
 
         candidates = []  # (profit öre/kWh delivered, charge idx or -1, discharge idx, tranche)
+        # Same pairs in the same order as a plain double loop (the sort below is
+        # stable, so ties keep this order); only the lookups are hoisted.
+        _eff = config.efficiency
+        _add = candidates.append
+        _chargeable = [(i, slot_cost_map[i][0]) for i in range(n_slots) if charge_room[i] > 0]
         for j in range(n_slots):
             for t_idx, (v, _) in enumerate(discharge_tranches[j]):
-                candidates.append((v, -1, j, t_idx))
-                for i in range(j):
-                    if charge_room[i] <= 0:
-                        continue
-                    c = slot_cost_map[i][0]
-                    profit = v - c / config.efficiency
+                _add((v, -1, j, t_idx))
+                for i, c in _chargeable:
+                    if i >= j:
+                        break
+                    profit = v - c / _eff
                     if profit > min_absolute_spread and v > c * min_spread_factor:
-                        candidates.append((profit, i, j, t_idx))
+                        _add((profit, i, j, t_idx))
         candidates.sort(key=lambda x: x[0], reverse=True)
 
         plan_charge = [0.0] * n_slots     # stored kWh from grid
@@ -570,14 +582,12 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
         flex_daily_used: dict[str, float] = {fl.name: 0.0 for fl in config.flexible_loads}
 
         for i, row in enumerate(day_prices):
-            spot_ore = float(row["sek_per_kwh"]) * 100
-            grid_ore = tariff.total_cost_ore(row["date"], row["hour"]) if tariff else 0
-            total_ore = spot_ore * config.spot_vat_factor + grid_ore
-            h = int(row["hour"].split(":")[0])
-            month = int(row["date"].split("-")[1])
+            total_ore, spot_ore, grid_ore = slot_cost_map[i]
+            h = _hs[i]
+            month = _months[i]
             date_str = row["date"]
-            solar_kw = _solar_kw(date_str, row["hour"])
-            load_kw = config.total_load_kw(h, month, date_str)
+            solar_kw = _solar_l[i]
+            load_kw = _load_l[i]
             solar_surplus_kw = max(0, solar_kw - load_kw)
             soc_before = soc
 
@@ -619,7 +629,7 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
 
             # --- Step 2: Grid charge during cheap slots (if room left) ---
             if plan_charge[i] > 0.001:
-                grid_charge_kw = config.available_charge_kw(h, month, date_str)
+                grid_charge_kw = _avail_l[i]
                 # Reduce grid charge by any solar already charging
                 if solar_charge_kwh > 0:
                     grid_charge_kw = max(0, grid_charge_kw - solar_charge_kwh / slot_duration_h)
@@ -721,18 +731,27 @@ def simulate(prices: list[dict], config: BatteryConfig, tariff=None, solar=None)
     return result
 
 
+class HourlyPrices(list):
+    """Price rows already one per hour (returned by to_hourly). simulate() runs
+    to_hourly on every call; with this marker it skips the pass over all rows,
+    so a caller that simulates many times converts once (app.py)."""
+
+
 def to_hourly(prices: list[dict]) -> list[dict]:
     """Average sub-hourly (15-min) price rows to one row per hour.
 
     Hourly rows pass through unchanged, so mixed series are handled per hour.
+    Returns a HourlyPrices list (the same rows when they already were hourly).
     """
+    if isinstance(prices, HourlyPrices):
+        return prices
     groups: dict[tuple[str, str], list[dict]] = {}
     for row in prices:
         key = (row["date"], row["hour"][:2])
         groups.setdefault(key, []).append(row)
     if len(groups) == len(prices):
-        return prices
-    out = []
+        return HourlyPrices(prices)
+    out = HourlyPrices()
     for (d, hh), rows in groups.items():
         if len(rows) == 1:
             out.append(rows[0])
