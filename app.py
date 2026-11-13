@@ -2200,13 +2200,21 @@ def _run_controller_check(res):
     try:
         hourly, _ = _battery_hourly(res)
         _sol = st.session_state.get("solar_cfg")
+        # Outdoor temperature = the controller's SMHI forecast: it plans and learns
+        # the house from it. The heating model's station, else Arlanda.
+        _tc = globals().get("temps_data")
+        if not _tc:
+            try:
+                _tc = load_temperatures()
+            except Exception:
+                _tc = None
         raw = ctrl_check.run_check(
             hourly,
             {"capacity_kwh": cfg.capacity_kwh, "max_charge_kw": cfg.max_charge_kw,
              "max_discharge_kw": cfg.max_discharge_kw, "efficiency": cfg.efficiency,
              "min_soc": cfg.min_soc, "max_soc": cfg.max_soc},
             cfg.grid_max_kw, round(cfg.fuse_amps), ev_window=_ev_window(cfg),
-            solar_kwp=getattr(_sol, "capacity_kwp", 0.0) if _sol is not None else 0.0)
+            solar_kwp=getattr(_sol, "capacity_kwp", 0.0) if _sol is not None else 0.0, temps=_tc)
         return {"summary": ctrl_check.summarize(raw), "label": res["label"]}
     except ctrl_check.ControllerUnavailable as e:
         return {"error": str(e)}
@@ -2657,7 +2665,9 @@ if "all_results" in st.session_state:
             _ev_note = (t("ctrl_ev_note").format(daily=_cs["ev_daily_kwh"],
                                                  calc=_cs["ev"]["calc_kwh_yr"], ctrl=_cs["ev"]["ctrl_kwh_yr"])
                         if _cs["ev"]["calc_kwh_yr"] > 0 else "")
-            st.caption(t("ctrl_notes").format(version=ctrl_check.firmware_version()) + _ev_note)
+            _learn_note = (t("ctrl_learn_note").format(days=_cs["house_days"])
+                           if _cs.get("temp_hours") and _cs.get("house_days") else "")
+            st.caption(t("ctrl_notes").format(version=ctrl_check.firmware_version()) + _learn_note + _ev_note)
 
     # Self-consumption optimization (when using SEK/kWh mode)
     if _pricing_mode == "sek_kwh":
@@ -2994,7 +3004,7 @@ if "all_results" in st.session_state:
             if _days:
                 _dates = sorted(_hourly)
                 export["calculator"] = {
-                    "version": 1,
+                    "version": 2,
                     "label": best.get("label"),
                     "tariff": best.get("best_tariff"),
                     "fuse_amps": _bcfg.fuse_amps,
@@ -3015,6 +3025,9 @@ if "all_results" in st.session_state:
                         "fee_ore": _bcfg.export_fee_ore,
                     },
                     "spot_vat_factor": _bcfg.spot_vat_factor,
+                    # Panels behind solar_kw (the controller's own solar forecast);
+                    # the outdoor °C is the export's top-level "weather".
+                    "solar_kwp": getattr(_exp_ss.get("solar_cfg"), "capacity_kwp", 0.0) or 0.0,
                     # EV/scheduled loads are inside load_kw (ev_kw = their part);
                     # with a measured hourly/seasonal profile they are part of
                     # the profile and ev_kw is 0.

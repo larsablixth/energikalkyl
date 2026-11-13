@@ -2673,6 +2673,12 @@ STRINGS = {
               "simulator. Not included: power tariff and export (the controller doesn't sell). The difference is "
               "counted on the battery's and the EV's electricity and applied to the calculation's year-1 saving.",
     },
+    "ctrl_learn_note": {
+        "sv": " Styrsystemet planerar husets förbrukning efter utetemperaturen (SMHI-stationens mätningar i "
+              "stället för prognos) och lärde sig huset under {days} dagar, som det gör på plats.",
+        "en": " The controller plans the house's consumption from the outdoor temperature (the SMHI station's "
+              "measurements in place of a forecast) and learned the house over {days} days, as it does on site.",
+    },
     "ctrl_ev_note": {
         "sv": " Elbil: {daily:.1f} kWh/dygn; styrsystemet planerar {ctrl:,.0f} kWh/år mot kalkylens {calc:,.0f} "
               "(laddaren går i hela ampere, minst 6 A).",
