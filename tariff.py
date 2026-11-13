@@ -19,11 +19,14 @@ All prices include 25% VAT.
 
 from dataclasses import dataclass
 from datetime import date
+from functools import lru_cache
 
 # Swedish public holidays that fall on weekdays and count as off-peak
 # Returns set of (month, day) for fixed holidays; Easter varies by year.
-def _swedish_holidays(year: int) -> set[date]:
-    """Return Swedish public holidays relevant for tariff peak classification."""
+@lru_cache(maxsize=64)
+def _swedish_holidays(year: int) -> frozenset[date]:
+    """Return Swedish public holidays relevant for tariff peak classification.
+    Cached per year (a simulation asks once per hour); frozen so no caller can change it."""
     from datetime import timedelta
     holidays = {
         date(year, 1, 1),    # nyårsdagen
@@ -54,7 +57,7 @@ def _swedish_holidays(year: int) -> set[date]:
     # Midsommarafton: Friday between 19 and 25 June
     june19 = date(year, 6, 19)
     holidays.add(june19 + timedelta(days=(4 - june19.weekday()) % 7))
-    return holidays
+    return frozenset(holidays)
 
 
 def is_peak_hour(d: str, hour: str) -> bool:
