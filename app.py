@@ -61,7 +61,7 @@ import json
 import math
 from datetime import date, timedelta
 from elpriser import fetch_range, load_csv, ZONES, ZONE_NAMES
-from batteri import BatteryConfig, LoadSchedule, FlexibleLoad, simulate
+from batteri import BatteryConfig, LoadSchedule, FlexibleLoad, simulate, to_hourly
 from solar import SolarConfig, estimate_yearly_production, estimate_lifetime_production, MONTHLY_KWH_PER_KWP
 from tariff import (
     Tidstariff, FastTariff, EffektTariff,
@@ -1900,6 +1900,7 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
         return tariffs
 
     price_rows = df_prices.to_dict("records")
+    _sim_rows = to_hourly(price_rows)  # converted once for the ~70 simulations below
     bat_fade = bat_fade_pct / 100
     solar_deg = solar_config.degradation_per_year if solar_config else 0.0
     # Panels the household already has (solar enabled, no solar investment)
@@ -1962,7 +1963,7 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
                   r = _reuse[0]
                   cfg._smart_schedule = dict(_reuse[1])
               else:
-                  r = simulate(price_rows, cfg, tariff=_tf, solar=solar_config)
+                  r = simulate(_sim_rows, cfg, tariff=_tf, solar=solar_config)
                   if _fuse_free:
                       _fuse_free_sims[(label, _tf.name)] = (r, dict(cfg._smart_schedule))
               _prog.step()
