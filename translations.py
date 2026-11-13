@@ -2401,10 +2401,14 @@ STRINGS = {
         "sv": "Lånekostnaden visas i kassaflödesdiagrammet",
         "en": "Loan cost shown in cashflow chart",
     },
-    "simulation_spinner": {
-        "sv": "Simulerar {batteries} batteristorlekar × {tariffs} tariffer × {fuses} säkringar...",
-        "en": "Simulating {batteries} battery sizes × {tariffs} tariffs × {fuses} fuse sizes...",
+    "sim_progress_start": {
+        "sv": "Simulerar {batteries} batteristorlekar × {tariffs} tariffer × {fuses} säkringar",
+        "en": "Simulating {batteries} battery sizes × {tariffs} tariffs × {fuses} fuse sizes",
     },
+    "sim_progress_step": {"sv": "{label}, {fuse} A, {tariff}", "en": "{label}, {fuse} A, {tariff}"},
+    "sim_progress_estimating": {"sv": "beräknar tid kvar…", "en": "estimating time left…"},
+    "sim_progress_left_s": {"sv": "ca {s} s kvar", "en": "about {s} s left"},
+    "sim_progress_left_min": {"sv": "ca {m} min kvar", "en": "about {m} min left"},
     "aa_flex_cool": {
         "sv": "Luft-luft AC (solöverskott)",
         "en": "Air-to-air AC (solar surplus)",

@@ -52,6 +52,7 @@ STREAMLIT BASICS (for non-coders):
 # ============================================================
 # IMPORTS — load all the modules this app depends on
 # ============================================================
+import time
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -1756,7 +1757,7 @@ def _sim_battery_part(best, rows, solar_cfg, export_factor=None, export_fee=None
     return ay, r, fc_cfg, d
 
 
-def _compute_vol_benefits(best, price_rows, solar_cfg):
+def _compute_vol_benefits(best, price_rows, solar_cfg, on_step=None):
     """Simulate the recommended battery at each volatility level (once, after a simulation).
 
     Returns {factor: battery part per year when new}, the same quantity as best["bat_part"].
@@ -1767,7 +1768,41 @@ def _compute_vol_benefits(best, price_rows, solar_cfg):
     for vf in ALL_VOL_LEVELS:
         if vf != 1.0:
             out[vf] = _sim_battery_part(best, scale_vol(price_rows, vf), solar_cfg)[0]
+            if on_step:
+                on_step()
     return out
+
+
+class _SimProgress:
+    """Progress bar for the main simulation: share done, what runs now and the time left
+    (estimated from the simulations finished so far)."""
+
+    def __init__(self, total):
+        self.total = max(1, total)
+        self.done_n = 0
+        self.t0 = time.monotonic()
+        self.text = ""
+        self.bar = st.progress(0.0)
+
+    def _left(self):
+        if self.done_n < 2:
+            return t("sim_progress_estimating")
+        left = (time.monotonic() - self.t0) / self.done_n * (self.total - self.done_n)
+        if left < 60:
+            return t("sim_progress_left_s").format(s=max(5, int(round(left / 5.0)) * 5))
+        return t("sim_progress_left_min").format(m=int(left // 60) + 1)
+
+    def update(self, text):
+        self.text = text
+        self.bar.progress(min(1.0, self.done_n / self.total),
+                          text=f"{self.text} · {self.done_n}/{self.total} · {self._left()}")
+
+    def step(self):
+        self.done_n += 1
+        self.update(self.text)
+
+    def done(self):
+        self.bar.empty()
 
 
 def _compute_export_vol_benefits(best, price_rows, solar_cfg):
@@ -1875,176 +1910,184 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
     # Simulate ALL battery sizes × tariffs × fuse sizes
     _all_raw_results = []
     _n_tariffs = len(_build_tariffs_for_fuse(fuse_amps))
-    with st.spinner(t("simulation_spinner").format(batteries=len(valid_rows), tariffs=_n_tariffs, fuses=len(_fuses_to_sweep))):
-      for _fuse in _fuses_to_sweep:
-        _fuse_tariffs = _build_tariffs_for_fuse(_fuse)
-        _fuse_fee_delta_yr = _op_fuse_fees.get(_fuse, 0) - _base_fuse_fee_yr
+    # Progress bar: one step per simulation (battery × tariff × fuse) plus the future
+    # scenarios. A run can take several minutes on a small server.
+    _n_vol = sum(1 for _vf in ALL_VOL_LEVELS if _vf != 1.0)
+    _prog = _SimProgress(sum(len(_build_tariffs_for_fuse(_f)) for _f in _fuses_to_sweep) * len(valid_rows)
+                         + _n_vol)
+    _prog.update(t("sim_progress_start").format(batteries=len(valid_rows), tariffs=_n_tariffs,
+                                                 fuses=len(_fuses_to_sweep)))
+    for _fuse in _fuses_to_sweep:
+      _fuse_tariffs = _build_tariffs_for_fuse(_fuse)
+      _fuse_fee_delta_yr = _op_fuse_fees.get(_fuse, 0) - _base_fuse_fee_yr
 
-        for _, row in valid_rows.iterrows():
-            label = row["Namn"]
-            cap = row["Kapacitet_kWh"]
-            max_kw = row["Max_kW"]
-            bat_cost = row["Pris_SEK"]
+      for _, row in valid_rows.iterrows():
+          label = row["Namn"]
+          cap = row["Kapacitet_kWh"]
+          max_kw = row["Max_kW"]
+          bat_cost = row["Pris_SEK"]
 
-            cfg = BatteryConfig(
-                capacity_kwh=cap, max_charge_kw=max_kw, max_discharge_kw=max_kw,
-                efficiency=efficiency, fuse_amps=_fuse, phases=phases,
-                base_load_kw=base_load,
-                # Scheduled loads: always pass with daily_load_override (house-only, needs EV on top)
-                # Skip when hourly/seasonal profile is loaded (those already include EV pattern)
-                scheduled_loads=scheduled_loads if (daily_load_override or not (hourly_load_profile or seasonal_load_profile)) else [],
-                hourly_load_profile=hourly_load_profile if not (seasonal_load_profile or daily_load_override) else None,
-                seasonal_load_profile=seasonal_load_profile if not daily_load_override else None,
-                daily_load_override=daily_load_override,
-                flexible_loads=flexible_loads,
-                purchase_price=bat_cost, installation_cost=bat_install,
-                cycle_life=cycle_life, calendar_life_years=15,
-                export_price_factor=export_factor, export_fee_ore=export_fee,
-                export_arbitrage_kwh=_export_arb_kwh,
-                fuse_overcurrent_factor=fuse_overcurrent_factor,
-            )
+          cfg = BatteryConfig(
+              capacity_kwh=cap, max_charge_kw=max_kw, max_discharge_kw=max_kw,
+              efficiency=efficiency, fuse_amps=_fuse, phases=phases,
+              base_load_kw=base_load,
+              # Scheduled loads: always pass with daily_load_override (house-only, needs EV on top)
+              # Skip when hourly/seasonal profile is loaded (those already include EV pattern)
+              scheduled_loads=scheduled_loads if (daily_load_override or not (hourly_load_profile or seasonal_load_profile)) else [],
+              hourly_load_profile=hourly_load_profile if not (seasonal_load_profile or daily_load_override) else None,
+              seasonal_load_profile=seasonal_load_profile if not daily_load_override else None,
+              daily_load_override=daily_load_override,
+              flexible_loads=flexible_loads,
+              purchase_price=bat_cost, installation_cost=bat_install,
+              cycle_life=cycle_life, calendar_life_years=15,
+              export_price_factor=export_factor, export_fee_ore=export_fee,
+              export_arbitrage_kwh=_export_arb_kwh,
+              fuse_overcurrent_factor=fuse_overcurrent_factor,
+          )
 
-            # Simulate every tariff first, then choose (on the whole bill, not battery value alone)
-            _tf_evals = []
-            for _tf in _fuse_tariffs:
-                r = simulate(price_rows, cfg, tariff=_tf, solar=solar_config)
-                d = len(set(s.date for s in r.slots))
-                if d == 0:
-                    continue
-                p = r.net_profit_sek / d * 365.25
+          # Simulate every tariff first, then choose (on the whole bill, not battery value alone)
+          _tf_evals = []
+          for _tf in _fuse_tariffs:
+              _prog.update(t("sim_progress_step").format(label=label, fuse=_fuse, tariff=_tf.name))
+              r = simulate(price_rows, cfg, tariff=_tf, solar=solar_config)
+              _prog.step()
+              d = len(set(s.date for s in r.slots))
+              if d == 0:
+                  continue
+              p = r.net_profit_sek / d * 365.25
 
-                # For effekttariff: demand charge change caused by the investment (can be negative).
-                # Computed right after simulate(): cfg's smart-load schedule belongs to this tariff.
-                eff_save = 0
-                if isinstance(_tf, EffektTariff):
-                    eff_save = effekt_savings(r, _tf, cfg, d, solar_in_baseline=_existing_solar)
-                    p += eff_save
+              # For effekttariff: demand charge change caused by the investment (can be negative).
+              # Computed right after simulate(): cfg's smart-load schedule belongs to this tariff.
+              eff_save = 0
+              if isinstance(_tf, EffektTariff):
+                  eff_save = effekt_savings(r, _tf, cfg, d, solar_in_baseline=_existing_solar)
+                  p += eff_save
 
-                # Existing panels + export: the export they earn without any battery is not
-                # battery value (doesn't depend on battery size → cached per fuse and tariff)
-                base_exp = 0
-                if _existing_solar and export_factor > 0:
-                    _bk = (_fuse, _tf.name)
-                    if _bk not in _baseline_export_cache:
-                        _baseline_export_cache[_bk] = baseline_export_revenue(
-                            price_rows, cfg, _tf, solar_config) / d * 365.25
-                    base_exp = _baseline_export_cache[_bk]
-                    p -= base_exp
+              # Existing panels + export: the export they earn without any battery is not
+              # battery value (doesn't depend on battery size → cached per fuse and tariff)
+              base_exp = 0
+              if _existing_solar and export_factor > 0:
+                  _bk = (_fuse, _tf.name)
+                  if _bk not in _baseline_export_cache:
+                      _baseline_export_cache[_bk] = baseline_export_revenue(
+                          price_rows, cfg, _tf, solar_config) / d * 365.25
+                  base_exp = _baseline_export_cache[_bk]
+                  p -= base_exp
 
-                # Solar used directly by the house (also needs this tariff's schedule in cfg)
-                sol_self = sol_self_kwh = 0
-                if solar_config:
-                    sol_self_kwh, sol_self = solar_direct_use(r, cfg)
-                    sol_self = sol_self / d * 365.25
+              # Solar used directly by the house (also needs this tariff's schedule in cfg)
+              sol_self = sol_self_kwh = 0
+              if solar_config:
+                  sol_self_kwh, sol_self = solar_direct_use(r, cfg)
+                  sol_self = sol_self / d * 365.25
 
-                # The household's bill on this tariff without investing (same cfg schedule;
-                # doesn't depend on battery size or fuse → cached per tariff)
-                if _tf.name not in _baseline_bill_cache:
-                    _baseline_bill_cache[_tf.name] = baseline_bill(
-                        r, _tf, cfg, d, solar_in_baseline=_existing_solar)
-                _tf_evals.append({"tariff": _tf, "result": r, "num_days": d, "bat_value": p,
-                                  "effekt": eff_save, "base_exp": base_exp,
-                                  "sol_self": sol_self, "sol_self_kwh": sol_self_kwh,
-                                  "bill": _baseline_bill_cache[_tf.name]})
+              # The household's bill on this tariff without investing (same cfg schedule;
+              # doesn't depend on battery size or fuse → cached per tariff)
+              if _tf.name not in _baseline_bill_cache:
+                  _baseline_bill_cache[_tf.name] = baseline_bill(
+                      r, _tf, cfg, d, solar_in_baseline=_existing_solar)
+              _tf_evals.append({"tariff": _tf, "result": r, "num_days": d, "bat_value": p,
+                                "effekt": eff_save, "base_exp": base_exp,
+                                "sol_self": sol_self, "sol_self_kwh": sol_self_kwh,
+                                "bill": _baseline_bill_cache[_tf.name]})
 
-            if not _tf_evals:
-                continue
+          if not _tf_evals:
+              continue
 
-            # Reference = the cheapest of the operator's tariffs without investing (what a
-            # sensible household pays today). A tariff with a higher bill costs the difference
-            # every year; the choice maximises battery + counted solar value − that cost.
-            _ref_bill = min(e["bill"] for e in _tf_evals)
-            for e in _tf_evals:
-                e["switch_cost"] = max(0.0, e["bill"] - _ref_bill)
-                e["score"] = (e["bat_value"] + (e["sol_self"] if sol_invest_total > 0 else 0)
-                              - e["switch_cost"])
-            _chosen = max(_tf_evals, key=lambda e: e["score"])  # first wins a tie (old behaviour)
-            _ref_tariff_name = min(_tf_evals, key=lambda e: e["bill"])["tariff"].name
-            result = _chosen["result"]
-            tariff = _chosen["tariff"]
-            best_tariff = tariff.name
-            num_days = _chosen["num_days"]
-            effekt_saving_yr = _chosen["effekt"]
-            solar_self_yr = _chosen["sol_self"]
-            solar_direct_kwh = _chosen["sol_self_kwh"]
-            baseline_export_yr = _chosen["base_exp"]
-            tariff_switch_cost_yr = _chosen["switch_cost"]
+          # Reference = the cheapest of the operator's tariffs without investing (what a
+          # sensible household pays today). A tariff with a higher bill costs the difference
+          # every year; the choice maximises battery + counted solar value − that cost.
+          _ref_bill = min(e["bill"] for e in _tf_evals)
+          for e in _tf_evals:
+              e["switch_cost"] = max(0.0, e["bill"] - _ref_bill)
+              e["score"] = (e["bat_value"] + (e["sol_self"] if sol_invest_total > 0 else 0)
+                            - e["switch_cost"])
+          _chosen = max(_tf_evals, key=lambda e: e["score"])  # first wins a tie (old behaviour)
+          _ref_tariff_name = min(_tf_evals, key=lambda e: e["bill"])["tariff"].name
+          result = _chosen["result"]
+          tariff = _chosen["tariff"]
+          best_tariff = tariff.name
+          num_days = _chosen["num_days"]
+          effekt_saving_yr = _chosen["effekt"]
+          solar_self_yr = _chosen["sol_self"]
+          solar_direct_kwh = _chosen["sol_self_kwh"]
+          baseline_export_yr = _chosen["base_exp"]
+          tariff_switch_cost_yr = _chosen["switch_cost"]
 
-            arb_yr = (result.net_profit_sek / num_days * 365.25 + effekt_saving_yr
-                      - baseline_export_yr) if num_days > 0 else 0
+          arb_yr = (result.net_profit_sek / num_days * 365.25 + effekt_saving_yr
+                    - baseline_export_yr) if num_days > 0 else 0
 
-            # Benefit split by how it wears: battery value fades with capacity, counted solar
-            # direct use with panel degradation, fixed part (fuse fee delta, standby) doesn't.
-            # Standby: constant draw around the clock at the unweighted mean purchase price.
-            _avg_ore = (sum(s.total_cost_ore for s in result.slots) / len(result.slots)
-                        if result.slots else 0)
-            standby_cost_yr = standby_cost_per_year(standby_w, _avg_ore)
-            bat_part = arb_yr
-            solar_part = solar_self_yr if sol_invest_total > 0 else 0
-            # Fixed part: also the yearly extra bill of the chosen tariff vs the cheapest one
-            # without investing (0 when the chosen tariff is the cheapest)
-            fixed_part = -_fuse_fee_delta_yr - standby_cost_yr - tariff_switch_cost_yr
-            _wear_args = (bat_fade, solar_deg)
-            # Year-1 benefit ("lower electricity cost per year" in texts and PDF)
-            net_benefit_yr = yearly_benefit(bat_part, solar_part, fixed_part, 1, *_wear_args)
-            total_benefit_yr = net_benefit_yr + _fuse_fee_delta_yr  # before fuse fee delta
-            # Investments are net of the grön teknik deduction (when enabled)
-            _bat_ded, _sol_ded = _green_deduction(bat_cost + bat_install, sol_invest_total)
-            invest = bat_cost + bat_install - _bat_ded
-            sol_invest_net = sol_invest_total - _sol_ded
-            total_invest = invest + sol_invest_net
-            cycles_yr = result.num_cycles / (num_days / 365.25) if num_days > 0 else 0
-            lifetime = min(cycle_life / cycles_yr if cycles_yr > 0 else 15, 15)
-            payback = payback_years(total_invest, bat_part, solar_part, fixed_part, *_wear_args,
-                                    horizon=SOLAR_LIFETIME_YEARS, lifetime=lifetime)
-            benefit_life = lifetime_benefit(bat_part, solar_part, fixed_part, lifetime, *_wear_args)
-            profit_life = _profit_over_life(benefit_life, lifetime, invest, sol_invest_net)
+          # Benefit split by how it wears: battery value fades with capacity, counted solar
+          # direct use with panel degradation, fixed part (fuse fee delta, standby) doesn't.
+          # Standby: constant draw around the clock at the unweighted mean purchase price.
+          _avg_ore = (sum(s.total_cost_ore for s in result.slots) / len(result.slots)
+                      if result.slots else 0)
+          standby_cost_yr = standby_cost_per_year(standby_w, _avg_ore)
+          bat_part = arb_yr
+          solar_part = solar_self_yr if sol_invest_total > 0 else 0
+          # Fixed part: also the yearly extra bill of the chosen tariff vs the cheapest one
+          # without investing (0 when the chosen tariff is the cheapest)
+          fixed_part = -_fuse_fee_delta_yr - standby_cost_yr - tariff_switch_cost_yr
+          _wear_args = (bat_fade, solar_deg)
+          # Year-1 benefit ("lower electricity cost per year" in texts and PDF)
+          net_benefit_yr = yearly_benefit(bat_part, solar_part, fixed_part, 1, *_wear_args)
+          total_benefit_yr = net_benefit_yr + _fuse_fee_delta_yr  # before fuse fee delta
+          # Investments are net of the grön teknik deduction (when enabled)
+          _bat_ded, _sol_ded = _green_deduction(bat_cost + bat_install, sol_invest_total)
+          invest = bat_cost + bat_install - _bat_ded
+          sol_invest_net = sol_invest_total - _sol_ded
+          total_invest = invest + sol_invest_net
+          cycles_yr = result.num_cycles / (num_days / 365.25) if num_days > 0 else 0
+          lifetime = min(cycle_life / cycles_yr if cycles_yr > 0 else 15, 15)
+          payback = payback_years(total_invest, bat_part, solar_part, fixed_part, *_wear_args,
+                                  horizon=SOLAR_LIFETIME_YEARS, lifetime=lifetime)
+          benefit_life = lifetime_benefit(bat_part, solar_part, fixed_part, lifetime, *_wear_args)
+          profit_life = _profit_over_life(benefit_life, lifetime, invest, sol_invest_net)
 
-            # Track grid export for self-consumption optimization
-            _yrs = num_days / 365.25 if num_days > 0 else 1
-            grid_export_yr = result.total_grid_export_kwh / _yrs
-            # Where the solar production went (kWh/yr), for the detail view
-            _sflows = ({k: v / _yrs for k, v in solar_flows(result, solar_direct_kwh).items()}
-                       if solar_config else None)
+          # Track grid export for self-consumption optimization
+          _yrs = num_days / 365.25 if num_days > 0 else 1
+          grid_export_yr = result.total_grid_export_kwh / _yrs
+          # Where the solar production went (kWh/yr), for the detail view
+          _sflows = ({k: v / _yrs for k, v in solar_flows(result, solar_direct_kwh).items()}
+                     if solar_config else None)
 
-            # Track luft-luft flex contribution (from solar surplus)
-            _aa_flex_kwh = 0
-            if st.session_state.get("use_aa", False):
-                for s in result.slots:
-                    month = int(s.date.split("-")[1])
-                    # Luft-luft flex loads are active Mar-May, Jun-Aug, Sep-Oct
-                    if month in (3, 4, 5, 6, 7, 8, 9, 10) and s.flex_consumed_kwh > 0:
-                        _aa_flex_kwh += s.flex_consumed_kwh
+          # Track luft-luft flex contribution (from solar surplus)
+          _aa_flex_kwh = 0
+          if st.session_state.get("use_aa", False):
+              for s in result.slots:
+                  month = int(s.date.split("-")[1])
+                  # Luft-luft flex loads are active Mar-May, Jun-Aug, Sep-Oct
+                  if month in (3, 4, 5, 6, 7, 8, 9, 10) and s.flex_consumed_kwh > 0:
+                      _aa_flex_kwh += s.flex_consumed_kwh
 
-            _all_raw_results.append({
-                "label": label, "capacity": cap, "max_kw": max_kw,
-                "bat_cost": bat_cost, "invest": invest, "total_invest": total_invest,
-                "sol_invest_net": sol_invest_net,
-                "green_bat": _bat_ded, "green_sol": _sol_ded,
-                "gross_invest": bat_cost + bat_install + sol_invest_total,
-                "effekt_saving_yr": effekt_saving_yr,
-                "baseline_export_yr": baseline_export_yr,
-                "arb_yr": arb_yr, "solar_self_yr": solar_self_yr,
-                "total_benefit_yr": total_benefit_yr,
-                "net_benefit_yr": net_benefit_yr,
-                "bat_part": bat_part, "solar_part": solar_part, "fixed_part": fixed_part,
-                "standby_cost_yr": standby_cost_yr, "benefit_life": benefit_life,
-                "tariff_switch_cost_yr": tariff_switch_cost_yr,
-                "ref_tariff": _ref_tariff_name, "n_tariffs": len(_tf_evals),
-                "baseline_bills": {e["tariff"].name: e["bill"] for e in _tf_evals},
-                "bat_fade": bat_fade, "solar_deg": solar_deg,
-                "solar_flows_kwh_yr": _sflows,
-                "fuse_amps": _fuse, "fuse_fee_yr": _op_fuse_fees.get(_fuse, 0),
-                "fuse_fee_delta_yr": _fuse_fee_delta_yr,
-                "payback": payback, "profit_life": profit_life,
-                "cycles_yr": cycles_yr, "lifetime": lifetime,
-                "best_tariff": best_tariff,
-                "result": result, "config": cfg, "tariff": tariff,
-                "num_days": num_days,
-                "grid_export_yr": grid_export_yr,
-                "aa_flex_kwh_yr": _aa_flex_kwh / _yrs if st.session_state.get("use_aa") else 0,
-                "total_flex_kwh_yr": result.total_flex_consumed_kwh / _yrs,
-            })
+          _all_raw_results.append({
+              "label": label, "capacity": cap, "max_kw": max_kw,
+              "bat_cost": bat_cost, "invest": invest, "total_invest": total_invest,
+              "sol_invest_net": sol_invest_net,
+              "green_bat": _bat_ded, "green_sol": _sol_ded,
+              "gross_invest": bat_cost + bat_install + sol_invest_total,
+              "effekt_saving_yr": effekt_saving_yr,
+              "baseline_export_yr": baseline_export_yr,
+              "arb_yr": arb_yr, "solar_self_yr": solar_self_yr,
+              "total_benefit_yr": total_benefit_yr,
+              "net_benefit_yr": net_benefit_yr,
+              "bat_part": bat_part, "solar_part": solar_part, "fixed_part": fixed_part,
+              "standby_cost_yr": standby_cost_yr, "benefit_life": benefit_life,
+              "tariff_switch_cost_yr": tariff_switch_cost_yr,
+              "ref_tariff": _ref_tariff_name, "n_tariffs": len(_tf_evals),
+              "baseline_bills": {e["tariff"].name: e["bill"] for e in _tf_evals},
+              "bat_fade": bat_fade, "solar_deg": solar_deg,
+              "solar_flows_kwh_yr": _sflows,
+              "fuse_amps": _fuse, "fuse_fee_yr": _op_fuse_fees.get(_fuse, 0),
+              "fuse_fee_delta_yr": _fuse_fee_delta_yr,
+              "payback": payback, "profit_life": profit_life,
+              "cycles_yr": cycles_yr, "lifetime": lifetime,
+              "best_tariff": best_tariff,
+              "result": result, "config": cfg, "tariff": tariff,
+              "num_days": num_days,
+              "grid_export_yr": grid_export_yr,
+              "aa_flex_kwh_yr": _aa_flex_kwh / _yrs if st.session_state.get("use_aa") else 0,
+              "total_flex_kwh_yr": result.total_flex_consumed_kwh / _yrs,
+          })
 
     # Keep best fuse per battery label (dedup across fuse sweep)
     _fuse_variants = {}  # label -> list of results (for fuse comparison display)
@@ -2102,8 +2145,10 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
     # Future scenarios: computed ONCE here (not on every widget interaction)
     if all_results:
         _best_sim = max(all_results, key=lambda r: r["profit_life"])
-        with st.spinner(t("computing_scenarios")):
-            st.session_state["vol_arb"] = _compute_vol_benefits(_best_sim, price_rows, solar_config)
+        _prog.update(t("computing_scenarios"))
+        st.session_state["vol_arb"] = _compute_vol_benefits(_best_sim, price_rows, solar_config,
+                                                            on_step=_prog.step)
+    _prog.done()
 
 # ================================================================
 # RESULTS — show comparison and recommendation

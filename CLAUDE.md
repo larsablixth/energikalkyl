@@ -42,6 +42,7 @@ The app follows a 6-step flow:
    - Specificerade batterier: editable price table (NKON defaults 5-96 kWh), user can add/remove
    - SEK per kWh: enter price/kWh, auto-generates 5-100 kWh sizes, finds optimal for self-consumption
 4. **Results** — simulates ALL battery sizes × ALL tariffs × ALL fuse sizes, recommends optimal combo
+   - Progress bar (`_SimProgress`) while it runs: one step per simulation (battery × tariff × fuse) + the future-scenario simulations; shows the battery/fuse/tariff being simulated, n/total and time left (from the simulations done so far). A run takes ~2.5 min locally, ~4-5 min on Streamlit Cloud
    - "Assumptions behind this result" block (always visible) right under the recommendation: also grid operator/fuse/phases, the reference tariff and the consumption source; untouched example figures are marked
    - "Exempelkalkyl" warning under the recommendation listing personal figures still at their example values (also first in the PDF summary)
    - Annualized cost vs lifetime-average savings (same timescale), cumulative cashflow chart (stops at battery lifetime)
