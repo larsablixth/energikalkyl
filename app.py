@@ -1909,6 +1909,13 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
 
     # Simulate ALL battery sizes × tariffs × fuse sizes
     _all_raw_results = []
+    # The fuse enters a simulation only through the charging room (fuse limit − house
+    # load, capped at the battery's max power). When even a smaller fuse never limits
+    # charging, a larger one gives the identical simulation: reuse it (with its smart-load
+    # schedule) instead of simulating again. Upper bound of the house load in any hour =
+    # the house peak + every scheduled load at full power.
+    _load_upper_kw = max(_house_peak_kw, base_load) + sum(l.power_kw for l in scheduled_loads)
+    _fuse_free_sims = {}  # (battery label, tariff name) -> (SimResult, smart-load schedule)
     _n_tariffs = len(_build_tariffs_for_fuse(fuse_amps))
     # Progress bar: one step per simulation (battery × tariff × fuse) plus the future
     # scenarios. A run can take several minutes on a small server.
@@ -1947,9 +1954,17 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
 
           # Simulate every tariff first, then choose (on the whole bill, not battery value alone)
           _tf_evals = []
+          _fuse_free = cfg.grid_max_kw >= max_kw + _load_upper_kw  # fuse never limits charging
           for _tf in _fuse_tariffs:
               _prog.update(t("sim_progress_step").format(label=label, fuse=_fuse, tariff=_tf.name))
-              r = simulate(price_rows, cfg, tariff=_tf, solar=solar_config)
+              _reuse = _fuse_free_sims.get((label, _tf.name)) if _fuse_free else None
+              if _reuse:
+                  r = _reuse[0]
+                  cfg._smart_schedule = dict(_reuse[1])
+              else:
+                  r = simulate(price_rows, cfg, tariff=_tf, solar=solar_config)
+                  if _fuse_free:
+                      _fuse_free_sims[(label, _tf.name)] = (r, dict(cfg._smart_schedule))
               _prog.step()
               d = len(set(s.date for s in r.slots))
               if d == 0:

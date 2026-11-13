@@ -1524,6 +1524,46 @@ class TestEnergyFlows:
         assert list(house) == [425, 200]
         assert payload["capacity"] == 32.0 and 'data-theme="dark"' in html
 
+class TestFuseReuse:
+    """app.py reuses a simulation for a larger fuse when the smaller fuse never limits
+    charging (fuse limit >= battery max kW + house load upper bound). That is only valid
+    if such a pair of simulations is identical, smart EV schedule included."""
+
+    @pytest.mark.parametrize("operator", ["Vattenfall Eldistribution", "Ellevio", "SEOM (Sollentuna)", "Göteborg Energi"])
+    def test_non_binding_fuse_gives_identical_simulation(self, operator):
+        from batteri import BatteryConfig, LoadSchedule, simulate
+        from elpriser import load_csv
+        from solar import SolarConfig
+        from tariff import GRID_OPERATORS, create_tariffs_for_operator
+        if operator not in GRID_OPERATORS:
+            pytest.skip(f"{operator} not in GRID_OPERATORS")
+        rows = [r for r in load_csv(os.path.join(os.path.dirname(__file__), "historik_SE3_3ar.csv"))
+                if "2024-01-01" <= r["date"] < "2024-03-01"]
+        house = {}
+        for k in range(60):
+            d = date.fromordinal(date(2024, 1, 1).toordinal() + k).isoformat()
+            house[d] = {h: 1.0 + 1.5 * (7 <= h < 22) for h in range(24)}
+        ev = LoadSchedule("Elbil", 11.0, 18, 7, daily_kwh=20, smart=True)
+        max_kw = 5.0
+        upper = max(max(p.values()) for p in house.values()) + ev.power_kw   # as app.py: peak + loads
+
+        def run(fuse, tf_name):
+            cfg = BatteryConfig(capacity_kwh=10, max_charge_kw=max_kw, max_discharge_kw=max_kw, fuse_amps=fuse,
+                                base_load_kw=1.0, daily_load_override=house, scheduled_loads=[ev],
+                                export_price_factor=0.0)
+            tf = next(x for x in create_tariffs_for_operator(operator, fuse) if x.name == tf_name)
+            return cfg, simulate(rows, cfg, tariff=tf, solar=SolarConfig(capacity_kwp=8))
+
+        for tf in create_tariffs_for_operator(operator, 50):
+            cfg_a, ra = run(50, tf.name)
+            assert cfg_a.grid_max_kw >= max_kw + upper, "50 A must be non-binding for this test"
+            cfg_b, rb = run(63, tf.name)
+            assert ra.net_profit_sek == pytest.approx(rb.net_profit_sek, abs=1e-9)
+            assert [(s.action, s.energy_kwh, s.soc_after) for s in ra.slots] == \
+                   [(s.action, s.energy_kwh, s.soc_after) for s in rb.slots]
+            assert cfg_a._smart_schedule == cfg_b._smart_schedule
+
+
 class TestControllerSummary:
     def test_steps_add_up(self):
         import controller_check as cc
