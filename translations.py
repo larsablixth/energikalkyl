@@ -1231,6 +1231,12 @@ STRINGS = {
         "sv": "Inga priser hittades. Kontrollera datum och elområde.",
         "en": "No prices found. Check dates and price zone.",
     },
+    "price_days_missing": {
+        "sv": "{n} dagar kunde inte hämtas och saknas i beräkningen ({days}). Tryck på Hämta priser igen — "
+              "redan hämtade dagar sparas, bara de saknade hämtas.",
+        "en": "{n} days could not be fetched and are missing from the calculation ({days}). Press Fetch prices "
+              "again — days already fetched are kept, only the missing ones are fetched.",
+    },
     "price_data_loaded": {
         "sv": "Prisdata laddad: **{days} dagar** ({start} → {end})",
         "en": "Price data loaded: **{days} days** ({start} → {end})",

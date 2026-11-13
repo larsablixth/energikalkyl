@@ -469,6 +469,7 @@ with col_prices:
                 _df_up["hour"] = _df_up["hour"].astype(str)
                 df_prices = _df_up
                 st.session_state["df_prices"] = df_prices
+                st.session_state.pop("price_days_missing", None)  # warning belonged to the API fetch
             except Exception as e:
                 st.error(t("price_csv_error").format(error=e))
     else:
@@ -502,11 +503,15 @@ with col_prices:
                 st.error(t("price_range_future"))
             else:
                 with st.spinner(t("fetching_prices")):
+                    _missing_days = []
                     try:
-                        rows = fetch_range(start_date, min(end_date, _latest), zone)
+                        rows = fetch_range(start_date, min(end_date, _latest), zone, missing=_missing_days)
                     except Exception as e:
                         rows = []
                         st.error(f"{t('no_prices_found')} ({e})")
+                    # Tomorrow's prices are published at ~13:00; before that, missing is normal
+                    _missing_days = [d for d in _missing_days if d <= date.today()]
+                    st.session_state["price_days_missing"] = [d.isoformat() for d in _missing_days]
                     if rows:
                         df_prices = pd.DataFrame(rows)
                         st.session_state["df_prices"] = df_prices
@@ -520,6 +525,10 @@ with col_prices:
         n_days = df_prices["date"].nunique()
         st.success(t("price_data_loaded").format(days=n_days,
                     start=df_prices['date'].min(), end=df_prices['date'].max()))
+        _pm = st.session_state.get("price_days_missing") or []
+        if _pm:
+            st.warning(t("price_days_missing").format(n=len(_pm), days=", ".join(_pm[:5])
+                                                      + (" …" if len(_pm) > 5 else "")))
     else:
         st.warning(t("load_prices_warning"))
 
