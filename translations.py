@@ -2606,6 +2606,113 @@ STRINGS = {
         "en": 'Future prices are assumed equal to the historical period (see step 6 for other assumptions).',
     },
     "export_compare_button": {"sv": "Kör jämförelsen", "en": "Run comparison"},
+    # --- Controller check (controller_check.py) ---
+    "ctrl_header": {"sv": "Klarar ett riktigt styrsystem det här?", "en": "Can a real controller do this?"},
+    "ctrl_caption": {
+        "sv": "Kalkylen antar att batteriet gör exakt det dygnsplanen säger. Ett riktigt styrsystem måste "
+              "skriva planen som ett program i växelriktaren (högst sex steg per dygn), dela säkringen med "
+              "elbilen med en reserv för huset, och planera efter en prognos i stället för facit. Kontrollen kör "
+              "samma timmar genom planeringskoden i ett riktigt styrsystem (NORVI-styrningen, öppen källkod i "
+              "energikalkyl) och visar hur mycket som går förlorat på vägen.",
+        "en": "The calculation assumes the battery does exactly what the day plan says. A real controller has to "
+              "write the plan as an inverter program (at most six steps per day), share the fuse with the EV "
+              "keeping a reserve for the house, and plan from a forecast instead of the actual day. The check runs "
+              "the same hours through a real controller's planning code (the NORVI controller, open source in "
+              "energikalkyl) and shows how much is lost on the way.",
+    },
+    "ctrl_export_mode": {
+        "sv": "Kontrollen finns bara för nollexport: styrsystemet säljer inte el från batteriet.",
+        "en": "The check is only available for zero export: the controller doesn't sell battery power.",
+    },
+    "ctrl_button": {"sv": "Kör kontrollen", "en": "Run the check"},
+    "ctrl_running": {
+        "sv": "Kör styrsystemets planering dag för dag (första gången kompileras koden, upp till en minut)...",
+        "en": "Running the controller's planning day by day (the first time compiles the code, up to a minute)...",
+    },
+    "ctrl_unavailable": {
+        "sv": "Kontrollen kunde inte köras här: {error}",
+        "en": "The check could not run here: {error}",
+    },
+    "ctrl_metric_calc": {"sv": "Kalkylen, år 1", "en": "Calculation, year 1"},
+    "ctrl_metric_ctrl": {"sv": "Med riktigt styrsystem", "en": "With a real controller"},
+    "ctrl_verdict_close": {
+        "sv": "Styrsystemet hamnar inom {pct:.1f} % av kalkylen: siffrorna ovan går att lita på.",
+        "en": "The controller lands within {pct:.1f} % of the calculation: the figures above hold.",
+    },
+    "ctrl_verdict_far": {
+        "sv": "Styrsystemet hamnar {pct:+.1f} % från kalkylen. Räkna med den lägre siffran.",
+        "en": "The controller lands {pct:+.1f} % from the calculation. Count on the lower figure.",
+    },
+    "ctrl_step_parity": {"sv": "Samma planering som kalkylen (ska vara 0)",
+                         "en": "Same planning as the calculation (should be 0)"},
+    "ctrl_step_program": {"sv": "Planen som växelriktarprogram (högst {n} steg per dygn)",
+                          "en": "The plan as an inverter program (at most {n} steps per day)"},
+    "ctrl_step_ev_fuse": {"sv": "Elbil och batteri delar säkringen ({reserve:.1f} kW reserv för huset)",
+                          "en": "EV and battery share the fuse ({reserve:.1f} kW reserve for the house)"},
+    "ctrl_step_forecast": {"sv": "Planerar efter gårdagens förbrukning och sol (prognos)",
+                           "en": "Plans from yesterday's consumption and solar (forecast)"},
+    "ctrl_step_ev_cost": {"sv": "Elbilens laddning ({calc:.2f} → {ctrl:.2f} kr/kWh)",
+                          "en": "EV charging ({calc:.2f} → {ctrl:.2f} SEK/kWh)"},
+    "ctrl_step_total": {"sv": "Summa", "en": "Total"},
+    "ctrl_col_step": {"sv": "Steg", "en": "Step"},
+    "ctrl_col_kr": {"sv": "kr/år", "en": "SEK/yr"},
+    "ctrl_years_expander": {"sv": "Per år", "en": "Per year"},
+    "ctrl_col_year": {"sv": "År", "en": "Year"},
+    "ctrl_col_days": {"sv": "Dagar", "en": "Days"},
+    "ctrl_col_calc": {"sv": "Kalkylen, batteri kr/år", "en": "Calculation, battery SEK/yr"},
+    "ctrl_col_ctrl": {"sv": "Styrsystemet, kr/år", "en": "Controller, SEK/yr"},
+    "ctrl_col_diff": {"sv": "Skillnad", "en": "Difference"},
+    "ctrl_notes": {
+        "sv": "Styrsystemets kod: NORVI-styrningen version {version}. Ingår inte: växelriktarens fysik och "
+              "säkringsvakten (finns i simulatorn energy-scheduler-sim), effektavgift och export. Skillnaden räknas "
+              "på batteriets och elbilens el; den läggs på kalkylens besparing år 1.",
+        "en": "Controller code: NORVI controller version {version}. Not included: the inverter's physics and the "
+              "fuse guard (in the energy-scheduler-sim simulator), power tariff and export. The difference is "
+              "counted on the battery's and the EV's electricity and applied to the calculation's year-1 saving.",
+    },
+    "ctrl_ev_note": {
+        "sv": " Elbil: {daily:.1f} kWh/dygn; styrsystemet planerar {ctrl:,.0f} kWh/år mot kalkylens {calc:,.0f} "
+              "(laddaren går i hela ampere, minst 6 A).",
+        "en": " EV: {daily:.1f} kWh/day; the controller plans {ctrl:,.0f} kWh/yr against the calculation's "
+              "{calc:,.0f} (the charger runs in whole amps, at least 6 A).",
+    },
+    # --- Energy flows ---
+    "flow_header": {"sv": "Så flödar energin — {label}", "en": "How the energy flows — {label}"},
+    "flow_caption": {
+        "sv": "Ett genomsnittligt år: varifrån elen kommer (sol, elnät, batteri) och vart den tar vägen. "
+              "Håll muspekaren över ett flöde för att se kWh per år.",
+        "en": "An average year: where the electricity comes from (sun, grid, battery) and where it goes. "
+              "Hover over a flow to see kWh per year.",
+    },
+    "flow_solar": {"sv": "Sol", "en": "Sun"},
+    "flow_grid": {"sv": "Elnät", "en": "Grid"},
+    "flow_battery": {"sv": "Batteri", "en": "Battery"},
+    "flow_house": {"sv": "Huset", "en": "House"},
+    "flow_ev": {"sv": "Elbil", "en": "EV"},
+    "flow_flex": {"sv": "Varmvatten/flexlaster", "en": "Hot water/flex loads"},
+    "flow_export": {"sv": "Såld till nätet", "en": "Sold to the grid"},
+    "flow_curtailed": {"sv": "Spill (solel som inte togs till vara)", "en": "Curtailed solar"},
+    "flow_losses": {"sv": "Batteriförluster", "en": "Battery losses"},
+    "flow_battery_charging": {"sv": "Batteriet laddas", "en": "Battery charging"},
+    "flow_day_pick": {"sv": "Visa en dag", "en": "Show a day"},
+    "flow_day_help": {
+        "sv": "Förvald är dagen då batteriet levererade mest. Välj vilken dag som helst i perioden.",
+        "en": "Preselected is the day the battery delivered the most. Pick any day in the period.",
+    },
+    "flow_day_from": {"sv": "Varifrån elen kom (kWh per timme)", "en": "Where the power came from (kWh per hour)"},
+    "flow_day_to": {"sv": "Vart den tog vägen", "en": "Where it went"},
+    "flow_day_from_short": {"sv": "Från", "en": "From"},
+    "flow_day_to_short": {"sv": "Till", "en": "To"},
+    "flow_day_battery": {"sv": "Energi i batteriet", "en": "Energy in the battery"},
+    "flow_day_price": {"sv": "Elpris inkl. nät och skatt", "en": "Electricity price incl. grid and tax"},
+    "flow_day_hour": {"sv": "Timme", "en": "Hour"},
+    "flow_day_summary": {
+        "sv": "Dagen: {solar:.0f} kWh från solen, {battery:.0f} kWh från batteriet, {grid:.0f} kWh från "
+              "elnätet; batteriet laddades med {charged:.0f} kWh.",
+        "en": "The day: {solar:.0f} kWh from the sun, {battery:.0f} kWh from the battery, {grid:.0f} kWh from "
+              "the grid; the battery was charged with {charged:.0f} kWh.",
+    },
+    "flow_day_missing": {"sv": "Ingen data för den dagen.", "en": "No data for that day."},
     "current_tariff_label": {"sv": "Din nuvarande tariff", "en": "Your current tariff"},
     "current_tariff_unknown": {"sv": "Vet inte", "en": "Don't know"},
     "current_tariff_help": {

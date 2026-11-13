@@ -55,6 +55,7 @@ STREAMLIT BASICS (for non-coders):
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import json
 import math
 from datetime import date, timedelta
@@ -80,6 +81,7 @@ from economics import (solar_direct_use, effekt_savings, baseline_export_revenue
                        solar_flows, standby_cost_per_year, yearly_benefit, lifetime_benefit,
                        payback_years, value_at_level, scenario_bat_part,
                        tariff_switch_saving)
+import controller_check as ctrl_check
 from example_inputs import (EXAMPLE, EV_LOAD, POOL_HEAT_PUMP_LOAD, HOT_WATER_LOAD,
                             default_battery_rows, untouched_examples)
 from app_state import save_state, load_state
@@ -1795,7 +1797,7 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
     # Clear old results
     for key in ["all_results", "solar_cfg", "price_rows", "shared_config", "fuse_variants",
                 "scenario_results", "vol_arb", "sim_inputs", "sim_sig", "export_cmp", "export_vol_cmp",
-                "_pdf_cache"]:
+                "_pdf_cache", "_hourly_cache", "controller_check"]:
         st.session_state.pop(key, None)
 
     # Validate battery table
@@ -2169,6 +2171,133 @@ def _scenario_net(vol_arb, target_vol, res):
     return _profit_over_life(total, life, res["invest"], sol_net)
 
 
+def _battery_hourly(res):
+    """Hourly values of a result's battery (controller_check.calculator_hourly):
+    (hourly dict, SimResult). One simulation per battery, cached until the next run."""
+    cache = st.session_state.setdefault("_hourly_cache", {})
+    if res["label"] not in cache:
+        if len(cache) >= 3:   # keep memory bounded: a few batteries at most
+            cache.pop(next(iter(cache)))
+        cache[res["label"]] = ctrl_check.calculator_hourly(
+            st.session_state.get("price_rows", []), res["config"], res["tariff"],
+            st.session_state.get("solar_cfg"))
+    return cache[res["label"]]
+
+
+def _ev_window(cfg):
+    """(start, end) hour of the first EV-named scheduled load, else the firmware default 18-07."""
+    for sl in cfg.scheduled_loads or []:
+        if "bil" in sl.name.lower() or "ev" in sl.name.lower():
+            return sl.start_hour, sl.end_hour
+    return 18, 7
+
+
+def _run_controller_check(res):
+    """The controller check for a result: {"summary": ...} or {"error": message}."""
+    cfg = res["config"]
+    try:
+        hourly, _ = _battery_hourly(res)
+        raw = ctrl_check.run_check(
+            hourly,
+            {"capacity_kwh": cfg.capacity_kwh, "max_charge_kw": cfg.max_charge_kw,
+             "max_discharge_kw": cfg.max_discharge_kw, "efficiency": cfg.efficiency,
+             "min_soc": cfg.min_soc, "max_soc": cfg.max_soc},
+            cfg.grid_max_kw, ev_window=_ev_window(cfg))
+        return {"summary": ctrl_check.summarize(raw), "label": res["label"]}
+    except ctrl_check.ControllerUnavailable as e:
+        return {"error": str(e)}
+
+
+# Energy-flow colours: one fixed colour per entity (dataviz reference palette,
+# categorical slots in order), the same in the yearly diagram and the day chart.
+FLOW_COLORS = {"grid": "#2a78d6", "flex": "#eb6834", "battery": "#1baf7a", "solar": "#eda100",
+               "ev": "#e87ba4", "export": "#008300", "house": "#6250d6", "curtailed": "#e34948",
+               "losses": "#e34948"}
+
+
+def _flow_label(key):
+    return t(f"flow_{key}")
+
+
+def _sankey_figure(flows):
+    """Yearly energy flows (kWh/yr) as a Sankey diagram: sources left, uses right."""
+    links = flows["links"]
+    src_nodes = [s for s in ctrl_check.FLOW_SOURCES if any(k[0] == s for k in links)]
+    sink_nodes = [s for s in ctrl_check.FLOW_SINKS if any(k[1] == s for k in links) and s != "battery"]
+    # The battery is both a use (charging) and a source (discharging): one node in the middle
+    nodes = [n for n in src_nodes if n != "battery"] + ["battery"] + sink_nodes
+    idx = {n: i for i, n in enumerate(nodes)}
+    x = [0.01 if n in ("solar", "grid") else 0.5 if n == "battery" else 0.99 for n in nodes]
+
+    def rgba(hexc, a):
+        h = hexc.lstrip("#")
+        return f"rgba({int(h[0:2], 16)},{int(h[2:4], 16)},{int(h[4:6], 16)},{a})"
+
+    src, dst, val, col, hover = [], [], [], [], []
+    for (a, b), v in sorted(links.items(), key=lambda kv: -kv[1]):
+        if a not in idx or b not in idx:
+            continue
+        src.append(idx[a]); dst.append(idx[b]); val.append(round(v))
+        col.append(rgba(FLOW_COLORS[a], 0.35))
+        hover.append(f"{_flow_label(a)} → {_flow_label(b)}: {v:,.0f} kWh/{t('yr')}")
+    labels = [f"{_flow_label(n)}  {max(sum(v for (a, _), v in links.items() if a == n), sum(v for (_, b), v in links.items() if b == n)):,.0f} kWh"
+              for n in nodes]
+    fig = go.Figure(go.Sankey(
+        arrangement="snap",
+        node=dict(label=labels, color=[FLOW_COLORS[n] for n in nodes], pad=18, thickness=14,
+                  x=x, y=[None] * len(nodes),
+                  hovertemplate="%{label}: %{value:,.0f} kWh/" + t("yr") + "<extra></extra>"),
+        link=dict(source=src, target=dst, value=val, color=col, customdata=hover,
+                  hovertemplate="%{customdata}<extra></extra>"),
+    ))
+    fig.update_layout(height=420, margin=dict(l=0, r=0, t=10, b=10), font=dict(size=13))
+    return fig
+
+
+def _day_figure(day):
+    """One day, per hour: where the power came from, where it went, battery level, price."""
+    hours = [f"{h:02d}" for h in day["hour"]]
+    fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.08,
+                        row_heights=[0.32, 0.32, 0.18, 0.18],
+                        subplot_titles=(t("flow_day_from"), t("flow_day_to"),
+                                        t("flow_day_battery"), t("flow_day_price")))
+    for key in ("solar", "battery", "grid"):
+        vals = day["from"][key]
+        if sum(vals) < 0.01:
+            continue
+        fig.add_trace(go.Bar(x=hours, y=vals, name=_flow_label(key), marker_color=FLOW_COLORS[key],
+                             legendgroup="from", legendgrouptitle_text=t("flow_day_from_short"),
+                             hovertemplate=f"{_flow_label(key)} %{{x}}:00: %{{y:.1f}} kWh<extra></extra>"),
+                      row=1, col=1)
+    for key in ("house", "ev", "battery", "flex", "export", "curtailed"):
+        vals = day["to"][key]
+        if sum(vals) < 0.01:
+            continue
+        name = t("flow_battery_charging") if key == "battery" else _flow_label(key)
+        fig.add_trace(go.Bar(x=hours, y=vals, name=name, marker_color=FLOW_COLORS[key],
+                             legendgroup="to", legendgrouptitle_text=t("flow_day_to_short"),
+                             hovertemplate=f"{name} %{{x}}:00: %{{y:.1f}} kWh<extra></extra>"),
+                      row=2, col=1)
+    fig.add_trace(go.Scatter(x=hours, y=day["soc_kwh"], mode="lines+markers", name=t("flow_day_battery"),
+                             line=dict(color=FLOW_COLORS["battery"], width=2), marker=dict(size=8),
+                             showlegend=False,
+                             hovertemplate="%{x}:00: %{y:.1f} kWh<extra></extra>"), row=3, col=1)
+    fig.add_trace(go.Scatter(x=hours, y=[v / 100 for v in day["buy_ore"]], mode="lines", line_shape="hv",
+                             name=t("flow_day_price"), line=dict(color="#7f7f7f", width=2), showlegend=False,
+                             hovertemplate="%{x}:00: %{y:.2f} kr/kWh<extra></extra>"), row=4, col=1)
+    fig.update_layout(barmode="stack", bargap=0.15, height=760, margin=dict(l=60, r=10, t=30, b=40),
+                      legend=dict(orientation="v", groupclick="toggleitem"))
+    # Hours on every panel (shared axes hide them on all but the last)
+    fig.update_xaxes(type="category", showticklabels=True, tickmode="array", tickvals=hours[::3],
+                     ticktext=hours[::3])
+    fig.update_yaxes(title_text="kWh", row=1, col=1)
+    fig.update_yaxes(title_text="kWh", row=2, col=1)
+    fig.update_yaxes(title_text="kWh", row=3, col=1, rangemode="tozero")
+    fig.update_yaxes(title_text="kr/kWh", row=4, col=1)
+    fig.update_xaxes(title_text=t("flow_day_hour"), row=4, col=1)
+    return fig
+
+
 def _example_items_text(items, si, lang=None):
     """Untouched example figures (untouched_examples ids) as a readable list, in `lang`
     (default: the UI language; the PDF passes "sv")."""
@@ -2473,6 +2602,59 @@ if "all_results" in st.session_state:
             )
         )
 
+    # === CONTROLLER CHECK ===
+    # The recommended battery's hours through a real controller's planner (the NORVI
+    # controller firmware, controller/): Deye program, shared fuse budget with the EV,
+    # forecast. Run on request (the first run compiles the firmware code).
+    st.subheader(t("ctrl_header"))
+    st.caption(t("ctrl_caption"))
+    if best["config"].export_price_factor > 0:
+        st.info(t("ctrl_export_mode"))
+    else:
+        _cc = st.session_state.get("controller_check")
+        if _cc is None and st.button(t("ctrl_button"), key="ctrl_check_btn"):
+            with st.spinner(t("ctrl_running")):
+                _cc = _run_controller_check(best)
+            st.session_state["controller_check"] = _cc
+        if _cc is not None and "error" in _cc:
+            st.warning(t("ctrl_unavailable").format(error=_cc["error"]))
+        elif _cc is not None:
+            _cs = _cc["summary"]
+            _diff = _cs["total_diff_yr"]
+            _c1, _c2 = st.columns(2)
+            _c1.metric(t("ctrl_metric_calc"), f"{best['net_benefit_yr']:,.0f} {t('kr_yr')}")
+            _c2.metric(t("ctrl_metric_ctrl"), f"{best['net_benefit_yr'] + _diff:,.0f} {t('kr_yr')}",
+                       delta=f"{_diff:+,.0f} {t('kr_yr')} ({_cs['total_diff_pct']:+.1f} %)",
+                       delta_color="normal")
+            if abs(_cs["total_diff_pct"]) < 5:
+                st.success(t("ctrl_verdict_close").format(pct=abs(_cs["total_diff_pct"])))
+            else:
+                st.warning(t("ctrl_verdict_far").format(pct=_cs["total_diff_pct"]))
+            _steps = [
+                (t("ctrl_step_parity"), _cs["steps"]["parity"]),
+                (t("ctrl_step_program").format(n=_cs["segments"]), _cs["steps"]["program"]),
+                (t("ctrl_step_ev_fuse").format(reserve=_cs["base_load_kw"]), _cs["steps"]["ev_fuse"]),
+                (t("ctrl_step_forecast"), _cs["steps"]["forecast"]),
+            ]
+            if _cs["ev"]["calc_kwh_yr"] > 0:
+                _steps.append((t("ctrl_step_ev_cost").format(
+                    calc=_cs["ev"]["calc_kr_kwh"], ctrl=_cs["ev"]["ctrl_kr_kwh"]), -_cs["ev"]["extra_kr_yr"]))
+            _steps.append((t("ctrl_step_total"), _diff))
+            st.dataframe(pd.DataFrame([{t("ctrl_col_step"): _n, t("ctrl_col_kr"): f"{_v:+,.0f}"}
+                                       for _n, _v in _steps]),
+                         use_container_width=True, hide_index=True)
+            with st.expander(t("ctrl_years_expander")):
+                st.dataframe(pd.DataFrame([{
+                    t("ctrl_col_year"): _y, t("ctrl_col_days"): f"{_b['days']:.0f}",
+                    t("ctrl_col_calc"): f"{_b['kr']['calc']:,.0f}",
+                    t("ctrl_col_ctrl"): f"{_b['kr']['calc'] + _b['total_diff_yr']:,.0f}",
+                    t("ctrl_col_diff"): f"{_b['total_diff_pct']:+.1f} %",
+                } for _y, _b in sorted(_cs["years"].items())]), use_container_width=True, hide_index=True)
+            _ev_note = (t("ctrl_ev_note").format(daily=_cs["ev_daily_kwh"],
+                                                 calc=_cs["ev"]["calc_kwh_yr"], ctrl=_cs["ev"]["ctrl_kwh_yr"])
+                        if _cs["ev"]["calc_kwh_yr"] > 0 else "")
+            st.caption(t("ctrl_notes").format(version=ctrl_check.firmware_version()) + _ev_note)
+
     # Self-consumption optimization (when using SEK/kWh mode)
     if _pricing_mode == "sek_kwh":
         # Find smallest battery where grid export is near zero
@@ -2645,6 +2827,7 @@ if "all_results" in st.session_state:
     _exp_ss = {k: st.session_state.get(k) for k in (
         "vattenfall_hourly", "df_prices", "tibber_solar_hourly", "scheduled_loads",
         "flexible_loads", "tibber_home", "price_rows", "solar_cfg")}
+    _exp_best_hourly = (st.session_state.get("_hourly_cache") or {}).get(best["label"])
 
     def _build_simulator_export():
         """Build JSON export dict for energy-scheduler-sim."""
@@ -2798,26 +2981,11 @@ if "all_results" in st.session_state:
         # tariff — the tariff sweep leaves the last tariff's schedule behind.
         _price_rows = _exp_ss.get("price_rows")
         if _bcfg is not None and _price_rows:
-            _tf = best.get("tariff")
-            _r = simulate(_price_rows, _bcfg, tariff=_tf, solar=_exp_ss.get("solar_cfg"))
-            _keys = ("hour", "spot", "buy_ore", "load_kw", "ev_kw", "solar_kw", "room_kw",
-                     "in_kwh", "out_kwh", "solar_in_kwh", "export_kwh", "net_sek")
-            _hourly = {}
-            for _s in _r.slots:
-                _h = int(_s.hour.split(":")[0])
-                _m = int(_s.date.split("-")[1])
-                _ev = sum(_bcfg._scheduled_kw(_i, _sl, _h, _s.date)
-                          for _i, _sl in enumerate(_bcfg.scheduled_loads))
-                _row = (_h, round(_s.sek_per_kwh, 5), round(_s.total_cost_ore, 3),
-                        round(_bcfg.total_load_kw(_h, _m, _s.date), 4), round(_ev, 4),
-                        round(_s.solar_kw, 4), round(_bcfg.available_charge_kw(_h, _m, _s.date), 4),
-                        round(_s.energy_kwh, 4) if _s.action == "charge" else 0.0,
-                        round(_s.energy_kwh, 4) if _s.action == "discharge" else 0.0,
-                        round(_s.solar_charge_kwh, 4), round(_s.grid_export_kwh, 4),
-                        round(_s.saving_sek - _s.cost_sek + _s.export_revenue_sek, 4))
-                _d = _hourly.setdefault(_s.date, {k: [] for k in _keys})
-                for _k, _v in zip(_keys, _row):
-                    _d[_k].append(_v)
+            # Same hourly values as the energy flows / controller check (cached
+            # in the script thread); computed here when not cached yet.
+            _cached = _exp_best_hourly
+            _hourly, _r = _cached if _cached else ctrl_check.calculator_hourly(
+                _price_rows, _bcfg, best.get("tariff"), _exp_ss.get("solar_cfg"))
             _days = len(_hourly)
             if _days:
                 _dates = sorted(_hourly)
@@ -3295,6 +3463,29 @@ if "all_results" in st.session_state:
     col_d2.metric(t("per_year"), f"{per_year:,.0f} {t('kr_yr')}")
     col_d3.metric(t("payback"), _fmt_payback(sel['payback']))
     col_d4.metric(t("cycles_yr"), f"{sel['cycles_yr']:.0f}")
+
+    # === ENERGY FLOWS of the selected battery: the year, and one chosen day ===
+    st.subheader(t("flow_header").format(label=sel["label"]))
+    st.caption(t("flow_caption"))
+    _hourly_sel, _ = _battery_hourly(sel)
+    if _hourly_sel:
+        st.plotly_chart(_sankey_figure(ctrl_check.energy_flows(_hourly_sel)), use_container_width=True)
+        _flow_dates = sorted(_hourly_sel)
+        # Default day: the one where the battery delivered most (shows it at work)
+        _busy = max(_flow_dates, key=lambda d: sum(_hourly_sel[d]["out_kwh"]))
+        _day = st.date_input(t("flow_day_pick"), value=date.fromisoformat(_busy),
+                             min_value=date.fromisoformat(_flow_dates[0]),
+                             max_value=date.fromisoformat(_flow_dates[-1]),
+                             key=f"flow_day_{sel['label']}", help=t("flow_day_help"))
+        _dflow = ctrl_check.day_flows(_hourly_sel, _day.isoformat())
+        if _dflow:
+            st.plotly_chart(_day_figure(_dflow), use_container_width=True)
+            _tot = {k: sum(v) for k, v in _dflow["from"].items()}
+            st.caption(t("flow_day_summary").format(
+                solar=_tot["solar"], battery=_tot["battery"], grid=_tot["grid"],
+                charged=sum(_dflow["to"]["battery"])))
+        else:
+            st.info(t("flow_day_missing"))
 
     with st.expander(t("detail_expander")):
         _w = 25  # label width for alignment

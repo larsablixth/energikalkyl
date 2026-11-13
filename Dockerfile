@@ -2,6 +2,9 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# C++ compiler for the controller check (controller_check.py compiles controller/)
+RUN apt-get update && apt-get install -y --no-install-recommends g++ && rm -rf /var/lib/apt/lists/*
+
 # Install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -9,6 +12,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application
 COPY *.py ./
 COPY historik_SE3_3ar.csv ./
+COPY controller/ controller/
+# Compile the controller check now, not on a visitor's first click
+RUN python -c "import controller_check; controller_check.build_binary()"
 
 # Copy cached data if available
 COPY .weather_cache/ .weather_cache/
