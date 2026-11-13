@@ -7,7 +7,8 @@
 //   ideal      firmware planner on the calculator's inputs (parity, ≈ 0)
 //   progperf   that plan as a Deye program (≤ 6 points)
 //   ctrl       the real controller: 13:30 price fetch, its own forecasts
-//              (house model at the month's normal temperature, cos³ solar),
+//              (house model at the outdoor temperature, learned from the
+//              house's own consumption; cos³ solar),
 //              EV + fuse budget, look-ahead, fuse guard, the Deye executing
 //              its program
 //
@@ -18,12 +19,15 @@
 //   P capacity_kwh max_charge_kw max_discharge_kw efficiency min_soc% max_soc% grid_max_kw
 //     ev_win_start_h ev_win_end_h ev_mode(0 battery,1 ev,2 auto,-1 firmware) fuse_amps solar_kwp
 //   D yyyy-mm-dd n                      (a day with n hourly rows follows)
-//   R spot_sek buy_sek load_kwh ev_kwh solar_kwh calc_net_sek calc_in_kwh calc_out_kwh
+//   R spot_sek buy_sek load_kwh ev_kwh solar_kwh calc_net_sek calc_in_kwh calc_out_kwh [temp_c|nan]
+// The outdoor temperature plays SMHI's forecast: the controller plans the house
+// load from it and learns the house from it, as on the NORVI.
 // stdout: one JSON object.
 #include <cstdio>
 #include <cstring>
 #include <cmath>
 #include <ctime>
+#include <cstdlib>
 #include <map>
 #include <string>
 #include <vector>
@@ -59,7 +63,8 @@ enum { RR_BATTERY_KR = 0, RR_IN = 3, RR_OUT = 4, RR_EV_KWH = 9, RR_EV_KR = 10, R
 struct Day {
     std::string date;
     int y = 0, m = 0, d = 0;
-    std::vector<float> spot, buy, load, ev, solar;
+    std::vector<float> spot, buy, load, ev, solar, temp;
+    bool has_temp = false;
     double calc_net = 0, calc_in = 0, calc_out = 0;
 };
 
@@ -110,6 +115,7 @@ int main() {
     std::vector<Day> days;
     char line[512];
     int rows_left = 0;
+    long temp_hours = 0;
     while (std::fgets(line, sizeof line, stdin)) {
         if (line[0] == 'P') {
             std::sscanf(line + 1, "%f %f %f %f %f %f %f %d %d %d %d %f", &cap, &mc, &md, &eff, &mn, &mx, &gm,
@@ -124,11 +130,15 @@ int main() {
             rows_left = n;
         } else if (line[0] == 'R' && !days.empty() && rows_left > 0) {
             float sp, buy, load, ev, sol, net, in, out;
-            if (std::sscanf(line + 1, "%f %f %f %f %f %f %f %f", &sp, &buy, &load, &ev, &sol, &net, &in, &out) != 8) continue;
+            char tbuf[32] = "nan";
+            if (std::sscanf(line + 1, "%f %f %f %f %f %f %f %f %31s", &sp, &buy, &load, &ev, &sol, &net, &in, &out,
+                            tbuf) < 8) continue;
+            const float tc = std::strtof(tbuf, nullptr);   // "nan" → NaN
             Day& d = days.back();
             if (static_cast<int>(d.spot.size()) < PLAN_MAX_SLOTS) {
                 d.spot.push_back(sp); d.buy.push_back(buy); d.load.push_back(load);
-                d.ev.push_back(ev); d.solar.push_back(sol);
+                d.ev.push_back(ev); d.solar.push_back(sol); d.temp.push_back(tc);
+                if (!std::isnan(tc)) { d.has_temp = true; temp_hours++; }
                 d.calc_net += net; d.calc_in += in; d.calc_out += out;
             }
             rows_left--;
@@ -187,10 +197,10 @@ int main() {
             b[1 * MS + i] = d.buy[i];
             b[2 * MS + i] = std::max(0.0f, d.load[i] - d.ev[i]);   // the controller plans its own EV
             b[3 * MS + i] = d.solar[i];
-            b[4 * MS + i] = NAN;
+            b[4 * MS + i] = d.temp[i];
             b[5 * MS + i] = d.ev[i];
         }
-        run_add_day(d.y, d.m, d.d, n, 60, 1, 0);
+        run_add_day(d.y, d.m, d.d, n, 60, 1, d.has_temp ? 1 : 0);
     }
     run_days(static_cast<int>(days.size()));
 
@@ -216,10 +226,10 @@ int main() {
 
     std::printf("{\"first\":\"%s\",\"last\":\"%s\",\"ev_daily_kwh\":%.2f,\"ev_mode\":%d,\"fuse_amps\":%d,"
                 "\"solar_kwp\":%.2f,\"grid_fee_high\":%.4f,\"grid_fee_low\":%.4f,\"segments\":%d,"
-                "\"base_load_kw\":%.2f,\"house_days\":%d,\"total\":",
+                "\"base_load_kw\":%.2f,\"house_days\":%d,\"temp_hours\":%ld,\"total\":",
                 days.front().date.c_str(), days.back().date.c_str(), ev_daily,
                 ev_mode >= 0 ? ev_mode : static_cast<int>(EV_PRIORITY_MODE), fuse, kwp, fee_high, fee_low,
-                MAX_PROG_SEGMENTS, BASE_LOAD_KW, run_house_days());
+                MAX_PROG_SEGMENTS, BASE_LOAD_KW, run_house_days(), temp_hours);
     print_agg(tot);
     std::printf(",\"years\":{");
     bool first = true;

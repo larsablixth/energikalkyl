@@ -149,13 +149,18 @@ def calculator_hourly(price_rows, cfg, tariff, solar=None):
 
 # ── Controller check ──────────────────────────────────────────────────────
 
-def run_check(hourly, battery, grid_max_kw, fuse_amps, ev_window=(18, 7), ev_mode=None, solar_kwp=0.0):
+def run_check(hourly, battery, grid_max_kw, fuse_amps, ev_window=(18, 7), ev_mode=None, solar_kwp=0.0,
+              temps=None):
     """Run the NORVI controller over the calculator's period.
 
     battery: capacity_kwh, max_charge_kw, max_discharge_kw, efficiency, min_soc,
     max_soc (fractions 0-1). fuse_amps: the main fuse the controller guards;
     grid_max_kw: the calculator's grid limit (for the planner references).
     solar_kwp: the panels, for the controller's own solar forecast.
+    temps: {date: [(hour, °C), ...]} outdoor temperature (weather.load_temperatures)
+    — the controller's SMHI forecast: it plans the house load from it and learns
+    the house from it, as on the NORVI. Without it the controller plans every
+    day at the month's normal temperature with its default house and never learns.
     ev_mode: "battery" / "ev" / "auto" / None (firmware default). Returns the
     check program's JSON (sums over the period and per year).
     Raises ControllerUnavailable.
@@ -167,11 +172,13 @@ def run_check(hourly, battery, grid_max_kw, fuse_amps, ev_window=(18, 7), ev_mod
         int(ev_window[0]), int(ev_window[1]), EV_MODES.get(ev_mode, -1), int(fuse_amps), float(solar_kwp or 0))]
     for date in sorted(hourly):
         h = hourly[date]
+        day_t = dict((temps or {}).get(date, []))
         lines.append(f"D {date} {len(h['hour'])}")
         for i in range(len(h["hour"])):
-            lines.append("R %g %g %g %g %g %g %g %g" % (
+            tc = day_t.get(h["hour"][i])
+            lines.append("R %g %g %g %g %g %g %g %g %s" % (
                 h["spot"][i], h["buy_ore"][i] / 100, h["load_kw"][i], h["ev_kw"][i], h["solar_kw"][i],
-                h["net_sek"][i], h["in_kwh"][i], h["out_kwh"][i]))
+                h["net_sek"][i], h["in_kwh"][i], h["out_kwh"][i], "nan" if tc is None else "%g" % tc))
     try:
         r = subprocess.run([str(exe)], input="\n".join(lines) + "\n", capture_output=True, text=True,
                            timeout=RUN_TIMEOUT_S)
@@ -224,6 +231,8 @@ def summarize(raw) -> dict:
     out["segments"] = raw.get("segments")
     out["base_load_kw"] = raw.get("base_load_kw")
     out["fuse_amps"] = raw.get("fuse_amps")
+    out["house_days"] = raw.get("house_days", 0)
+    out["temp_hours"] = raw.get("temp_hours", 0)
     return out
 
 

@@ -1543,6 +1543,16 @@ class TestControllerSummary:
         assert s["total_diff_pct"] == pytest.approx(-15)
 
 
+def _station_temps():
+    """Committed SMHI cache (Stockholm): {date: [(hour, °C), ...]}."""
+    import csv
+    out = {}
+    with open(os.path.join(os.path.dirname(__file__), ".weather_cache", "station_98230.csv")) as f:
+        for r in csv.DictReader(f):
+            out.setdefault(r["date"], []).append((int(r["hour"]), float(r["temp_c"])))
+    return out
+
+
 class TestControllerCheck:
     """The firmware planner reproduces the calculator (parity); the real controller runs the period."""
 
@@ -1564,9 +1574,11 @@ class TestControllerCheck:
         hourly, _ = cc.calculator_hourly(rows, cfg, tf, SolarConfig(capacity_kwp=10))
         raw = cc.run_check(hourly, {"capacity_kwh": 32, "max_charge_kw": 12.5, "max_discharge_kw": 12.5,
                                     "efficiency": cfg.efficiency, "min_soc": cfg.min_soc, "max_soc": cfg.max_soc},
-                           cfg.grid_max_kw, 25, solar_kwp=10)
+                           cfg.grid_max_kw, 25, solar_kwp=10, temps=_station_temps())
         s = cc.summarize(raw)
         assert s["days"] == 31
+        assert s["temp_hours"] == 31 * 24 - 1, "every hour got its outdoor temperature (DST day: 23 h)"
+        assert s["house_days"] > 0, "the controller learned the house from it"
         assert abs(s["steps"]["parity"]) < 0.005 * abs(s["kr"]["calc"])
         assert s["safe_min"] == 0, "the controller never fell back to its safe program"
         assert s["kr"]["ctrl"] > 0.5 * s["kr"]["calc"], s["kr"]
