@@ -149,6 +149,8 @@ def generate_report(
     lifetime_profit: float = 0,
     cycles_per_year: float = 0,
     best_tariff: str = "",
+    current_tariff: str = "",             # the household's tariff today ("" = not given)
+    tariff_switch_saving: tuple = None,   # (SEK/yr, cheapest tariff) from switching alone
     # Scenario comparison
     normal_years: list = None,
     normal_savings: float = 0,
@@ -267,8 +269,15 @@ def generate_report(
     pdf.key_value("Nätägare:", grid_operator)
     pdf.key_value("Huvudsäkring:", f"{fuse_amps:.0f}A, {phases}-fas")
     pdf.key_value("Rekommenderad tariff:", best_tariff)
+    if current_tariff:
+        pdf.key_value("Nuvarande tariff:", current_tariff)
     if solar_kwp > 0:
         pdf.key_value("Solceller:", f"{solar_kwp:.1f} kWp")
+    if tariff_switch_saving and tariff_switch_saving[0] >= 1:
+        pdf.body_text(
+            f"Att byta från {current_tariff} till {tariff_switch_saving[1]} sänker hushållets "
+            f"elräkning med {tariff_switch_saving[0]:,.0f} kr/år redan utan investering. Det är inte "
+            f"medräknat i investeringens lönsamhet nedan, som räknas mot den billigaste tariffen.")
     pdf.ln(3)
 
     # === INVESTMENT ===

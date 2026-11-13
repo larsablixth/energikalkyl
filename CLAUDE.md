@@ -30,6 +30,7 @@ The app follows a 6-step flow:
    - Spot prices: auto-syncs date range with loaded consumption data
    - **Session persistence**: opt-in only (`ENERGIKALKYL_PERSIST=1`, self-hosted). Off on the public deployment: one shared file leaked data between visitors
 2. **Configure setup** — grid operator (8 presets), fuse (simulated as output), solar, loads, heating model
+   - **Current tariff** ("Din nuvarande tariff", only for operators with several tariffs, default "Vet inte"): doesn't change the simulation. The result shows what switching alone saves (`tariff_switch_saving`: current tariff's `baseline_bill` − cheapest) and switch + investment vs today. Like the fuse downgrade tip, the switch saving is never counted in the investment result
    - **Solar data**: radio selector — PVGIS satellite (default, location-specific), CSV from inverter, or cos³ model. Tibber production auto-fetched if available.
    - Heating: calibrated from energy class OR manual Tibber Insights breakdown OR auto-fit from consumption
    - Calibrated data overrides energy class completely (house size irrelevant when calibrated)

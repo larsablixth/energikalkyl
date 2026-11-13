@@ -1431,5 +1431,32 @@ class TestExampleInputs:
             assert STRINGS[key]["sv"] and STRINGS[key]["en"], key
 
 
+
+class TestTariffSwitchSaving:
+    BILLS = {"V Tidstariff": 34744.0, "V Enkeltariff": 36707.0}
+
+    def test_saving_from_dearer_tariff(self):
+        from economics import tariff_switch_saving
+        saving, cheapest = tariff_switch_saving(self.BILLS, "V Enkeltariff")
+        assert saving == pytest.approx(1963.0)
+        assert cheapest == "V Tidstariff"
+
+    def test_already_cheapest(self):
+        from economics import tariff_switch_saving
+        assert tariff_switch_saving(self.BILLS, "V Tidstariff") == (0.0, "V Tidstariff")
+
+    def test_unknown_or_missing(self):
+        from economics import tariff_switch_saving
+        assert tariff_switch_saving(self.BILLS, "V Effekttariff") is None
+        assert tariff_switch_saving({}, "V Tidstariff") is None
+        assert tariff_switch_saving(None, "V Tidstariff") is None
+
+    def test_translations_exist(self):
+        from translations import STRINGS
+        for key in ("current_tariff_label", "current_tariff_unknown", "current_tariff_help",
+                    "current_tariff_keep", "current_tariff_change", "current_tariff_switch_saving",
+                    "assume_current_tariff"):
+            assert STRINGS[key]["sv"] and STRINGS[key]["en"], key
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

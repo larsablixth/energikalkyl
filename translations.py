@@ -2606,6 +2606,34 @@ STRINGS = {
         "en": 'Future prices are assumed equal to the historical period (see step 6 for other assumptions).',
     },
     "export_compare_button": {"sv": "Kör jämförelsen", "en": "Run comparison"},
+    "current_tariff_label": {"sv": "Din nuvarande tariff", "en": "Your current tariff"},
+    "current_tariff_unknown": {"sv": "Vet inte", "en": "Don't know"},
+    "current_tariff_help": {
+        "sv": "Tariffen du har idag (står på nätfakturan). Kalkylen testar ändå alla nätbolagets "
+              "tariffer; detta visar vad enbart ett tariffbyte sparar, utan investering.",
+        "en": "The tariff you have today (on your grid bill). The calculation tests all of the operator's "
+              "tariffs anyway; this shows what switching tariff alone saves, without investing.",
+    },
+    "current_tariff_keep": {
+        "sv": "Du har redan **{tariff}**, den tariff kalkylen väljer. Inget tariffbyte behövs.",
+        "en": "You already have **{tariff}**, the tariff the calculation picks. No tariff switch needed.",
+    },
+    "current_tariff_change": {
+        "sv": "Du har **{current}** idag; kalkylen förutsätter **{best}**.",
+        "en": "You have **{current}** today; the calculation assumes **{best}**.",
+    },
+    "current_tariff_switch_saving": {
+        "sv": "Bara att byta till {cheapest} sänker räkningen med **{saving:,.0f} kr/år redan utan "
+              "investering** — det är inte medräknat i investeringens lönsamhet. Byte + {label} "
+              "tillsammans: **{total:,.0f} kr/år lägre än idag** (år 1).",
+        "en": "Just switching to {cheapest} lowers the bill by **{saving:,.0f} SEK/yr without investing** "
+              "— this is not counted in the investment's profitability. Switch + {label} together: "
+              "**{total:,.0f} SEK/yr lower than today** (year 1).",
+    },
+    "assume_current_tariff": {
+        "sv": "Din nuvarande tariff: {tariff}. Ett tariffbyte kräver ingen investering och räknas därför inte in i lönsamheten.",
+        "en": "Your current tariff: {tariff}. A tariff switch needs no investment, so it is not counted in the profitability.",
+    },
     "scen_export_header": {
         "sv": "Sälja eller använda själv — i varje framtidsscenario",
         "en": "Sell or use yourself — in each future scenario",

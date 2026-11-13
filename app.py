@@ -78,7 +78,8 @@ from report import generate_report
 from economics import (solar_direct_use, effekt_savings, baseline_export_revenue, baseline_bill,
                        loan_schedule,
                        solar_flows, standby_cost_per_year, yearly_benefit, lifetime_benefit,
-                       payback_years, value_at_level, scenario_bat_part)
+                       payback_years, value_at_level, scenario_bat_part,
+                       tariff_switch_saving)
 from example_inputs import (EXAMPLE, EV_LOAD, POOL_HEAT_PUMP_LOAD, HOT_WATER_LOAD,
                             default_battery_rows, untouched_examples)
 from app_state import save_state, load_state
@@ -806,6 +807,14 @@ with col_sys3:
                                   help=t("energy_tax_help"))
     available_tariffs = op_info["tariffs"]
     has_effekt = "Effekttariff" in available_tariffs and op_info.get("effekttariff")
+    # The household's tariff today. Doesn't change the simulation (all tariffs are tested);
+    # it lets the result show what switching tariff alone saves, which needs no investment.
+    current_tariff = None
+    if len(available_tariffs) > 1:
+        _ct = st.selectbox(t("current_tariff_label"), ["unknown"] + list(available_tariffs),
+                           format_func=lambda k: t("current_tariff_unknown") if k == "unknown" else k,
+                           key=f"current_tariff_{grid_operator}", help=t("current_tariff_help"))
+        current_tariff = None if _ct == "unknown" else _ct
     _fuse_fee_yr = op_fuse_fees.get(fuse_amps, 0)
     _fuse_list = ", ".join(f"{f:.0f}A" for f in fuse_options)
     if has_effekt:
@@ -1628,7 +1637,7 @@ def _inputs_signature():
     _parts = [
         efficiency, cycle_life, bat_fade_pct, standby_w, use_solar, solar_kwp, export_factor, export_fee, _export_arb_kwh,
         _solar_source, sorted((solar_config.real_monthly_kwh or {}).items()) if solar_config else None,
-        grid_operator, fuse_amps, phases, fuse_overcurrent_factor, energy_tax,
+        grid_operator, current_tariff, fuse_amps, phases, fuse_overcurrent_factor, energy_tax,
         peak_rate, offpeak_rate, flat_rate,
         (effekt_rate, effekt_energy, effekt_top_n) if has_effekt else None,
         base_load, st.session_state.get("scheduled_loads"), st.session_state.get("flexible_loads"),
@@ -2038,6 +2047,7 @@ if st.button(t("run_simulation"), type="primary", use_container_width=True):
         _addr_snap = selected_city if use_heating_model else ""
     st.session_state["sim_inputs"] = {
         "grid_operator": grid_operator, "fuse_amps": fuse_amps, "phases": phases,
+        "current_tariff": current_tariff,
         "fuse_downgrade_tip": _downgrade_tip,
         "fuse_overcurrent_factor": fuse_overcurrent_factor,
         "use_solar": use_solar, "solar_kwp": solar_kwp if use_solar else 0,
@@ -2233,6 +2243,8 @@ if "all_results" in st.session_state:
         _ass.append(t("assume_grid").format(operator=grid_operator, fuse=f"{fuse_amps:.0f}", phases=phases))
         if best.get("n_tariffs", 1) > 1:
             _ass.append(t("assume_tariff_reference").format(tariff=best["ref_tariff"]))
+            if _si.get("current_tariff"):
+                _ass.append(t("assume_current_tariff").format(tariff=_si["current_tariff"]))
         _bp = "; ".join(f"{_n} {_p:,.0f} kr" for _n, _p in _si.get("battery_prices", []))
         _ass.append(t("assume_battery_prices").format(prices=_bp + _ex_mark("battery_prices"),
                                                       install=f"{bat_install:,.0f}",
@@ -2294,6 +2306,22 @@ if "all_results" in st.session_state:
 
     # Tariff recommendation (from best size)
     st.info(t("best_tariff_info").format(tariff=best['best_tariff']))
+    # The household's current tariff: what switching alone saves (no investment, so a tip,
+    # never part of the investment result) and the total change versus today's bill.
+    _cur_tf = _si.get("current_tariff")
+    _sw = (tariff_switch_saving(best.get("baseline_bills"), f"{_si['grid_operator']} {_cur_tf}")
+           if _cur_tf else None)
+    if _sw is not None:
+        _sw_saving, _sw_cheapest = _sw
+        if best["best_tariff"].endswith(" " + _cur_tf) and _sw_saving < 1:
+            st.info(t("current_tariff_keep").format(tariff=_cur_tf))
+        else:
+            _msg = t("current_tariff_change").format(current=_cur_tf, best=best["best_tariff"])
+            if _sw_saving >= 1:
+                _msg += " " + t("current_tariff_switch_saving").format(
+                    cheapest=_sw_cheapest, saving=_sw_saving,
+                    label=best["label"], total=_sw_saving + best["net_benefit_yr"])
+            st.info(_msg)
 
     # === EXPORT COMPARISON ===
     # Show what happens with vs without export for the recommended battery
@@ -2542,6 +2570,10 @@ if "all_results" in st.session_state:
                 lifetime_profit=best["profit_life"],
                 cycles_per_year=best["cycles_yr"],
                 best_tariff=best["best_tariff"],
+                current_tariff=_si.get("current_tariff") or "",
+                tariff_switch_saving=(tariff_switch_saving(
+                    best.get("baseline_bills"), f"{_si['grid_operator']} {_si['current_tariff']}")
+                    if _si.get("current_tariff") else None),
                 loan_rate=loan_rate,
                 loan_years=loan_years,
                 monthly_loan_cost=_report_loan_cost,
