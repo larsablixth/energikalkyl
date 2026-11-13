@@ -2199,12 +2199,14 @@ def _run_controller_check(res):
     cfg = res["config"]
     try:
         hourly, _ = _battery_hourly(res)
+        _sol = st.session_state.get("solar_cfg")
         raw = ctrl_check.run_check(
             hourly,
             {"capacity_kwh": cfg.capacity_kwh, "max_charge_kw": cfg.max_charge_kw,
              "max_discharge_kw": cfg.max_discharge_kw, "efficiency": cfg.efficiency,
              "min_soc": cfg.min_soc, "max_soc": cfg.max_soc},
-            cfg.grid_max_kw, ev_window=_ev_window(cfg))
+            cfg.grid_max_kw, round(cfg.fuse_amps), ev_window=_ev_window(cfg),
+            solar_kwp=getattr(_sol, "capacity_kwp", 0.0) if _sol is not None else 0.0)
         return {"summary": ctrl_check.summarize(raw), "label": res["label"]}
     except ctrl_check.ControllerUnavailable as e:
         return {"error": str(e)}
@@ -2605,9 +2607,9 @@ if "all_results" in st.session_state:
         )
 
     # === CONTROLLER CHECK ===
-    # The recommended battery's hours through a real controller's planner (the NORVI
-    # controller firmware, controller/): Deye program, shared fuse budget with the EV,
-    # forecast. Run on request (the first run compiles the firmware code).
+    # The recommended battery's period through the NORVI's own controller (firmware
+    # controller.cpp + the simulator's period runner, controller/), minute by minute in
+    # a simulated house. Run on request (the first run compiles the firmware code).
     st.subheader(t("ctrl_header"))
     st.caption(t("ctrl_caption"))
     if best["config"].export_price_factor > 0:
@@ -2635,8 +2637,8 @@ if "all_results" in st.session_state:
             _steps = [
                 (t("ctrl_step_parity"), _cs["steps"]["parity"]),
                 (t("ctrl_step_program").format(n=_cs["segments"]), _cs["steps"]["program"]),
-                (t("ctrl_step_ev_fuse").format(reserve=_cs["base_load_kw"]), _cs["steps"]["ev_fuse"]),
-                (t("ctrl_step_forecast"), _cs["steps"]["forecast"]),
+                (t("ctrl_step_controller").format(reserve=_cs["base_load_kw"], fuse=_cs["fuse_amps"]),
+                 _cs["steps"]["controller"]),
             ]
             if _cs["ev"]["calc_kwh_yr"] > 0:
                 _steps.append((t("ctrl_step_ev_cost").format(

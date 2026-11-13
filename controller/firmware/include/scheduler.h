@@ -20,7 +20,7 @@ struct SlotCost {
 using HourCost = SlotCost;
 
 // ── Day schedule ────────────────────────────────────────────────────
-// Variable resolution: 24 slots (hourly), 96 (15-min), or 1440 (1-min).
+// Variable resolution: 24 slots (hourly) or 96 (15-min); up to MAX_SLOTS.
 // slot_count and slot_duration_min describe the actual resolution.
 struct DaySchedule {
     SlotCost costs[MAX_SLOTS]  = {};

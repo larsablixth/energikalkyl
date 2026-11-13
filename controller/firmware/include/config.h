@@ -2,8 +2,15 @@
 #include <cstdint>
 
 // ── Slot Resolution ───────────────────────────────────────────────────────
-// Price and scheduling granularity. ENTSO-E publishes 15-min prices (96/day),
-// moving to 1-min (1440/day). All arrays sized to MAX_SLOTS for worst case.
+// Price and scheduling granularity. Day-ahead prices are 15-minute (96 slots
+// a day; 92 or 100 on the two daylight-saving days) or hourly. All per-slot
+// arrays are sized to MAX_SLOTS.
+//
+// MAX_SLOTS was 1440 (1-minute prices, which the day-ahead market does not
+// publish). That made every per-slot array 14× larger than needed and the
+// firmware did not fit in the ESP32's static RAM (link error: .dram0.bss
+// overflowed by ~42 KB). A price series with more than MAX_SLOTS slots is
+// rejected as "no prices" (entsoe_parse_day), never truncated.
 //
 // Why constexpr instead of #define?
 //   constexpr is a real typed constant — the compiler checks types, it
@@ -11,7 +18,7 @@
 //   textual find-and-replace by the preprocessor — no type checking, no
 //   scope, and it can cause subtle bugs (e.g. #define X 1+2 then X*3 = 7).
 //   We keep #define only for strings and GPIO pins (Arduino macros need them).
-constexpr int MAX_SLOTS            = 1440;  // 1-minute resolution (worst case)
+constexpr int MAX_SLOTS            = 100;   // 15-min day incl. the 25-hour DST day
 constexpr int DEFAULT_SLOT_MINUTES = 60;    // fallback when resolution unknown
 
 // ── Network ────────────────────────────────────────────────────────────────
@@ -23,6 +30,10 @@ constexpr uint8_t ETH_MAC[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x01};
 
 // Strings stay as #define — constexpr const char* works in C++14 but
 // some ESP-IDF APIs expect string literals, and #define is simpler here.
+// The addresses below are the BUILT-IN values. They can be changed without
+// rebuilding: controller_ip / gateway_ip / subnet_mask / dns_ip, deye_host,
+// deye_port, goe_host and p1_host in /settings.txt on the SD card
+// (settings.h, settings.example.txt).
 #define CONTROLLER_IP    "192.168.1.50"
 #define GATEWAY_IP       "192.168.1.1"
 #define SUBNET_MASK      "255.255.255.0"
@@ -32,9 +43,21 @@ constexpr uint8_t ETH_MAC[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x01};
 #define ENTSOE_TOKEN     "YOUR_ENTSOE_TOKEN"
 #define ENTSOE_DOMAIN    "10Y1001A1001A47J"   // SE3
 // ENTSO-E is HTTPS-only. TLS via ESP_SSLClient (network_https_get), root CA
-// in include/entsoe_ca.h (must be filled in — fails closed until then).
+// in include/entsoe_ca.h (fails closed if the server's chain does not match).
 #define ENTSOE_HOST      "web-api.tp.entsoe.eu"
 constexpr int ENTSOE_PORT = 443;
+
+// ── SMHI temperature forecast (for the house load model) ───────────────────
+// Fetched together with tomorrow's prices (13:30) and for today at start-up.
+// HTTPS; root CA in include/smhi_ca.h. If the fetch fails the plan uses the
+// month's normal temperature (HOUSE_NORMAL_TEMP_C).
+constexpr bool  SMHI_ENABLED = true;
+#define SMHI_HOST        "opendata-download-metfcst.smhi.se"
+constexpr int   SMHI_PORT    = 443;
+// <-- YOUR location in decimal degrees (must be inside SMHI's forecast area:
+// Sweden and its surroundings, otherwise SMHI answers "out of bounds").
+constexpr float SMHI_LAT     = 59.3293f;   // Stockholm
+constexpr float SMHI_LON     = 18.0686f;
 
 // ── Money conventions (must match energikalkyl batteri.py / tariff.py) ────
 // All money in SEK/kWh.
@@ -166,12 +189,90 @@ constexpr float BATTERY_EFFICIENCY      = 0.90f;   // round-trip
 // No "charge anyway" fallback: a day without a profitable pair (or a slot
 // whose TOTAL buying cost is < 0) does not grid-charge at all.
 
+// ── Looking ahead to tomorrow ──────────────────────────────────────────────
+// The day is planned at midnight knowing nothing about tomorrow. When
+// tomorrow's prices arrive (SCHEDULE_HOUR:MINUTE) the rest of today is
+// re-planned with the value of energy still in the battery at midnight
+// (bat_end_tranches): charge late today if tomorrow is dearer, and do not
+// empty the battery into a cheap evening before an expensive morning.
+// The program in the inverter is only replaced if the new one is expected
+// to be worth at least PLAN_LOOKAHEAD_MIN_GAIN_SEK more for the rest of the
+// day — most days it is not, and the inverter is then left alone.
+constexpr bool  PLAN_LOOKAHEAD_ENABLED      = true;
+constexpr float PLAN_LOOKAHEAD_MIN_GAIN_SEK = 1.0f;
+
 // ── Expected house load and solar (planning inputs) ───────────────────────
-// Load behind the Deye (what the battery can serve), kW per LOCAL hour.
-// Default: flat BASE_LOAD_KW (energikalkyl base_load_kw). Replace with a
-// measured profile, or feed a forecast via PipelineIO::forecast_load_kwh
-// (the browser simulator does). The EV (go-e on its own circuit) is NOT in
-// it — see EV section.
+// Load behind the Deye (what the battery can serve). The EV (go-e on its own
+// circuit) is NOT in it — see EV section. Sources, first one available wins:
+//   1. PipelineIO::forecast_load_kwh   an explicit load forecast (simulator)
+//   2. the house model below at the forecast outdoor temperature
+//      (PipelineIO::forecast_temp_c)
+//   3. the house model below at the normal temperature of the month
+//   4. HOUSE_LOAD_PROFILE_KW           only if HOUSE_LOAD_USE_WEATHER_MODEL
+//                                      is false (the old behaviour)
+//
+// House model (house_load.h — energikalkyl heating.py): the load follows the
+// outdoor temperature. These numbers are a CALIBRATION fitted from old
+// consumption and weather data. They are energikalkyl's values for the
+// reference house (fitted from 2024+2025 Tibber data); re-fit and replace
+// them for another house or after changes to it.
+constexpr bool  HOUSE_LOAD_USE_WEATHER_MODEL = true;
+// Planning margin: the plan assumes this many times the house model's
+// expected load. 1.0 = exactly the forecast. In the 3-year backtest 1.25
+// earned about 80-100 kr more per year for 11-14 % more battery cycling —
+// about 0.15-0.19 kr per extra kWh, just under MIN_SPREAD_SEK, hence 1.0
+// here. Can be changed without rebuilding: load_plan_factor in
+// /settings.txt on the SD card (settings.h, settings.example.txt).
+constexpr float HOUSE_LOAD_PLAN_FACTOR = 1.0f;
+#define SETTINGS_FILE        "/settings.txt"
+constexpr float HOUSE_BASE_LOAD_KW     = 0.68f;   // non-heating load, kW
+constexpr float HOUSE_DHW_KWH_PER_DAY  = 6.0f;    // hot water electricity, kWh/day
+constexpr float HOUSE_H_LOSS_KW_PER_C  = 0.160f;  // heat loss, kW thermal per °C
+constexpr float HOUSE_T_INDOOR_C       = 21.0f;   // indoor setpoint
+constexpr float HOUSE_HP_COP_BASE      = 3.4f;    // heat pump COP at 0 °C outdoor
+constexpr float HOUSE_HP_COP_SLOPE     = 0.056f;  // COP change per °C outdoor
+constexpr float HOUSE_HP_COP_MIN       = 1.0f;
+constexpr float HOUSE_HP_MAX_HEAT_KW   = 6.0f;    // heat pump max heat output
+constexpr float HOUSE_ELPATRON_KW      = 3.0f;    // supplementary electric heater
+// Normal outdoor temperature per month (Jan..Dec), °C — used when no
+// temperature forecast is available. Mean of 2023-01..2026-03 at SMHI
+// Stockholm-Arlanda (energikalkyl .weather_cache/arlanda_temp.csv).
+constexpr float HOUSE_NORMAL_TEMP_C[12] = {
+    -2.4f, -2.6f, 1.5f, 4.6f, 11.0f, 15.4f, 16.9f, 15.3f, 13.0f, 6.4f, 1.5f, -0.5f};
+// Daily habit: kW above (+) or below (−) the model for each LOCAL hour
+// 00..23, summing to zero over the day (evening cooking, night-time low…).
+// All zero = the same load every hour. sim/calibrate_house prints this row
+// from old data; a controller that has learned the house uses its own.
+constexpr float HOUSE_HOUR_OFFSET_KW[24] = {
+    0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+    0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+constexpr float HOUSE_LOAD_MIN_KW = 0.1f;   // an expected load is never below this
+
+// Learning the house from measurements (house_learn.h). Every user's house
+// and habits differ: either calibrate the numbers above from old data
+// (sim/calibrate_house), or let the controller learn them. The learned
+// values replace HOUSE_BASE_LOAD_KW / HOUSE_H_LOSS_KW_PER_C / the hour
+// offsets once enough days have been seen.
+// The controller measures the house itself: the Deye's load power about once
+// a minute (left out while the EV charges when the go-e is behind the Deye
+// CT), with the SMHI forecast as that day's temperature. Each finished day
+// is added to the fit and the result saved to the SD card.
+constexpr bool  HOUSE_LEARN_ENABLED       = true;
+constexpr int   HOUSE_SAMPLE_INTERVAL_S   = 60;     // seconds between load readings
+#define HOUSE_LEARN_FILE     "/house.bin"            // learned state on the SD card
+constexpr int   HOUSE_LEARN_MIN_DAYS      = 14;     // days before anything is used
+constexpr float HOUSE_LEARN_MEMORY_DAYS   = 730.0f; // old days fade over ~2 years
+// Heat loss is only fitted once the days differ enough in temperature:
+// std-dev of the daily Σ ΔT/COP [°C·h]. 15 ≈ ±2 °C between days.
+constexpr float HOUSE_LEARN_MIN_X_SPREAD  = 15.0f;
+constexpr float HOUSE_LEARN_H_LOSS_MIN    = 0.02f;  // kW/°C: accepted range of a fit
+constexpr float HOUSE_LEARN_H_LOSS_MAX    = 0.60f;
+constexpr float HOUSE_LEARN_BASE_MIN_KW   = 0.10f;
+constexpr float HOUSE_LEARN_BASE_MAX_KW   = 5.00f;
+
+// Flat profile, kW per LOCAL hour: used only when HOUSE_LOAD_USE_WEATHER_MODEL
+// is false. (BASE_LOAD_KW above remains the fuse reserve for the house and is
+// not changed by the house model.)
 constexpr float HOUSE_LOAD_PROFILE_KW[24] = {
     3.0f, 3.0f, 3.0f, 3.0f, 3.0f, 3.0f, 3.0f, 3.0f, 3.0f, 3.0f, 3.0f, 3.0f,
     3.0f, 3.0f, 3.0f, 3.0f, 3.0f, 3.0f, 3.0f, 3.0f, 3.0f, 3.0f, 3.0f, 3.0f};
@@ -337,8 +438,11 @@ constexpr uint16_t NTP_LOCAL_UDP_PORT  = 8888;            // our source port
 constexpr uint32_t NTP_RESYNC_S        = 6UL * 3600UL;   // every 6 h
 constexpr uint32_t NTP_TIMEOUT_MS      = 2000;
 // System time before this year = not set (RTC lost power, no NTP) → the
-// controller refuses to plan and holds the safe program.
-constexpr int      TIME_MIN_VALID_YEAR = 2025;
+// controller refuses to plan and holds the safe program. An unset clock reads
+// 1970 (ESP32) or 2000 (DS3231), so 2020 catches it and still lets the
+// simulator / energikalkyl replay price history from 2020 on (was 2025, which
+// held every 2023-2024 backtest day on the safe program).
+constexpr int      TIME_MIN_VALID_YEAR = 2020;
 
 // ── Display ────────────────────────────────────────────────────────────────
 #define OLED_SDA_PIN     21

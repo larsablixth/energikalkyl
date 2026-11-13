@@ -2609,16 +2609,17 @@ STRINGS = {
     # --- Controller check (controller_check.py) ---
     "ctrl_header": {"sv": "Klarar ett riktigt styrsystem det här?", "en": "Can a real controller do this?"},
     "ctrl_caption": {
-        "sv": "Kalkylen antar att batteriet gör exakt det dygnsplanen säger. Ett riktigt styrsystem måste "
-              "skriva planen som ett program i växelriktaren (högst sex steg per dygn), dela säkringen med "
-              "elbilen med en reserv för huset, och planera efter en prognos i stället för facit. Kontrollen kör "
-              "samma timmar genom planeringskoden i ett riktigt styrsystem (NORVI-styrningen, öppen källkod i "
-              "energikalkyl) och visar hur mycket som går förlorat på vägen.",
-        "en": "The calculation assumes the battery does exactly what the day plan says. A real controller has to "
-              "write the plan as an inverter program (at most six steps per day), share the fuse with the EV "
-              "keeping a reserve for the house, and plan from a forecast instead of the actual day. The check runs "
-              "the same hours through a real controller's planning code (the NORVI controller, open source in "
-              "energikalkyl) and shows how much is lost on the way.",
+        "sv": "Kalkylen antar att batteriet gör exakt det dygnsplanen säger, med facit i hand. Kontrollen kör i "
+              "stället ett riktigt styrsystem (NORVI-styrningen, öppen källkod i energikalkyl) genom samma period, "
+              "minut för minut i ett simulerat hus: det hämtar morgondagens priser kl 13:30, gissar själv husets "
+              "förbrukning och solen, skriver ett program i växelriktaren (högst sex steg per dygn), delar "
+              "säkringen med elbilen och vaktar den. Resultatet visar hur mycket som går förlorat på vägen.",
+        "en": "The calculation assumes the battery does exactly what the day plan says, knowing the answer in "
+              "advance. The check instead runs a real controller (the NORVI controller, open source in "
+              "energikalkyl) through the same period, minute by minute in a simulated house: it fetches "
+              "tomorrow's prices at 13:30, forecasts the house load and the sun itself, writes an inverter "
+              "program (at most six steps per day), shares the fuse with the EV and guards it. The result shows "
+              "how much is lost on the way.",
     },
     "ctrl_export_mode": {
         "sv": "Kontrollen finns bara för nollexport: styrsystemet säljer inte el från batteriet.",
@@ -2626,8 +2627,8 @@ STRINGS = {
     },
     "ctrl_button": {"sv": "Kör kontrollen", "en": "Run the check"},
     "ctrl_running": {
-        "sv": "Kör styrsystemets planering dag för dag (första gången kompileras koden, upp till en minut)...",
-        "en": "Running the controller's planning day by day (the first time compiles the code, up to a minute)...",
+        "sv": "Kör styrsystemet genom perioden (första gången kompileras koden, upp till en minut)...",
+        "en": "Running the controller through the period (the first time compiles the code, up to a minute)...",
     },
     "ctrl_unavailable": {
         "sv": "Kontrollen kunde inte köras här: {error}",
@@ -2647,10 +2648,12 @@ STRINGS = {
                          "en": "Same planning as the calculation (should be 0)"},
     "ctrl_step_program": {"sv": "Planen som växelriktarprogram (högst {n} steg per dygn)",
                           "en": "The plan as an inverter program (at most {n} steps per day)"},
-    "ctrl_step_ev_fuse": {"sv": "Elbil och batteri delar säkringen ({reserve:.1f} kW reserv för huset)",
-                          "en": "EV and battery share the fuse ({reserve:.1f} kW reserve for the house)"},
-    "ctrl_step_forecast": {"sv": "Planerar efter gårdagens förbrukning och sol (prognos)",
-                           "en": "Plans from yesterday's consumption and solar (forecast)"},
+    "ctrl_step_controller": {
+        "sv": "Det riktiga styrsystemet: egen prognos, elbil och batteri delar {fuse} A-säkringen "
+              "({reserve:.1f} kW reserv för huset), säkringsvakt, växelriktaren kör programmet",
+        "en": "The real controller: its own forecast, EV and battery share the {fuse} A fuse "
+              "({reserve:.1f} kW reserve for the house), fuse guard, the inverter runs the program",
+    },
     "ctrl_step_ev_cost": {"sv": "Elbilens laddning ({calc:.2f} → {ctrl:.2f} kr/kWh)",
                           "en": "EV charging ({calc:.2f} → {ctrl:.2f} SEK/kWh)"},
     "ctrl_step_total": {"sv": "Summa", "en": "Total"},
@@ -2663,11 +2666,11 @@ STRINGS = {
     "ctrl_col_ctrl": {"sv": "Styrsystemet, kr/år", "en": "Controller, SEK/yr"},
     "ctrl_col_diff": {"sv": "Skillnad", "en": "Difference"},
     "ctrl_notes": {
-        "sv": "Styrsystemets kod: NORVI-styrningen version {version}. Ingår inte: växelriktarens fysik och "
-              "säkringsvakten (finns i simulatorn energy-scheduler-sim), effektavgift och export. Skillnaden räknas "
-              "på batteriets och elbilens el; den läggs på kalkylens besparing år 1.",
-        "en": "Controller code: NORVI controller version {version}. Not included: the inverter's physics and the "
-              "fuse guard (in the energy-scheduler-sim simulator), power tariff and export. The difference is "
+        "sv": "Styrsystemets kod: NORVI-styrningen version {version}, samma kod som i simulatorn "
+              "energy-scheduler-sim. Ingår inte: effektavgift och export (styrsystemet säljer inte). Skillnaden "
+              "räknas på batteriets och elbilens el; den läggs på kalkylens besparing år 1.",
+        "en": "Controller code: NORVI controller version {version}, the same code as in the energy-scheduler-sim "
+              "simulator. Not included: power tariff and export (the controller doesn't sell). The difference is "
               "counted on the battery's and the EV's electricity and applied to the calculation's year-1 saving.",
     },
     "ctrl_ev_note": {

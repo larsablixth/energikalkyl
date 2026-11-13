@@ -2,22 +2,23 @@
 Controller check and energy flows for the recommended battery (pure, no Streamlit).
 
 Controller check: the calculator assumes a battery that does exactly what the
-day-ahead plan says. A real controller (the NORVI controller firmware, copied
-into controller/ by controller/sync.sh) has to express the plan as a Deye
-inverter program of at most six points per day, shares the fuse with the EV
-and keeps a reserve for the house, and plans from a forecast instead of the
-actual day. run_check() sends the calculator's own hourly inputs through the
-firmware's planner, one day at a time, in a separate process
-(controller/check_main.cpp) and summarize() turns the result into kr/yr steps:
+day-ahead plan says. run_check() runs the NORVI's own controller (the firmware's
+controller.cpp, copied into controller/ by controller/sync.sh together with the
+simulator's period runner) over the calculator's period, minute by minute, in a
+simulated house, inverter, car charger and meter — in a separate process
+(controller/check_main.cpp). The controller does what it does on the real
+NORVI: fetches tomorrow's prices at 13:30, forecasts the house load and the
+sun itself, writes an inverter program of at most six points per day, shares
+the fuse with the EV, looks ahead to tomorrow and guards the fuse.
+summarize() turns the result into kr/yr steps:
 
     calculator → firmware planner, same inputs (parity, ≈ 0)
-               → Deye program (≤ 6 points per day)
-               → EV + fuse budget (EV planned by the controller, house reserve)
-               → forecast (yesterday's load and solar)
+               → the plan as a Deye program (≤ 6 points per day)
+               → the real controller (own forecasts, EV + fuse budget,
+                 look-ahead, fuse guard, the inverter executing its program)
 
 The same check runs in the energy-scheduler-sim repository ("Validate
-calculator"), which also simulates the inverter's physics and the fuse guard;
-that last step is not part of this check.
+calculator", `make validate`).
 
 Energy flows: calculator_hourly() gives the recommended battery's hourly
 values (also used by the "Export for simulator" JSON), energy_flows() the
@@ -43,7 +44,7 @@ COMPILE_TIMEOUT_S = 300
 RUN_TIMEOUT_S = 300
 
 # Order of the chains in the check program's output
-CHAINS = ("calc", "ideal", "progperf", "ctrlperf", "ctrlmodel")
+CHAINS = ("calc", "ideal", "progperf", "ctrl")
 EV_MODES = {"battery": 0, "ev": 1, "auto": 2}
 
 
@@ -61,7 +62,7 @@ def _sources() -> list[Path]:
 
 
 def firmware_version() -> str:
-    """The firmware commit the copied planner comes from (controller/VERSION)."""
+    """The firmware commit the copied controller comes from (controller/VERSION)."""
     try:
         for line in (CONTROLLER_DIR / "VERSION").read_text().splitlines():
             if line.startswith("firmware "):
@@ -88,7 +89,7 @@ def build_binary() -> Path:
     if not cxx:
         raise ControllerUnavailable("no C++ compiler (g++) installed")
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
-    srcs = ([CONTROLLER_DIR / "sim" / "batch.cpp"]
+    srcs = (sorted((CONTROLLER_DIR / "sim").glob("*.cpp"))
             + sorted((CONTROLLER_DIR / "firmware" / "src").glob("*.cpp"))
             + [CONTROLLER_DIR / "check_main.cpp"])
     fd, tmp = tempfile.mkstemp(prefix=out.name + ".", dir=BUILD_DIR)
@@ -148,19 +149,22 @@ def calculator_hourly(price_rows, cfg, tariff, solar=None):
 
 # ── Controller check ──────────────────────────────────────────────────────
 
-def run_check(hourly, battery, grid_max_kw, ev_window=(18, 7), ev_mode=None, persistence=True):
-    """Run the firmware planner on the calculator's hourly inputs.
+def run_check(hourly, battery, grid_max_kw, fuse_amps, ev_window=(18, 7), ev_mode=None, solar_kwp=0.0):
+    """Run the NORVI controller over the calculator's period.
 
     battery: capacity_kwh, max_charge_kw, max_discharge_kw, efficiency, min_soc,
-    max_soc (fractions 0-1). ev_mode: "battery" / "ev" / "auto" / None (firmware
-    default). Returns the check program's JSON (sums over the period and per year).
+    max_soc (fractions 0-1). fuse_amps: the main fuse the controller guards;
+    grid_max_kw: the calculator's grid limit (for the planner references).
+    solar_kwp: the panels, for the controller's own solar forecast.
+    ev_mode: "battery" / "ev" / "auto" / None (firmware default). Returns the
+    check program's JSON (sums over the period and per year).
     Raises ControllerUnavailable.
     """
     exe = build_binary()
-    lines = ["P %g %g %g %g %g %g %g %d %d %d %d" % (
+    lines = ["P %g %g %g %g %g %g %g %d %d %d %d %g" % (
         battery["capacity_kwh"], battery["max_charge_kw"], battery["max_discharge_kw"],
         battery["efficiency"], battery["min_soc"] * 100, battery["max_soc"] * 100, grid_max_kw,
-        int(ev_window[0]), int(ev_window[1]), EV_MODES.get(ev_mode, -1), 1 if persistence else 0)]
+        int(ev_window[0]), int(ev_window[1]), EV_MODES.get(ev_mode, -1), int(fuse_amps), float(solar_kwp or 0))]
     for date in sorted(hourly):
         h = hourly[date]
         lines.append(f"D {date} {len(h['hour'])}")
@@ -197,14 +201,17 @@ def summarize(raw) -> dict:
         calc_per = ev["calc_kr"] / ev["calc_kwh"] if ev["calc_kwh"] > 0 else 0.0
         ctrl_per = ev["ctrl_kr"] / ev["ctrl_kwh"] if ev["ctrl_kwh"] > 0 else 0.0
         ev_extra = per_year(ev["calc_kwh"] * (ctrl_per - calc_per), d) if ev["calc_kwh"] > 0 else 0.0
-        bat_diff = kr["ctrlmodel"] - kr["calc"]
+        bat_diff = kr["ctrl"] - kr["calc"]
         total = bat_diff - ev_extra
         return {
             "days": d, "kr": kr,
             "steps": {"parity": kr["ideal"] - kr["calc"], "program": kr["progperf"] - kr["ideal"],
-                      "ev_fuse": kr["ctrlperf"] - kr["progperf"], "forecast": kr["ctrlmodel"] - kr["ctrlperf"]},
+                      "controller": kr["ctrl"] - kr["progperf"]},
             "ev": {"calc_kwh_yr": per_year(ev["calc_kwh"], d), "ctrl_kwh_yr": per_year(ev["ctrl_kwh"], d),
-                   "calc_kr_kwh": calc_per, "ctrl_kr_kwh": ctrl_per, "extra_kr_yr": ev_extra},
+                   "calc_kr_kwh": calc_per, "ctrl_kr_kwh": ctrl_per, "extra_kr_yr": ev_extra,
+                   "unmet_kwh_yr": per_year(ev.get("unmet_kwh", 0.0), d)},
+            "safe_min": a.get("safe_min", 0.0),
+            "guard_events": a.get("guard_events", 0.0),
             "bat_diff_yr": bat_diff,
             "total_diff_yr": total,
             "total_diff_pct": 100.0 * total / abs(kr["calc"]) if abs(kr["calc"]) > 1e-9 else 0.0,
@@ -216,6 +223,7 @@ def summarize(raw) -> dict:
     out["ev_daily_kwh"] = raw.get("ev_daily_kwh", 0.0)
     out["segments"] = raw.get("segments")
     out["base_load_kw"] = raw.get("base_load_kw")
+    out["fuse_amps"] = raw.get("fuse_amps")
     return out
 
 

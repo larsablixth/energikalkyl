@@ -2,9 +2,8 @@
  * scheduler.cpp — Battery charge scheduler (variable slot resolution)
  *
  * Decides which time slots to charge the battery based on spot prices
- * and Vattenfall grid fees. Supports 24 (hourly), 96 (15-min), or
- * 1440 (1-min) slots per day — resolution is determined by the
- * ENTSO-E price data.
+ * and Vattenfall grid fees. Supports 24 (hourly) or 96 (15-min) slots per
+ * day, up to MAX_SLOTS — resolution is determined by the ENTSO-E price data.
  *
  * Algorithm:
  * Legacy cheapest-N API (scheduler_compute_day). The controller plans with
@@ -22,6 +21,7 @@
 #include "scheduler.h"
 #include "tariff.h"
 #include "config.h"
+#include "plant.h"
 #include "time_local.h"
 #include <cmath>
 #include <cstring>
@@ -166,9 +166,9 @@ void scheduler_compute_day(const float* prices, int n_prices,
     out->spread = out->avg_discharge_cost - out->avg_charge_cost;
 
     /* Step 4: Check profitability */
-    const float break_even = out->avg_charge_cost / BATTERY_EFFICIENCY;
+    const float break_even = out->avg_charge_cost / plant().battery_efficiency;
     const bool profitable = (out->avg_discharge_cost > break_even)
-                         && (out->spread >= MIN_SPREAD_SEK);
+                         && (out->spread >= plant().min_spread_sek);
     out->used_fallback = !profitable;
 
     /* Step 5: not profitable → drop every slot that is not paid-to-consume

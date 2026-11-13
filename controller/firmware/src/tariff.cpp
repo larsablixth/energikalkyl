@@ -31,6 +31,7 @@
 
 #include "tariff.h"
 #include "config.h"
+#include "plant.h"
 #include <ctime>
 
 // ── Easter calculation (Anonymous Gregorian algorithm) ─────────────────────
@@ -259,9 +260,9 @@ float tariff_grid_fee(int hour, int weekday, int month, bool is_holiday) {
     /* Höglasttid requires ALL conditions: winter AND workday AND not holiday AND daytime.
      * The 06-22 range covers the typical Swedish work/commute/cooking pattern. */
     if (winter && workday && !is_holiday && hour >= 6 && hour < 22) {
-        return GRID_FEE_HIGH;
+        return plant().grid_fee_high_sek;
     }
-    return GRID_FEE_LOW;
+    return plant().grid_fee_low_sek;
 }
 
 float tariff_buy_cost(float spot_sek, float grid_fee_sek) {

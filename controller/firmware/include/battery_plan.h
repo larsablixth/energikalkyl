@@ -29,6 +29,7 @@
 
 #include <cstdint>
 #include "config.h"
+#include "plant.h"
 #include "tou_window.h"
 
 // Planning resolution limit. Longer price series (1-min) are averaged into
@@ -44,16 +45,38 @@ struct PlanSlot {
     float solar_kwh     = 0.0f;   // expected PV production
 };
 
+// ── Value of energy left in the battery at the end of the day ─────────────
+// bat_plan_day() plans one day. Without help it sees no use for energy after
+// the last slot, so it never charges for tomorrow and happily empties the
+// battery into a cheap evening hour before an expensive morning. Once
+// tomorrow's prices are known, PlanEnd tells it what carried-over energy is
+// worth: up to PLAN_END_TRANCHES steps, most valuable first.
+//   value[e]      SEK per kWh DELIVERED tomorrow
+//   room_kwh[e]   delivered kWh that are worth that much
+//   pair_bonus[e] added to a (charge today → keep) pair's profit before the
+//                 min_spread test, see bat_end_tranches()
+// n = 0 (the default): nothing is known about tomorrow — the plan is exactly
+// what it was before this existed.
+constexpr int PLAN_END_TRANCHES = 8;
+
+struct PlanEnd {
+    int   n = 0;
+    float value[PLAN_END_TRANCHES]      = {};
+    float room_kwh[PLAN_END_TRANCHES]   = {};
+    float pair_bonus[PLAN_END_TRANCHES] = {};
+};
+
 struct PlanParams {
     float slot_h           = 1.0f;
-    float capacity_kwh     = BATTERY_CAPACITY_KWH;
-    float min_soc          = BATTERY_MIN_SOC / 100.0f;   // fraction
-    float max_soc          = BATTERY_MAX_SOC / 100.0f;   // fraction
-    float efficiency       = BATTERY_EFFICIENCY;         // round trip
-    float max_charge_kw    = INVERTER_MAX_BAT_KW;        // battery side (solar)
-    float max_discharge_kw = INVERTER_MAX_BAT_KW;
-    float min_spread       = MIN_SPREAD_SEK;             // SEK/kWh after losses
+    float capacity_kwh     = plant().battery_capacity_kwh;
+    float min_soc          = plant().battery_min_soc / 100.0f;   // fraction
+    float max_soc          = plant().battery_max_soc / 100.0f;   // fraction
+    float efficiency       = plant().battery_efficiency;         // round trip
+    float max_charge_kw    = plant().inverter_max_bat_kw;        // battery side (solar)
+    float max_discharge_kw = plant().inverter_max_bat_kw;
+    float min_spread       = plant().min_spread_sek;             // SEK/kWh after losses
     bool  export_enabled   = (EXPORT_PRICE_FACTOR > 0.0f);
+    PlanEnd end;                                         // tomorrow (n = 0: unknown)
 };
 
 struct BatteryPlan {
@@ -64,6 +87,8 @@ struct BatteryPlan {
     float discharge_kwh[PLAN_MAX_SLOTS] = {};    // battery → loads (delivered)
     float solar_in[PLAN_MAX_SLOTS]      = {};    // expected PV → battery
     float level[PLAN_MAX_SLOTS]         = {};    // stored kWh at END of slot
+    float end_reserved_kwh = 0.0f;               // stored kWh planned to be kept
+                                                 // for tomorrow (PlanParams::end)
 };
 
 // Plan one day (slots from_slot..n-1; earlier slots are left empty).
@@ -75,8 +100,32 @@ struct BatteryPlan {
 // value > cost/eff. Nothing is charged on a day without such a pair, except
 // slots whose TOTAL buying cost is < 0 (paid to consume): those fill the
 // remaining room even without a later use (the only addition to energikalkyl).
+// With p.end (tomorrow's value of carried energy, see PlanEnd) a "use" can
+// also be "keep it for tomorrow": such energy is charged if that pays and is
+// not spent on a less valuable slot today (out->end_reserved_kwh).
 void bat_plan_day(const PlanSlot* s, int n, int from_slot, const PlanParams& p,
                   float start_level_kwh, BatteryPlan* out);
+
+// What energy carried into the NEXT day is worth, from that day's planning
+// slots (buy cost, expected load/solar, grid room) and parameters (p.slot_h
+// = that day's slot length). The planner itself is asked: the next day is
+// planned (bat_plan_day) and valued (bat_execute_plan) with the battery 0,
+// 1/8 … 8/8 full at its start; each step's gain is one PlanEnd step:
+//   value      = gain / delivered kWh of the step (never rising)
+//   pair_bonus = min_spread × the share of the step that only replaces the
+//                next day's own grid charging. That energy would be cycled
+//                once either way, so charging it today pays as soon as it is
+//                cheaper. The rest enables uses the next day could not serve
+//                — a new cycle, which must clear min_spread as usual.
+// This sees what the next day's plan sees: prices, sun (carried energy is
+// worth little if the PV fills the battery anyway), charge room, capacity.
+// Nine plans of the next day: a fraction of a second, once a day.
+void bat_end_tranches(const PlanSlot* next, int n, const PlanParams& p, PlanEnd* out);
+
+// Worth (SEK) of end_level_kwh stored at the end of the day: the PlanEnd
+// steps first, anything beyond them at fallback_per_stored_kwh. With
+// p.end.n == 0 this is exactly end_level_kwh × fallback_per_stored_kwh.
+float bat_end_worth(const PlanParams& p, float end_level_kwh, float fallback_per_stored_kwh);
 
 // ── Program segments (what the Deye can execute) ─────────────────────────
 // The Deye cannot be told to discharge: outside grid charging it serves the
@@ -87,7 +136,7 @@ void bat_plan_day(const PlanSlot* s, int n, int from_slot, const PlanParams& p,
 struct PlanSegment {
     int  start_slot  = 0;    // first plan slot of the segment
     bool grid_charge = false;
-    int  soc_pct     = BATTERY_MIN_SOC;
+    int  soc_pct     = plant().battery_min_soc;
 };
 
 // Plan → at most max_segments segments; segment 0 starts at slot 0 (slots
@@ -100,6 +149,15 @@ struct PlanSegment {
 // buying cost per delivered kWh) is applied. Returns the number of segments.
 int bat_plan_program(const BatteryPlan* plan, const PlanSlot* s, int from_slot,
                      const PlanParams& p, int max_segments, PlanSegment* segs);
+
+// What a program is expected to be worth from from_slot to the end of the
+// day (SEK): the Deye model's net on the given slots plus the worth of the
+// energy left at the end (PlanParams::end, else the same fallback as
+// bat_plan_program: half the cheapest remaining buying cost). Used to decide
+// whether a re-planned program is enough better to be worth writing.
+float bat_program_objective(const PlanSegment* segs, int n_segs, const PlanSlot* s,
+                            int n, int from_slot, const PlanParams& p,
+                            float start_level_kwh);
 
 // Result of running a day (money as energikalkyl, SEK).
 struct DayMoney {
@@ -129,6 +187,12 @@ float bat_segment_power_kw(const PlanSegment* segs, int n_segs, int k, const Pla
 DayMoney bat_simulate_program(const PlanSegment* segs, int n_segs, const PlanSlot* s,
                               int n, int from_slot, const PlanParams& p,
                               float start_level_kwh);
+// The same for slots [from_slot, to_slot) only — the program still covers
+// all n slots (a GRID point's power is the smallest room of ALL its slots).
+// Lets a day be run in two parts when the program is replaced mid-day.
+DayMoney bat_simulate_program_range(const PlanSegment* segs, int n_segs, const PlanSlot* s,
+                                    int n, int from_slot, int to_slot, const PlanParams& p,
+                                    float start_level_kwh);
 
 // energikalkyl's execution loop for the plan (discharge on command).
 DayMoney bat_execute_plan(const BatteryPlan* plan, const PlanSlot* s, int n,
@@ -181,7 +245,12 @@ struct SharedDayInput {
     const float* buy_cost        = nullptr;  // per price slot, SEK/kWh
     const float* export_value    = nullptr;  // per price slot (nullptr = 0)
     const int*   local_start_min = nullptr;  // per price slot
-    const float* load_kwh  = nullptr;        // per planning slot
+    const float* load_kwh  = nullptr;        // per planning slot: expected house
+                                             // load (energy the battery can serve)
+    // House load to RESERVE on the fuse, per planning slot (nullptr = load_kwh).
+    // Separate from load_kwh because an expected AVERAGE load is not a safe
+    // fuse reserve: the pipeline passes max(expected load, BASE_LOAD_KW).
+    const float* fuse_load_kwh = nullptr;
     const float* solar_kwh = nullptr;        // per planning slot (nullptr = 0)
     float grid_max_kw   = 0.0f;    // allowed grid draw (fuse budget + base load)
     float bat_charge_kw = 0.0f;    // battery grid-charge limit
@@ -189,8 +258,8 @@ struct SharedDayInput {
     float start_level_kwh = 0.0f;
     int   max_segments  = MAX_PROG_SEGMENTS;
     PlanParams pp;                 // slot_h is set from slot_h_price × group
-    int   ev_win_start_h = EV_WINDOW_START_H;
-    int   ev_win_end_h   = EV_WINDOW_END_H;
+    int   ev_win_start_h = plant().ev_window_start_h;
+    int   ev_win_end_h   = plant().ev_window_end_h;
     float ev_kwh         = 0.0f;   // EV energy needed in the window
     bool  ct_sees_ev     = DEYE_CT_SEES_GOE;   // go-e behind the Deye grid CT
 };
