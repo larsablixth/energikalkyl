@@ -2606,6 +2606,68 @@ STRINGS = {
         "en": 'Future prices are assumed equal to the historical period (see step 6 for other assumptions).',
     },
     "export_compare_button": {"sv": "Kör jämförelsen", "en": "Run comparison"},
+    "scen_export_header": {
+        "sv": "Sälja eller använda själv — i varje framtidsscenario",
+        "en": "Sell or use yourself — in each future scenario",
+    },
+    "scen_export_caption": {
+        "sv": "Lönar det sig att sälja el till nätet om priserna svänger mer? Samma batteri och "
+              "samma fem scenarier, simulerat både med nollexport och med export (fullt spotpris "
+              "− 5 öre/kWh). En kWh du använder själv sparar spot + moms + energiskatt + "
+              "överföringsavgift, en såld kWh ger bara spotpriset — så export lönar sig bara för el "
+              "huset inte kan använda.",
+        "en": "Does selling to the grid pay off if prices swing more? Same battery and the same "
+              "five scenarios, simulated both with zero export and with export (full spot "
+              "− 5 öre/kWh). A kWh you use yourself saves spot + VAT + energy tax + grid fee, a "
+              "sold kWh earns only the spot price — so export only pays for power the house "
+              "can't use.",
+    },
+    "scen_export_button": {
+        "sv": "Jämför med {mode} i alla scenarier",
+        "en": "Compare with {mode} in all scenarios",
+    },
+    "scen_export_col_mode": {
+        "sv": "Netto, {mode}",
+        "en": "Net, {mode}",
+    },
+    "scen_export_col_diff": {
+        "sv": "Skillnad med {mode}",
+        "en": "Difference with {mode}",
+    },
+    "scen_export_col_better": {
+        "sv": "Bäst",
+        "en": "Better",
+    },
+    "scen_export_never": {
+        "sv": "**{zero} är bäst i alla fem scenarier** — även om prissvängningarna blir "
+              "extremt större lönar det sig inte att sälja el för just ditt hus och batteri.",
+        "en": "**{zero} is better in all five scenarios** — even if price swings become "
+              "extremely larger, selling does not pay off for your house and battery.",
+    },
+    "scen_export_always": {
+        "sv": "**{export} är bäst i alla fem scenarier** — redan med dagens prissvängningar.",
+        "en": "**{export} is better in all five scenarios** — already with today's price swings.",
+    },
+    "scen_export_some": {
+        "sv": "**{export} är bäst i:** {scenarios}. I övriga scenarier är {zero} bäst.",
+        "en": "**{export} is better in:** {scenarios}. In the other scenarios {zero} is better.",
+    },
+    "scen_export_assumptions": {
+        "sv": "Netto över batteriets livslängd, samma bokföring som huvudresultatet (slitage, "
+              "standby, säkringsavgift). Livslängd och solelsvärde hålls på dagens nivå i varje "
+              "scenario: {life_cur:.0f} år nu, {life_oth:.0f} år med {mode} (fler/färre cykler). "
+              "Skalade priser går aldrig under 0, så negativa priser (då export kostar pengar) "
+              "finns inte med — det gör export något för positiv. Export kräver "
+              "mikroproducentregistrering, exportavtal och en växelriktare som får mata ut. "
+              "Ersättning för stödtjänster till nätet ingår inte.",
+        "en": "Net over the battery lifetime, same accounting as the main result (wear, standby, "
+              "fuse fee). Lifetime and solar value are held at today's level in every scenario: "
+              "{life_cur:.0f} yr now, {life_oth:.0f} yr with {mode} (more/fewer cycles). "
+              "Scaled prices never go below 0, so negative prices (when exporting costs money) "
+              "are not included — this makes export look slightly too good. Export requires "
+              "microproducer registration, an export agreement and an inverter allowed to feed "
+              "the grid. Payments for grid services are not included.",
+    },
     "detail_green_deduction": {"sv": "Grönt avdrag", "en": "Green deduction"},
 }
 
