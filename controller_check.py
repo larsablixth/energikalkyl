@@ -296,3 +296,49 @@ def day_flows(hourly, date) -> dict | None:
                 to[sink][i] += v
     return {"hour": list(h["hour"]), "from": frm, "to": to,
             "soc_kwh": list(h.get("soc_kwh") or [0.0] * n), "buy_ore": list(h["buy_ore"])}
+
+
+# ── Playback series (flow_player.py) ──────────────────────────────────────
+
+FLOW_SERIES_KEYS = ("solar", "curtailed", "grid_in", "export", "bat_out", "bat_in",
+                    "house", "ev", "flex", "soc", "price_ore", "net_ore", "hour")
+
+
+def flow_series(hourly) -> dict:
+    """Per-hour series for the playback, in time order over the whole period.
+
+    Energy in kWh per hour (= average kW): solar produced, curtailed, grid_in
+    (bought), export (sold: solar + battery), bat_out (delivered by the
+    battery), bat_in (charged: grid + solar), house / ev / flex (consumption).
+    soc = stored kWh at the end of the hour, price_ore = buying price,
+    net_ore = the battery's money that hour (öre), hour = local hour.
+    At every hour: solar − curtailed + grid_in + bat_out =
+    house + ev + flex + bat_in + export.
+    Returns {"dates": [...], "day_start": [index of each date's first hour], key: [...]}.
+    """
+    out = {k: [] for k in FLOW_SERIES_KEYS}
+    dates, day_start = [], []
+    for date in sorted(hourly):
+        h = hourly[date]
+        dates.append(date)
+        day_start.append(len(out["hour"]))
+        for i in range(len(h["hour"])):
+            f = _hour_flows(h, i)
+            src = lambda s: sum(v for (a, _), v in f.items() if a == s)
+            dst = lambda s: sum(v for (_, b), v in f.items() if b == s)
+            out["solar"].append(h["solar_kw"][i])
+            out["curtailed"].append(f.get(("solar", "curtailed"), 0.0))
+            out["grid_in"].append(src("grid"))
+            out["export"].append(dst("export"))
+            out["bat_out"].append(src("battery"))
+            out["bat_in"].append(dst("battery"))
+            out["house"].append(dst("house"))
+            out["ev"].append(dst("ev"))
+            out["flex"].append(dst("flex"))
+            out["soc"].append(h.get("soc_kwh", [0.0] * len(h["hour"]))[i])
+            out["price_ore"].append(h["buy_ore"][i])
+            out["net_ore"].append(h["net_sek"][i] * 100)
+            out["hour"].append(h["hour"][i])
+    out["dates"] = dates
+    out["day_start"] = day_start
+    return out

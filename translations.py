@@ -2713,6 +2713,35 @@ STRINGS = {
               "the grid; the battery was charged with {charged:.0f} kWh.",
     },
     "flow_day_missing": {"sv": "Ingen data för den dagen.", "en": "No data for that day."},
+    "player_header": {"sv": "Spela upp hela perioden", "en": "Play back the whole period"},
+    "player_caption": {
+        "sv": "Följ energin timme för timme genom all data: tryck Spela, välj hastighet eller dra i reglaget. "
+              "Linjernas tjocklek och fart följer effekten. Vid högre hastighet visas medeleffekten över de timmar "
+              "som passerar.",
+        "en": "Follow the energy hour by hour through all the data: press Play, pick a speed or drag the slider. "
+              "Line width and speed follow the power. At higher speeds the average power over the hours that pass "
+              "is shown.",
+    },
+    "player_play": {"sv": "Spela", "en": "Play"},
+    "player_pause": {"sv": "Pausa", "en": "Pause"},
+    "player_price": {"sv": "Elpris inkl. nät och skatt", "en": "Price incl. grid and tax"},
+    "player_since": {"sv": "Sedan periodens början", "en": "Since the start of the period"},
+    "player_saved": {"sv": "Batteriet har sparat", "en": "The battery has saved"},
+    "player_solarUsed": {"sv": "Solel tagen till vara", "en": "Solar power used"},
+    "player_bought": {"sv": "Köpt från elnätet", "en": "Bought from the grid"},
+    "player_curtailedTotal": {"sv": "Spill (solel som inte togs till vara)", "en": "Curtailed solar"},
+    "player_curtailed": {"sv": "Spill", "en": "Curtailed"},
+    "player_hourly": {"sv": "Timme för timme", "en": "Hour by hour"},
+    "player_average": {"sv": "Medeleffekt {from} – {to}", "en": "Average power {from} – {to}"},
+    "player_aria": {"sv": "Energiflöden mellan sol, elnät, batteri och förbrukning",
+                    "en": "Energy flows between sun, grid, battery and consumption"},
+    "player_charging": {"sv": "laddar", "en": "charging"},
+    "player_discharging": {"sv": "levererar", "en": "delivering"},
+    "player_speed_0": {"sv": "1 timme/s", "en": "1 hour/s"},
+    "player_speed_1": {"sv": "6 timmar/s", "en": "6 hours/s"},
+    "player_speed_2": {"sv": "1 dygn/s", "en": "1 day/s"},
+    "player_speed_3": {"sv": "1 vecka/s", "en": "1 week/s"},
+    "player_speed_4": {"sv": "1 månad/s", "en": "1 month/s"},
     "current_tariff_label": {"sv": "Din nuvarande tariff", "en": "Your current tariff"},
     "current_tariff_unknown": {"sv": "Vet inte", "en": "Don't know"},
     "current_tariff_help": {

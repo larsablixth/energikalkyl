@@ -82,6 +82,8 @@ from economics import (solar_direct_use, effekt_savings, baseline_export_revenue
                        payback_years, value_at_level, scenario_bat_part,
                        tariff_switch_saving)
 import controller_check as ctrl_check
+import flow_player
+import streamlit.components.v1 as st_components
 from example_inputs import (EXAMPLE, EV_LOAD, POOL_HEAT_PUMP_LOAD, HOT_WATER_LOAD,
                             default_battery_rows, untouched_examples)
 from app_state import save_state, load_state
@@ -3470,6 +3472,23 @@ if "all_results" in st.session_state:
     _hourly_sel, _ = _battery_hourly(sel)
     if _hourly_sel:
         st.plotly_chart(_sankey_figure(ctrl_check.energy_flows(_hourly_sel)), use_container_width=True)
+
+        # Playback of the whole period, run in the browser (play, speed, scrub)
+        st.markdown(f"**{t('player_header')}**")
+        st.caption(t("player_caption"))
+        try:
+            _theme = "dark" if getattr(st.context.theme, "type", None) == "dark" else "light"
+        except Exception:
+            _theme = "light"
+        _pl = {k: t(f"player_{k}") for k in (
+            "play", "pause", "price", "since", "saved", "solarUsed", "bought", "curtailedTotal",
+            "hourly", "average", "aria", "charging", "discharging")}
+        _pl.update({k: _flow_label(k) for k in ("solar", "grid", "battery", "house", "ev", "flex")})
+        _pl["curtailed"] = t("player_curtailed")
+        _pl["speeds"] = [t(f"player_speed_{i}") for i in range(len(flow_player.SPEEDS_H_PER_S))]
+        _pl["locale"] = "sv-SE" if get_language() == "sv" else "en-GB"
+        st_components.html(flow_player.player_html(ctrl_check.flow_series(_hourly_sel), sel["config"].capacity_kwh,
+                                                   _pl, _theme), height=560, scrolling=False)
         _flow_dates = sorted(_hourly_sel)
         # Default day: the one where the battery delivered most (shows it at work)
         _busy = max(_flow_dates, key=lambda d: sum(_hourly_sel[d]["out_kwh"]))

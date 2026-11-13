@@ -1498,6 +1498,32 @@ class TestEnergyFlows:
         assert f["links"][("grid", "battery")] == pytest.approx(3652.5)
 
 
+    def test_flow_series_balances_every_hour(self):
+        import controller_check as cc
+        h = self._day(load_kw=[4.0, 2.0], ev_kw=[2.0, 0.0], out_kwh=[3.0, 0.0], solar_kw=[0.0, 10.0],
+                      solar_in_kwh=[0.0, 5.0], flex_kwh=[0.0, 1.0], net_sek=[2.5, 0.0])
+        sr = cc.flow_series({"2024-06-02": h, "2024-06-01": h})
+        assert sr["dates"] == ["2024-06-01", "2024-06-02"] and sr["day_start"] == [0, 2]
+        for i in range(4):
+            supply = sr["solar"][i] - sr["curtailed"][i] + sr["grid_in"][i] + sr["bat_out"][i]
+            use = sr["house"][i] + sr["ev"][i] + sr["flex"][i] + sr["bat_in"][i] + sr["export"][i]
+            assert supply == pytest.approx(use)
+        assert sr["net_ore"][0] == pytest.approx(250)
+
+    def test_player_packs_int16_hundredths(self):
+        import base64
+        import json
+        from array import array
+        import controller_check as cc
+        import flow_player
+        h = self._day(load_kw=[4.25, 2.0], solar_kw=[0.0, 10.0], solar_in_kwh=[0.0, 5.0])
+        sr = cc.flow_series({"2024-06-01": h})
+        html = flow_player.player_html(sr, 32.0, {"locale": "sv-SE"}, "dark")
+        payload = json.loads(html.split("const P = ", 1)[1].split(";\n", 1)[0])
+        house = array("h", base64.b64decode(payload["data"]["house"]))
+        assert list(house) == [425, 200]
+        assert payload["capacity"] == 32.0 and 'data-theme="dark"' in html
+
 class TestControllerSummary:
     def test_steps_add_up(self):
         import controller_check as cc
@@ -1549,7 +1575,8 @@ class TestControllerCheck:
         from translations import STRINGS
         for key in ("ctrl_header", "ctrl_caption", "ctrl_button", "ctrl_notes", "ctrl_step_total",
                     "flow_header", "flow_solar", "flow_grid", "flow_battery", "flow_house", "flow_ev",
-                    "flow_flex", "flow_export", "flow_curtailed", "flow_losses", "flow_day_from"):
+                    "flow_flex", "flow_export", "flow_curtailed", "flow_losses", "flow_day_from",
+                    "player_header", "player_play", "player_speed_4", "player_charging"):
             assert STRINGS[key]["sv"] and STRINGS[key]["en"], key
 
 if __name__ == "__main__":
