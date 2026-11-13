@@ -9,6 +9,7 @@ solproduktion, nätavgifter och investeringskostnader.
 Datakällor: elprisetjustnu.se, ENTSO-E, Tibber, Vattenfall Eldistribution.
 """
 
+import time
 import argparse
 import csv
 import json
@@ -66,8 +67,18 @@ def _parse_day_data(day: date, zone: str, data: list[dict]) -> list[dict]:
     return rows
 
 
-def fetch_range(start: date, end: date, zone: str, max_workers: int = 20) -> list[dict]:
-    """Fetch prices for a date range using concurrent requests + disk cache."""
+RETRY_DELAYS_S = (1.0, 3.0)  # pauses before the 2nd and 3rd attempt of failed days
+
+
+def fetch_range(start: date, end: date, zone: str, max_workers: int = 20,
+                missing: list | None = None) -> list[dict]:
+    """Fetch prices for a date range using concurrent requests + disk cache.
+
+    Days that fail (a timeout, or the API refusing many requests at once on a cold
+    start) are retried twice, a few at a time after a pause, when they are few
+    (at most 5 % of the range, or 10 days). Days still failing are
+    left out of the rows and, when `missing` is given, appended to it so the caller
+    can tell the user instead of silently calculating without them."""
     days = []
     current = start
     while current <= end:
@@ -99,6 +110,25 @@ def fetch_range(start: date, end: date, zone: str, max_workers: int = 20) -> lis
             if done % 50 == 0 or done == total:
                 print(f"  Framsteg: {done}/{total} dagar")
 
+    # Retry only a few failed days: when most days fail the service is down or
+    # unreachable, and retrying them all slowly would only make the user wait.
+    for delay in RETRY_DELAYS_S:
+        if not errors or len(errors) > max(10, total // 20):
+            break
+        time.sleep(delay)
+        retry = sorted(errors)
+        errors = {}
+        with ThreadPoolExecutor(max_workers=min(4, max_workers)) as pool:
+            futures = {pool.submit(_fetch_one, d): d for d in retry}
+            for future in as_completed(futures):
+                try:
+                    day, data = future.result()
+                    results[day] = data
+                except Exception as e:
+                    errors[futures[future]] = str(e)
+
+    if missing is not None:
+        missing.extend(sorted(errors))
     if errors:
         print(f"  Varning: {len(errors)} dagar kunde inte hämtas")
         for d in sorted(errors)[:5]:

@@ -1524,6 +1524,33 @@ class TestEnergyFlows:
         assert list(house) == [425, 200]
         assert payload["capacity"] == 32.0 and 'data-theme="dark"' in html
 
+class TestPriceDownloadRetry:
+    """A day that fails is retried; one that keeps failing is reported, not silently dropped
+    (a cold start of the public app once lost a day, which changed the result by 8 kr/yr)."""
+
+    def test_retry_and_report(self, monkeypatch):
+        import elpriser
+        from datetime import date as _d
+        calls = {}
+        flaky, dead = _d(2025, 3, 2), _d(2025, 3, 4)
+
+        def fake_fetch(day, zone):
+            calls[day] = calls.get(day, 0) + 1
+            if day == dead or (day == flaky and calls[day] == 1):
+                raise RuntimeError("429 Too Many Requests")
+            return [{"time_start": f"{day.isoformat()}T{h:02d}:00:00+01:00",
+                     "SEK_per_kWh": 0.5, "EUR_per_kWh": 0.04} for h in range(24)]
+
+        monkeypatch.setattr(elpriser, "fetch_prices", fake_fetch)
+        monkeypatch.setattr(elpriser, "RETRY_DELAYS_S", (0.0, 0.0))
+        missing = []
+        rows = elpriser.fetch_range(_d(2025, 3, 1), _d(2025, 3, 5), "SE3", missing=missing)
+        days = sorted({r["date"] for r in rows})
+        assert days == ["2025-03-01", "2025-03-02", "2025-03-03", "2025-03-05"], "flaky day recovered"
+        assert missing == [dead], "the dead day is reported"
+        assert calls[flaky] == 2 and calls[dead] == 3, "retried twice at most"
+
+
 class TestHourlyPrices:
     """app.py converts the prices to hourly once (to_hourly → HourlyPrices) and
     simulate() skips the conversion for them: same result as raw rows."""
