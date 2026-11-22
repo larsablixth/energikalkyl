@@ -169,6 +169,12 @@ STRINGS = {
         "sv": "tidsstegen är oregelbundna och värdena ser inte ut som mätarställningar.",
         "en": "the time steps are irregular and the values don't look like meter readings.",
     },
+    "cons_err_implausible": {
+        "sv": "förbrukningen blev orimligt stor — fel kolumn läst (t.ex. mätar-id eller mätarställning). "
+              "Kontrollera att filen har en kolumn med förbrukning per timme eller kvart.",
+        "en": "the consumption came out implausibly large — the wrong column was read (e.g. a meter ID or "
+              "meter reading). Check that the file has a column with consumption per hour or quarter.",
+    },
     "cons_err_all_zero": {"sv": "alla förbrukningsvärden är 0.", "en": "all consumption values are 0."},
     "cons_err_xls_old": {
         "sv": "gammalt Excel-format (.xls). Öppna filen och spara som .xlsx eller CSV.",

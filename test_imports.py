@@ -492,6 +492,59 @@ class TestAnyContainers:
         assert len(load_consumption_file(str(p))) == 24
 
 
+class TestMeterIdColumn:
+    """Owner's Vattenfall export (Nov 2026, '2026 kvart.xlsx', sheet
+    'Export_timvärden_kvartsvärden'): meter ID | timestamp | kWh | 'kWh'. The
+    importer took the 18-digit meter ID as consumption (1.8e16 kWh/day)."""
+
+    GSRN = "735999100015172405"
+
+    def _xlsx(self, header, id_cell):
+        openpyxl = pytest.importorskip("openpyxl")
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Export_timvärden_kvartsvärden"
+        if header:
+            ws.append(header)
+        t0 = _dt(2025, 1, 1)
+        for k in range(24 * 14):
+            ws.append([id_cell, t0 + _td(hours=k), 2.0 + (k % 24) / 10, "kWh"])
+        buf = _io.BytesIO()
+        wb.save(buf)
+        return buf.getvalue()
+
+    @pytest.mark.parametrize("header", [None, ["Mätare", "Tidpunkt", "Kvantitet", "Enhet"],
+                                        ["Meter", "Timestamp", "Quantity", "Unit"], ["A", "B", "C", "D"]])
+    @pytest.mark.parametrize("id_as_text", [True, False])
+    def test_xlsx_meter_id_is_not_consumption(self, header, id_as_text):
+        raw = self._xlsx(header, self.GSRN if id_as_text else int(self.GSRN))
+        rows, info = parse_any_consumption_file("2026 kvart.xlsx", raw)
+        assert len(rows) == 24 * 14
+        assert _total(rows) == pytest.approx(14 * sum(2.0 + h / 10 for h in range(24)))
+
+    def test_csv_decimal_comma(self):
+        txt = "\n".join(f"{self.GSRN};2025-01-01 {h:02d}:00:00;{2 + h // 10},{h % 10:03d};kWh"
+                        for h in range(24))
+        rows, info = _parse(txt)
+        assert info["detail"] == "kolumn 3"
+        assert _total(rows) == pytest.approx(sum(2 + h // 10 + (h % 10) / 1000 for h in range(24)))
+
+    def test_implausible_total_is_an_error(self):
+        # huge numbers that aren't an ID (read as Wh: ~90 kWh every hour, ~2,160 kWh/day)
+        txt = "Datum;Förbrukning\n" + "\n".join(f"2025-01-0{d} {h:02d}:00;{90000 + h}"
+                                                  for d in (1, 2) for h in range(24))
+        with pytest.raises(ConsumptionParseError) as e:
+            _parse(txt)
+        assert e.value.reason == "implausible"
+
+    def test_plausibility_limit(self):
+        from import_consumption import MAX_PLAUSIBLE_KWH_PER_DAY, _finish
+        rows = [{"date": "2025-01-01", "hour": f"{h:02d}:00", "consumption_kwh": 1e6} for h in range(24)]
+        with pytest.raises(ConsumptionParseError) as e:
+            _finish(rows, {"format": "long", "detail": "x"}, "CSV")
+        assert e.value.reason == "implausible" and MAX_PLAUSIBLE_KWH_PER_DAY == 2000
+
+
 class TestAnyErrors:
     def test_daily_only(self):
         txt = "Datum;Förbrukning\n" + "\n".join(f"2025-01-{d:02d};30" for d in range(1, 20))
