@@ -987,6 +987,20 @@ def _parse_wide(names, data, hour_cols, comma_dec, delim, dayfirst, unit_text):
     return rows, {"format": "wide", "detail": ""}
 
 
+_RE_ID_DIGITS = re.compile(r"^\d{12,}$")
+
+
+def _id_like(v) -> bool:
+    """A meter/facility ID (Swedish GSRN 735999…: 18 digits), not a quantity."""
+    if isinstance(v, bool):
+        return False
+    if isinstance(v, int):
+        return abs(v) >= 10 ** 11
+    if isinstance(v, float):
+        return v.is_integer() and abs(v) >= 1e11
+    return bool(_RE_ID_DIGITS.match(str(v).strip()))
+
+
 def _column_stats(names, data, dayfirst):
     stats = []
     sample = data[:400]
@@ -1004,6 +1018,10 @@ def _column_stats(names, data, dayfirst):
             "aware": any(d and d[0].tzinfo for d in dts),
             "time": sum(1 for x in times if x) / k,
             "num": sum(1 for x in nums if x is not None) / k,
+            "id": sum(1 for v in vals if _id_like(v)) / k,
+            "constant": len(vals) >= 20 and len({str(v).strip() for v in vals}) == 1,
+            "unit": (str(vals[0]).strip() if vals and len({str(v).strip().lower() for v in vals}) == 1
+                     and _unit_factor(str(vals[0]).strip()) else None),
         })
     return stats
 
@@ -1035,8 +1053,12 @@ def _parse_long(names, data, comma_dec, delim, dayfirst, meta_text):
     for i, s in enumerate(st):
         if i in used or s["n"] < 0.5 * min(nrows, 400) or s["num"] < 0.6:
             continue
+        if s["id"] >= 0.8:
+            continue  # meter / facility ID column (e.g. 735999… GSRN), never consumption
         h = names[i].lower()
         score = 0
+        if s["constant"] and not any(k in h for k in _METER_KW):
+            score -= 5  # the same number in every row is not hourly consumption
         if any(k in h for k in _CONS_KW):
             score += 3
         if any(k in h for k in _METER_KW):
@@ -1060,6 +1082,11 @@ def _parse_long(names, data, comma_dec, delim, dayfirst, meta_text):
         units = {str(r[unit_col]).strip() for r in data[:50] if unit_col < len(r) and r[unit_col]}
         if len(units) == 1:
             uf = _unit_factor(units.pop())
+    if not uf:
+        # a column holding only a unit ("kWh" in every row), header or not
+        unit_vals = [s["unit"] for s in st if s["unit"]]
+        if len(set(unit_vals)) == 1:
+            uf = _unit_factor(unit_vals[0])
     if not uf:
         uf = _unit_factor(meta_text)
 
@@ -1174,11 +1201,22 @@ def parse_consumption_table(table: list[list], delim: str = ";", comma_dec: bool
     return _parse_long(names, data, comma_dec, delim, _detect_dayfirst(table, first_data), meta_text)
 
 
+MAX_PLAUSIBLE_KWH_PER_DAY = 2000  # ~730 MWh/yr: far above any home, far below an ID read as kWh
+
+
 def _finish(rows, info, container, names_for_error=None):
     if not rows:
         raise ConsumptionParseError("no_values", names_for_error or [])
     if not any(r["consumption_kwh"] for r in rows):
         raise ConsumptionParseError("all_zero", names_for_error or [])
+    # Safety net: a home uses some tens of kWh a day (a large house with an EV
+    # ~100). Thousands per day means the wrong column (an ID, a meter reading,
+    # Wh read as kWh) was taken; refuse rather than calculate with it.
+    _days = len({r["date"] for r in rows}) or 1
+    _per_day = sum(r["consumption_kwh"] for r in rows) / _days
+    if _per_day > MAX_PLAUSIBLE_KWH_PER_DAY:
+        raise ConsumptionParseError("implausible", names_for_error or [],
+                                    f"{_per_day:,.0f} kWh/dag ({info.get('detail', '')})")
     rows.sort(key=lambda r: (r["date"], r["hour"]))
     info = dict(info)
     info["container"] = container
