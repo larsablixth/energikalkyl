@@ -14,6 +14,7 @@ python elpriser.py batteri --help       # CLI help
 
 ### Deployed on Streamlit Community Cloud
 - Auto-deploys on push to main
+- No reboot needed after a deploy: Streamlit reruns the new app.py but kept the other project modules in memory (mixed old/new code: a crash once, a raw "[key]" heading once). The top of app.py reloads all project modules (`_PROJECT_MODULES`, dependency order) when any module file changed since it was loaded; modules loaded before the check existed count as changed once. New project module → add it to `_PROJECT_MODULES`
 - Tibber token entered via UI (no .tibber_token file needed)
 - PVGIS solar data works without any API key
 

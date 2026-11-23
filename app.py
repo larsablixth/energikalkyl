@@ -53,7 +53,41 @@ STREAMLIT BASICS (for non-coders):
 # IMPORTS — load all the modules this app depends on
 # ============================================================
 import time
+import importlib
+import os
+import sys
 import streamlit as st
+
+
+# Streamlit reruns this script with the new code after a deploy, but keeps the
+# project's other modules in memory: after a merge the live app mixed new app.py
+# with old translations/controller_check (a crash once, a raw "[key]" heading
+# another time) until someone rebooted it. So: when a project module's file has
+# changed since it was loaded, reload all of them, dependencies first (a module
+# holding "from batteri import X" must see the new batteri). A module loaded
+# before this check existed has no record and counts as changed (once).
+_PROJECT_MODULES = (  # dependency order
+    "translations", "method_text", "example_inputs", "app_state", "smhi_stations", "weather",
+    "heating", "financial", "solar", "tariff", "batteri", "economics", "controller_check",
+    "flow_player", "scenarios", "entsoe_source", "tibber_source", "eon_source", "pvgis_source",
+    "import_vattenfall", "import_consumption", "import_solar", "elpriser", "report",
+)
+_loaded_mtimes = sys.__dict__.setdefault("_energikalkyl_module_mtimes", {})
+
+
+def _module_mtime(mod):
+    try:
+        return os.path.getmtime(mod.__file__)
+    except (OSError, TypeError, AttributeError):
+        return None
+
+
+if any(_loaded_mtimes.get(_n) != _module_mtime(sys.modules[_n])
+       for _n in _PROJECT_MODULES if _n in sys.modules):
+    for _n in _PROJECT_MODULES:
+        if _n in sys.modules:
+            importlib.reload(sys.modules[_n])
+            _loaded_mtimes[_n] = _module_mtime(sys.modules[_n])
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -90,6 +124,11 @@ from example_inputs import (EXAMPLE, EV_LOAD, POOL_HEAT_PUMP_LOAD, HOT_WATER_LOA
 from app_state import save_state, load_state
 from translations import t, set_language, get_language, STRINGS
 from method_text import METHOD_SV
+
+# Record the modules imported fresh in this run (see the reload check above)
+for _n in _PROJECT_MODULES:
+    if _n in sys.modules and _n not in _loaded_mtimes:
+        _loaded_mtimes[_n] = _module_mtime(sys.modules[_n])
 
 st.set_page_config(page_title="Energikalkyl", page_icon="⚡", layout="wide")
 
