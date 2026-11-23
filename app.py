@@ -89,6 +89,7 @@ from example_inputs import (EXAMPLE, EV_LOAD, POOL_HEAT_PUMP_LOAD, HOT_WATER_LOA
                             default_battery_rows, untouched_examples)
 from app_state import save_state, load_state
 from translations import t, set_language, get_language, STRINGS
+from method_text import METHOD_SV
 
 st.set_page_config(page_title="Energikalkyl", page_icon="⚡", layout="wide")
 
@@ -136,6 +137,11 @@ if "_state_restored" not in st.session_state:
 
 st.title(t("app_title"))
 st.caption(t("app_subtitle"))
+# "Om kalkylen": the method in plain Swedish for an economist (method_text.py)
+with st.expander(t("method_expander"), expanded=False):
+    if get_language() != "sv":
+        st.caption(t("method_only_swedish"))
+    st.markdown(METHOD_SV)
 
 # ================================================================
 # STEP 1: LOAD DATA

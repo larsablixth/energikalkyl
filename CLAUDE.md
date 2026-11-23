@@ -58,6 +58,8 @@ The app follows a 6-step flow:
 6. **Future scenarios** — five assumed price-swing levels, named for what they assume (not how likely): Mindre prissvängningar (0.7x), Oförändrat (1.0x, = main result), Något större (1.5x), Mycket större (2.5x), Extremt större (4x)
    - "Sälja eller använda själv": on request, the same scenarios with the opposite export setting (`_compute_export_vol_benefits`, 7 extra simulations, cached as `export_vol_cmp`). Same settings as the results' export comparison (full spot − 5 öre, no arbitrage reserve); its 1.0x row equals that comparison. Lifetime and solar part held at the 1.0x values, like the main scenarios. Scaled prices are clamped ≥ 0, so negative prices are missing (slightly favours export)
 
+   - **Om kalkylen** (expander under the title): method description in Swedish for an economist (`method_text.METHOD_SV`): question, data, valuation at the hourly marginal price, dispatch (perfect day-ahead foresight = upper bound, hence the controller check), annualisation, wear/lifetime, profit measures (nominal, **undiscounted**), financing, scenarios, simplifications. English UI shows a note that it is in Swedish. Keep it in step with the code
+
 ## Key files
 
 ### Core simulation

@@ -15,6 +15,14 @@ STRINGS = {
         "sv": "Energikalkyl — El, Sol & Batteri",
         "en": "Energy Calculator — Electricity, Solar & Battery",
     },
+    "method_expander": {
+        "sv": "ℹ️ Om kalkylen — så räknar den (metod och antaganden)",
+        "en": "ℹ️ About the calculation — how it works (method and assumptions)",
+    },
+    "method_only_swedish": {
+        "sv": "",
+        "en": "The method description is written in Swedish.",
+    },
     "app_subtitle": {
         "sv": "Simulera lönsamheten i hembatteri och solceller baserat på verkliga elpriser och din förbrukning.",
         "en": "Simulate the profitability of a home battery and solar panels based on real electricity prices and your consumption.",
