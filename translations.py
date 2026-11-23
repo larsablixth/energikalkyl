@@ -19,6 +19,27 @@ STRINGS = {
         "sv": "ℹ️ Om kalkylen — så räknar den (metod och antaganden)",
         "en": "ℹ️ About the calculation — how it works (method and assumptions)",
     },
+    "bug_expander": {"sv": "🐞 Rapportera fel eller ge förslag", "en": "🐞 Report a bug or suggest something"},
+    "bug_intro": {
+        "sv": "Beskriv vad som gick fel. Knappen öppnar en färdigifylld felrapport på GitHub, där du granskar och "
+              "skickar den (du behöver ett gratis GitHub-konto). Rapporten blir **offentlig**.",
+        "en": "Describe what went wrong. The button opens a pre-filled bug report on GitHub, where you review and "
+              "send it (you need a free GitHub account). The report will be **public**.",
+    },
+    "bug_title": {"sv": "Rubrik (kort)", "en": "Title (short)"},
+    "bug_what": {"sv": "Vad hände?", "en": "What happened?"},
+    "bug_expected": {"sv": "Vad förväntade du dig?", "en": "What did you expect?"},
+    "bug_steps": {"sv": "Vad gjorde du innan (steg)?", "en": "What did you do before (steps)?"},
+    "bug_context_show": {"sv": "Det här läggs till automatiskt:", "en": "This is added automatically:"},
+    "bug_button": {"sv": "Öppna felrapport på GitHub", "en": "Open bug report on GitHub"},
+    "bug_privacy": {
+        "sv": "Bara appens version, språk, nätägare, säkring, faser, prisperiod och typ av data läggs till — "
+              "aldrig adress, token, mätar-id eller förbrukning. Bifoga inte förbrukningsfiler: de innehåller ditt "
+              "mätar-id. Skärmbilder går bra att klistra in i GitHub.",
+        "en": "Only the app version, language, grid operator, fuse, phases, price period and kind of data are "
+              "added — never address, token, meter ID or consumption. Don't attach consumption files: they "
+              "contain your meter ID. Screenshots can be pasted into GitHub.",
+    },
     "method_only_swedish": {
         "sv": "",
         "en": "The method description is written in Swedish.",
