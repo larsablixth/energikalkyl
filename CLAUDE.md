@@ -61,6 +61,8 @@ The app follows a 6-step flow:
 
    - **Om kalkylen** (expander under the title): method description in Swedish for an economist (`method_text.METHOD_SV`): question, data, valuation at the hourly marginal price, dispatch (perfect day-ahead foresight = upper bound, hence the controller check), annualisation, wear/lifetime, profit measures (nominal, **undiscounted**), financing, scenarios, simplifications. English UI shows a note that it is in Swedish. Keep it in step with the code
 
+   - **Rapportera fel** (expander under "Om kalkylen", owner decision Nov 2026: GitHub Issues): title + what happened / expected / steps → `st.link_button` to a pre-filled public GitHub issue (`bug_report.issue_url`, label bug, URL ≤ 7,000 chars). Only non-personal context is added (`bug_report.context_lines`: version, language, and safe `sim_inputs` keys — never address, token, meter ID, consumption); the page warns not to attach consumption files (they contain the meter ID). `TestBugReport`
+
 ## Key files
 
 ### Core simulation

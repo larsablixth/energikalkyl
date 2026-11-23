@@ -1524,6 +1524,33 @@ class TestEnergyFlows:
         assert list(house) == [425, 200]
         assert payload["capacity"] == 32.0 and 'data-theme="dark"' in html
 
+class TestBugReport:
+    """The report is a public GitHub issue: filled in, short enough, and no personal data."""
+
+    def test_url_is_filled_and_has_no_personal_data(self):
+        from urllib.parse import parse_qs, urlparse
+        import bug_report
+        sim_inputs = {"grid_operator": "Vattenfall Eldistribution", "fuse_amps": 25, "phases": 3,
+                      "price_range": "2023-11-14 — 2026-11-12",
+                      "address": "Storgatan 1, Sigtuna", "tibber_token": "secret-token",
+                      "meter_id": "735999100015172405", "battery_prices": [("32 kWh", 45000.0)]}
+        ctx = bug_report.context_lines(sim_inputs, "sv", "abc1234", True)
+        url = bug_report.issue_url("Fel i grafen", "Grafen visar fel år", "Rätt år", "1. Ladda fil", ctx)
+        q = parse_qs(urlparse(url).query)
+        assert url.startswith(bug_report.ISSUES_URL)
+        assert q["title"] == ["Fel i grafen"] and q["labels"] == ["bug"]
+        body = q["body"][0]
+        assert "Grafen visar fel år" in body and "grid_operator: Vattenfall Eldistribution" in body
+        assert "version: abc1234" in body
+        for private in ("Storgatan", "secret-token", "735999100015172405", "45000"):
+            assert private not in url, private
+
+    def test_long_description_is_shortened(self):
+        import bug_report
+        url = bug_report.issue_url("x", "ö" * 20000, "", "", ["version: x"])
+        assert len(url) <= bug_report.MAX_URL_LEN and "f%C3%B6rkortad" in url
+
+
 class TestPriceDownloadRetry:
     """A day that fails is retried; one that keeps failing is reported, not silently dropped
     (a cold start of the public app once lost a day, which changed the result by 8 kr/yr)."""
@@ -1676,7 +1703,7 @@ class TestControllerCheck:
         from translations import STRINGS
         for key in ("ctrl_header", "ctrl_caption", "ctrl_button", "ctrl_notes", "ctrl_step_total",
                     "ctrl_step_controller",
-                    "method_expander", "flow_header", "flow_solar", "flow_grid", "flow_battery", "flow_house", "flow_ev",
+                    "method_expander", "bug_expander", "bug_button", "bug_privacy", "flow_header", "flow_solar", "flow_grid", "flow_battery", "flow_house", "flow_ev",
                     "flow_flex", "flow_export", "flow_curtailed", "flow_losses", "flow_day_from",
                     "player_header", "player_play", "player_speed_4", "player_charging"):
             assert STRINGS[key]["sv"] and STRINGS[key]["en"], key

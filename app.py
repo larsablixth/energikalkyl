@@ -67,7 +67,7 @@ import streamlit as st
 # holding "from batteri import X" must see the new batteri). A module loaded
 # before this check existed has no record and counts as changed (once).
 _PROJECT_MODULES = (  # dependency order
-    "translations", "method_text", "example_inputs", "app_state", "smhi_stations", "weather",
+    "translations", "method_text", "bug_report", "example_inputs", "app_state", "smhi_stations", "weather",
     "heating", "financial", "solar", "tariff", "batteri", "economics", "controller_check",
     "flow_player", "scenarios", "entsoe_source", "tibber_source", "eon_source", "pvgis_source",
     "import_vattenfall", "import_consumption", "import_solar", "elpriser", "report",
@@ -124,6 +124,7 @@ from example_inputs import (EXAMPLE, EV_LOAD, POOL_HEAT_PUMP_LOAD, HOT_WATER_LOA
 from app_state import save_state, load_state
 from translations import t, set_language, get_language, STRINGS
 from method_text import METHOD_SV
+import bug_report
 
 # Record the modules imported fresh in this run (see the reload check above)
 for _n in _PROJECT_MODULES:
@@ -181,6 +182,21 @@ with st.expander(t("method_expander"), expanded=False):
     if get_language() != "sv":
         st.caption(t("method_only_swedish"))
     st.markdown(METHOD_SV)
+# Bug reports: a pre-filled GitHub issue (public, so only non-personal context)
+with st.expander(t("bug_expander"), expanded=False):
+    st.markdown(t("bug_intro"))
+    _bug_title = st.text_input(t("bug_title"), key="bug_title", max_chars=120)
+    _bug_what = st.text_area(t("bug_what"), key="bug_what", height=100)
+    _bug_expected = st.text_area(t("bug_expected"), key="bug_expected", height=70)
+    _bug_steps = st.text_area(t("bug_steps"), key="bug_steps", height=70)
+    _bug_ctx = bug_report.context_lines(st.session_state.get("sim_inputs"), get_language(),
+                                        bug_report.app_version(), bool(st.session_state.get("all_results")))
+    st.caption(t("bug_context_show"))
+    st.code("\n".join(_bug_ctx), language=None)
+    st.link_button(t("bug_button"), bug_report.issue_url(_bug_title, _bug_what, _bug_expected, _bug_steps,
+                                                        _bug_ctx),
+                   type="primary", disabled=not (_bug_what or "").strip())
+    st.caption(t("bug_privacy"))
 
 # ================================================================
 # STEP 1: LOAD DATA
