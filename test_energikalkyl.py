@@ -1676,7 +1676,7 @@ class TestControllerCheck:
         from translations import STRINGS
         for key in ("ctrl_header", "ctrl_caption", "ctrl_button", "ctrl_notes", "ctrl_step_total",
                     "ctrl_step_controller",
-                    "flow_header", "flow_solar", "flow_grid", "flow_battery", "flow_house", "flow_ev",
+                    "method_expander", "flow_header", "flow_solar", "flow_grid", "flow_battery", "flow_house", "flow_ev",
                     "flow_flex", "flow_export", "flow_curtailed", "flow_losses", "flow_day_from",
                     "player_header", "player_play", "player_speed_4", "player_charging"):
             assert STRINGS[key]["sv"] and STRINGS[key]["en"], key
